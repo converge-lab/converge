@@ -12,4 +12,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["signal"] }
 sqlx = { workspace = true }
-testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+testcontainers-modules.workspace = true

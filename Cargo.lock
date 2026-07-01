@@ -441,6 +441,13 @@ name = "converge-storage-postgres"
 version = "0.1.0"
 dependencies = [
  "converge-storage",
+ "serde_json",
+ "sqlx",
+ "testcontainers-modules",
+ "time",
+ "tokio",
+ "ulid",
+ "uuid",
 ]
 
 [[package]]
@@ -2836,6 +2843,7 @@ checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
 dependencies = [
  "rand 0.9.4",
  "serde",
+ "uuid",
  "web-time",
 ]
 
@@ -2936,7 +2944,9 @@ version = "1.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

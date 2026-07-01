@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update decisions set alternatives = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b93b9a140dea91786419828c51a400086fb2b0609e4d74ae1ee7ebe6eae8f100"
+}

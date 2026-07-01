@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update decisions set consequences = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ecb350e061ae08bd4b9d8060df95dd559454cc2ef4c66eef7b577c6a2881f52d"
+}

@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, project_id, status as \"status: _\", title, summary,\n                      context, consequences, alternatives, captured_at\n               from decisions\n               where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "decision_status",
+            "kind": {
+              "Enum": [
+                "accepted",
+                "draft",
+                "proposed",
+                "superseded",
+                "rejected"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "summary",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "context",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "consequences",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "alternatives",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "833e582ca4d8ccbead4c49ae5e966fbc31412db1ad0e77fb99a1ffe77f60638c"
+}

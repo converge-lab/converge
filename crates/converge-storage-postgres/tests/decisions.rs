@@ -1,0 +1,212 @@
+//! Round-trip tests for the decision methods, against a real Postgres
+//! (testcontainers — needs Docker).
+
+use converge_storage::{
+    Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupId,
+    NewDecision, ProjectId, Storage, StoreError, UserId,
+};
+use converge_storage_postgres::PgStorage;
+use sqlx::PgPool;
+use testcontainers_modules::postgres::Postgres;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
+use uuid::Uuid;
+
+/// Boot a fresh Postgres, migrate, connect. The container lives as long as
+/// the returned handle.
+async fn store() -> (ContainerAsync<Postgres>, PgStorage) {
+    let node = Postgres::default()
+        .with_tag("16-alpine")
+        .start()
+        .await
+        .expect("start postgres (is Docker running?)");
+    let port = node.get_host_port_ipv4(5432).await.unwrap();
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let store = PgStorage::connect(&url).await.unwrap();
+    store.migrate().await.unwrap();
+    (node, store)
+}
+
+/// Insert a group + project directly — no trait methods for those yet.
+async fn seed_project(pool: &PgPool) -> (GroupId, ProjectId) {
+    let group = GroupId::new();
+    sqlx::query("insert into groups (id, name, kind) values ($1, $2, 'shared')")
+        .bind(Uuid::from(group.ulid()))
+        .bind("test group")
+        .execute(pool)
+        .await
+        .unwrap();
+    let project = ProjectId::new();
+    sqlx::query("insert into projects (id, group_id, name) values ($1, $2, $3)")
+        .bind(Uuid::from(project.ulid()))
+        .bind(Uuid::from(group.ulid()))
+        .bind("test project")
+        .execute(pool)
+        .await
+        .unwrap();
+    (group, project)
+}
+
+fn decision(project: ProjectId, title: &str) -> NewDecision {
+    NewDecision {
+        project_id: project,
+        status: DecisionStatus::Accepted,
+        title: title.into(),
+        summary: "because it won".into(),
+        context: Some("the setting".into()),
+        consequences: None,
+        alternatives: vec![Alternative {
+            option: "the other way".into(),
+            why_rejected: "slower".into(),
+        }],
+        authors: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn round_trip() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+
+    let id = store.decision_add(decision(project, "adopt X")).await.unwrap();
+    let got = store.decision_get(id).await.unwrap().expect("stored decision");
+    assert_eq!(got.id, id);
+    assert_eq!(got.project_id, project);
+    assert_eq!(got.status, DecisionStatus::Accepted);
+    assert_eq!(got.title, "adopt X");
+    assert_eq!(got.summary, "because it won");
+    assert_eq!(got.context.as_deref(), Some("the setting"));
+    assert_eq!(got.consequences, None);
+    assert_eq!(got.alternatives.len(), 1);
+    assert_eq!(got.alternatives[0].option, "the other way");
+    assert!(got.authors.is_empty());
+
+    assert!(store.decision_get(DecisionId::new()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn list_filters() {
+    let (_pg, store) = store().await;
+    let (_, a) = seed_project(store.pool()).await;
+    let (group_b, b) = seed_project(store.pool()).await;
+
+    let d1 = store.decision_add(decision(a, "one")).await.unwrap();
+    let d2 = store
+        .decision_add(NewDecision {
+            status: DecisionStatus::Proposed,
+            ..decision(a, "two")
+        })
+        .await
+        .unwrap();
+    let d3 = store.decision_add(decision(b, "three")).await.unwrap();
+
+    // No filter: everything, newest first (ULID = time order).
+    let all = store.decision_list(DecisionFilter::default()).await.unwrap();
+    assert_eq!(all.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3, d2, d1]);
+
+    let of_a = store
+        .decision_list(DecisionFilter { project: Some(a), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(of_a.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2, d1]);
+
+    let of_group_b = store
+        .decision_list(DecisionFilter { group: Some(group_b), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(of_group_b.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3]);
+
+    let proposed = store
+        .decision_list(DecisionFilter {
+            status: Some(DecisionStatus::Proposed),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(proposed.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2]);
+
+    let latest = store
+        .decision_list(DecisionFilter { limit: Some(2), ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(latest.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3, d2]);
+}
+
+#[tokio::test]
+async fn edit_batch() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+    let id = store.decision_add(decision(project, "draft Y")).await.unwrap();
+
+    store
+        .decision_edit(
+            id,
+            vec![
+                DecisionEdit::SetTitle("adopt Y".into()),
+                DecisionEdit::SetStatus(DecisionStatus::Superseded),
+                DecisionEdit::SetContext(None),
+                DecisionEdit::SetAlternatives(Vec::new()),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let got = store.decision_get(id).await.unwrap().unwrap();
+    assert_eq!(got.title, "adopt Y");
+    assert_eq!(got.status, DecisionStatus::Superseded);
+    assert_eq!(got.context, None);
+    assert!(got.alternatives.is_empty());
+    // Untouched fields stay.
+    assert_eq!(got.summary, "because it won");
+
+    // Editing a missing decision is NotFound.
+    let missing = store
+        .decision_edit(DecisionId::new(), vec![DecisionEdit::SetTitle("x".into())])
+        .await;
+    assert!(matches!(missing, Err(StoreError::NotFound)));
+}
+
+#[tokio::test]
+async fn edit_batch_is_atomic() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+    let id = store.decision_add(decision(project, "stable")).await.unwrap();
+
+    // Postgres rejects NUL bytes in text, so the second op fails — and the
+    // already-applied first op must roll back with it.
+    let failed = store
+        .decision_edit(
+            id,
+            vec![
+                DecisionEdit::SetSummary("half-applied".into()),
+                DecisionEdit::SetTitle("bad\0title".into()),
+            ],
+        )
+        .await;
+    assert!(failed.is_err());
+
+    let got = store.decision_get(id).await.unwrap().unwrap();
+    assert_eq!(got.summary, "because it won");
+    assert_eq!(got.title, "stable");
+}
+
+#[tokio::test]
+async fn add_guards() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+
+    // Authorship isn't wired yet — must fail loud, not drop silently.
+    let mut authored = decision(project, "authored");
+    authored.authors.push(Author::User(UserId::new()));
+    assert!(matches!(
+        store.decision_add(authored).await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // Unknown project: FK violation surfaces as Invalid.
+    let orphan = decision(ProjectId::new(), "orphan");
+    assert!(matches!(
+        store.decision_add(orphan).await,
+        Err(StoreError::Invalid(_))
+    ));
+}

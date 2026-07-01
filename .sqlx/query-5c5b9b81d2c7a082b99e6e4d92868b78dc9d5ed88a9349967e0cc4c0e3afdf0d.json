@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update groups set description = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c5b9b81d2c7a082b99e6e4d92868b78dc9d5ed88a9349967e0cc4c0e3afdf0d"
+}

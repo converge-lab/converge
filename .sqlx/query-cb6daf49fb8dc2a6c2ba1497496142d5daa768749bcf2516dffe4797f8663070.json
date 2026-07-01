@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update projects set description = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb6daf49fb8dc2a6c2ba1497496142d5daa768749bcf2516dffe4797f8663070"
+}

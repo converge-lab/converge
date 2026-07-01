@@ -2,7 +2,7 @@
 //!
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
-use converge_storage::{Alternative, Decision, ProjectId, StoreError};
+use converge_storage::{Alternative, Decision, Group, Project, ProjectId, StoreError};
 use time::OffsetDateTime;
 use ulid::Ulid;
 use uuid::Uuid;
@@ -45,6 +45,76 @@ impl From<DecisionStatus> for converge_storage::DecisionStatus {
             P::Proposed => Self::Proposed,
             P::Superseded => Self::Superseded,
             P::Rejected => Self::Rejected,
+        }
+    }
+}
+
+/// The `group_kind` Postgres enum.
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "group_kind", rename_all = "lowercase")]
+pub(crate) enum GroupKind {
+    Shared,
+    Personal,
+}
+
+impl From<converge_storage::GroupKind> for GroupKind {
+    fn from(k: converge_storage::GroupKind) -> Self {
+        use converge_storage::GroupKind as D;
+        match k {
+            D::Shared => Self::Shared,
+            D::Personal => Self::Personal,
+        }
+    }
+}
+
+impl From<GroupKind> for converge_storage::GroupKind {
+    fn from(k: GroupKind) -> Self {
+        use GroupKind as P;
+        match k {
+            P::Shared => Self::Shared,
+            P::Personal => Self::Personal,
+        }
+    }
+}
+
+/// One `groups` row, as fetched.
+pub(crate) struct GroupRow {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub kind: GroupKind,
+    pub created_at: OffsetDateTime,
+}
+
+impl From<GroupRow> for Group {
+    fn from(r: GroupRow) -> Self {
+        Group {
+            id: id(r.id),
+            name: r.name,
+            description: r.description,
+            kind: r.kind.into(),
+            created_at: r.created_at,
+        }
+    }
+}
+
+/// One `projects` row, as fetched.
+pub(crate) struct ProjectRow {
+    pub id: Uuid,
+    pub group_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+impl From<ProjectRow> for Project {
+    fn from(r: ProjectRow) -> Self {
+        Project {
+            id: id(r.id),
+            group_id: id(r.group_id),
+            name: r.name,
+            description: r.description,
+            created_at: r.created_at,
         }
     }
 }

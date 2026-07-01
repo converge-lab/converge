@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, name, description, kind as \"kind: _\", created_at\n               from groups order by id desc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind: _",
+        "type_info": {
+          "Custom": {
+            "name": "group_kind",
+            "kind": {
+              "Enum": [
+                "shared",
+                "personal"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e605adb6ff2201cdc7cf8bee3582eb7e36c96efba48f3f4b742d272bd299ead1"
+}

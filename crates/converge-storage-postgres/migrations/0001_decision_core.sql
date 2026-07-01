@@ -12,10 +12,11 @@ create type decision_status as enum ('accepted', 'draft', 'proposed', 'supersede
 
 -- A group/team; owns projects.
 create table groups (
-    id         uuid primary key,
-    name       text not null,
-    kind       group_kind not null,
-    created_at timestamptz not null default now()
+    id          uuid primary key,
+    name        text not null,
+    description text,
+    kind        group_kind not null,
+    created_at  timestamptz not null default now()
 );
 
 -- A logical project (codebase/service), owned by a group.

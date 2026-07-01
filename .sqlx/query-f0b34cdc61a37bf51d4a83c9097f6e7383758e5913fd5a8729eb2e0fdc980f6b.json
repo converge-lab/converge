@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups (id, name, description, kind) values ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "group_kind",
+            "kind": {
+              "Enum": [
+                "shared",
+                "personal"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f0b34cdc61a37bf51d4a83c9097f6e7383758e5913fd5a8729eb2e0fdc980f6b"
+}

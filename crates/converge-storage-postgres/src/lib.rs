@@ -9,12 +9,14 @@
 mod wire;
 
 use converge_storage::{
-    Decision, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Edges, NewDecision,
-    Related, StoreError, Storage,
+    Decision, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions, Edges, Group,
+    GroupEdit, GroupId, Groups, NewDecision, NewGroup, NewProject, Project, ProjectEdit,
+    ProjectFilter, ProjectId, Projects, Related, StoreError,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 use wire::DecisionStatus as PgStatus;
+use wire::GroupKind as PgGroupKind;
 
 /// Superseded is derived from inbound edges — storing it is a caller error.
 const SUPERSEDED_IS_DERIVED: &str =
@@ -55,7 +57,164 @@ impl PgStorage {
     }
 }
 
-impl Storage for PgStorage {
+impl Groups for PgStorage {
+    async fn group_add(&self, new: NewGroup) -> Result<GroupId, StoreError> {
+        let id = GroupId::new();
+        let kind = PgGroupKind::from(new.kind);
+        sqlx::query!(
+            "insert into groups (id, name, description, kind) values ($1, $2, $3, $4)",
+            Uuid::from(id.ulid()),
+            new.name,
+            new.description,
+            kind as PgGroupKind,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(id)
+    }
+
+    async fn group_get(&self, id: GroupId) -> Result<Option<Group>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::GroupRow,
+            r#"select id, name, description, kind as "kind: _", created_at
+               from groups where id = $1"#,
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(Group::from))
+    }
+
+    async fn group_list(&self) -> Result<Vec<Group>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::GroupRow,
+            r#"select id, name, description, kind as "kind: _", created_at
+               from groups order by id desc"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Group::from)
+        .collect())
+    }
+
+    async fn group_edit(&self, id: GroupId, edits: Vec<GroupEdit>) -> Result<(), StoreError> {
+        let uuid = Uuid::from(id.ulid());
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let held = sqlx::query!("select id from groups where id = $1 for update", uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if held.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        for edit in edits {
+            match edit {
+                GroupEdit::SetName(name) => {
+                    sqlx::query!("update groups set name = $2 where id = $1", uuid, name)
+                        .execute(&mut *tx)
+                        .await
+                }
+                GroupEdit::SetDescription(description) => {
+                    sqlx::query!(
+                        "update groups set description = $2 where id = $1",
+                        uuid,
+                        description,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                }
+            }
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+}
+
+impl Projects for PgStorage {
+    async fn project_add(&self, new: NewProject) -> Result<ProjectId, StoreError> {
+        let id = ProjectId::new();
+        sqlx::query!(
+            "insert into projects (id, group_id, name, description) values ($1, $2, $3, $4)",
+            Uuid::from(id.ulid()),
+            Uuid::from(new.group_id.ulid()),
+            new.name,
+            new.description,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(id)
+    }
+
+    async fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::ProjectRow,
+            "select id, group_id, name, description, created_at from projects where id = $1",
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(Project::from))
+    }
+
+    async fn project_list(&self, filter: ProjectFilter) -> Result<Vec<Project>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::ProjectRow,
+            r#"select id, group_id, name, description, created_at
+               from projects
+               where ($1::uuid is null or group_id = $1)
+               order by id desc
+               limit $2"#,
+            filter.group.map(|g| Uuid::from(g.ulid())),
+            filter.limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Project::from)
+        .collect())
+    }
+
+    async fn project_edit(&self, id: ProjectId, edits: Vec<ProjectEdit>) -> Result<(), StoreError> {
+        let uuid = Uuid::from(id.ulid());
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let held = sqlx::query!("select id from projects where id = $1 for update", uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if held.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        for edit in edits {
+            match edit {
+                ProjectEdit::SetName(name) => {
+                    sqlx::query!("update projects set name = $2 where id = $1", uuid, name)
+                        .execute(&mut *tx)
+                        .await
+                }
+                ProjectEdit::SetDescription(description) => {
+                    sqlx::query!(
+                        "update projects set description = $2 where id = $1",
+                        uuid,
+                        description,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                }
+            }
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+}
+
+impl Decisions for PgStorage {
     async fn decision_add(&self, new: NewDecision) -> Result<DecisionId, StoreError> {
         if !new.authors.is_empty() {
             return Err(StoreError::Invalid(

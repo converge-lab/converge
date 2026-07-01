@@ -1,8 +1,11 @@
 //! The decision (ADR) — the core record and the node of the decision graph.
 
+use std::future::Future;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::StoreError;
 use crate::ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 
 /// Lifecycle of a decision.
@@ -120,4 +123,34 @@ pub struct DecisionFilter {
     pub group: Option<GroupId>,
     pub status: Option<DecisionStatus>,
     pub limit: Option<u32>,
+}
+
+/// Storage operations on decisions and their graph edges.
+pub trait Decisions {
+    fn decision_add(
+        &self,
+        new: NewDecision,
+    ) -> impl Future<Output = Result<DecisionId, StoreError>> + Send;
+
+    fn decision_get(
+        &self,
+        id: DecisionId,
+    ) -> impl Future<Output = Result<Option<Decision>, StoreError>> + Send;
+
+    fn decision_list(
+        &self,
+        filter: DecisionFilter,
+    ) -> impl Future<Output = Result<Vec<Decision>, StoreError>> + Send;
+
+    fn decision_edit(
+        &self,
+        id: DecisionId,
+        edits: Vec<DecisionEdit>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The direct graph edges of `id`, or `None` when it doesn't exist.
+    fn decision_edges(
+        &self,
+        id: DecisionId,
+    ) -> impl Future<Output = Result<Option<Edges>, StoreError>> + Send;
 }

@@ -1,47 +1,32 @@
 //! Round-trip tests for the decision methods, against a real Postgres
 //! (testcontainers — needs Docker).
 
+mod common;
+
+use common::store;
 use converge_storage::{
-    Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupId,
-    NewDecision, ProjectId, Related, Storage, StoreError, UserId,
+    Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions,
+    GroupId, GroupKind, Groups, NewDecision, NewGroup, NewProject, ProjectId, Projects, Related,
+    StoreError, UserId,
 };
 use converge_storage_postgres::PgStorage;
-use sqlx::PgPool;
-use testcontainers_modules::postgres::Postgres;
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
-use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
-use uuid::Uuid;
 
-/// Boot a fresh Postgres, migrate, connect. The container lives as long as
-/// the returned handle.
-async fn store() -> (ContainerAsync<Postgres>, PgStorage) {
-    let node = Postgres::default()
-        .with_tag("16-alpine")
-        .start()
-        .await
-        .expect("start postgres (is Docker running?)");
-    let port = node.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let store = PgStorage::connect(&url).await.unwrap();
-    store.migrate().await.unwrap();
-    (node, store)
-}
-
-/// Insert a group + project directly — no trait methods for those yet.
-async fn seed_project(pool: &PgPool) -> (GroupId, ProjectId) {
-    let group = GroupId::new();
-    sqlx::query("insert into groups (id, name, kind) values ($1, $2, 'shared')")
-        .bind(Uuid::from(group.ulid()))
-        .bind("test group")
-        .execute(pool)
+/// A group + project to hang decisions on.
+async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId) {
+    let group = store
+        .group_add(NewGroup {
+            name: "test group".into(),
+            description: None,
+            kind: GroupKind::Shared,
+        })
         .await
         .unwrap();
-    let project = ProjectId::new();
-    sqlx::query("insert into projects (id, group_id, name) values ($1, $2, $3)")
-        .bind(Uuid::from(project.ulid()))
-        .bind(Uuid::from(group.ulid()))
-        .bind("test project")
-        .execute(pool)
+    let project = store
+        .project_add(NewProject {
+            group_id: group,
+            name: "test project".into(),
+            description: None,
+        })
         .await
         .unwrap();
     (group, project)
@@ -67,7 +52,7 @@ fn decision(project: ProjectId, title: &str) -> NewDecision {
 #[tokio::test]
 async fn round_trip() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
 
     let id = store.decision_add(decision(project, "adopt X")).await.unwrap();
     let got = store.decision_get(id).await.unwrap().expect("stored decision");
@@ -88,8 +73,8 @@ async fn round_trip() {
 #[tokio::test]
 async fn list_filters() {
     let (_pg, store) = store().await;
-    let (_, a) = seed_project(store.pool()).await;
-    let (group_b, b) = seed_project(store.pool()).await;
+    let (_, a) = seed_project(&store).await;
+    let (group_b, b) = seed_project(&store).await;
 
     let d1 = store.decision_add(decision(a, "one")).await.unwrap();
     let d2 = store
@@ -136,7 +121,7 @@ async fn list_filters() {
 #[tokio::test]
 async fn edit_batch() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
     let id = store.decision_add(decision(project, "draft Y")).await.unwrap();
 
     store
@@ -170,7 +155,7 @@ async fn edit_batch() {
 #[tokio::test]
 async fn supersession_derives_status() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
 
     let old = store.decision_add(decision(project, "v1")).await.unwrap();
     let new = store
@@ -216,7 +201,7 @@ async fn supersession_derives_status() {
 #[tokio::test]
 async fn related_upsert() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
     let a = store.decision_add(decision(project, "a")).await.unwrap();
     let b = store.decision_add(decision(project, "b")).await.unwrap();
 
@@ -246,7 +231,7 @@ async fn related_upsert() {
 #[tokio::test]
 async fn graph_guards() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
     let a = store.decision_add(decision(project, "a")).await.unwrap();
 
     // Self-loops are rejected.
@@ -300,7 +285,7 @@ async fn graph_guards() {
 #[tokio::test]
 async fn edit_batch_is_atomic() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
     let id = store.decision_add(decision(project, "stable")).await.unwrap();
 
     // Postgres rejects NUL bytes in text, so the second op fails — and the
@@ -324,7 +309,7 @@ async fn edit_batch_is_atomic() {
 #[tokio::test]
 async fn add_guards() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(store.pool()).await;
+    let (_, project) = seed_project(&store).await;
 
     // Authorship isn't wired yet — must fail loud, not drop silently.
     let mut authored = decision(project, "authored");

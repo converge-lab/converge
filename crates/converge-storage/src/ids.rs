@@ -12,6 +12,10 @@ macro_rules! id {
 
         impl $name {
             /// Mint a fresh, time-ordered id.
+            #[expect(
+                clippy::new_without_default,
+                reason = "a fresh unique id is not a default value"
+            )]
             pub fn new() -> Self {
                 Self(Ulid::new())
             }

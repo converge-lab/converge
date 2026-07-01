@@ -58,14 +58,22 @@ create table decision_author (
 create index on decision_author (decision_id);
 
 -- Graph edges (decision → decision).
+--
+-- An inbound supersedes-edge makes the target read as `superseded`: that
+-- status is derived at query time, never stored in decisions.status.
 create table decision_supersedes (
     decision_id   uuid not null references decisions(id) on delete cascade,
     supersedes_id uuid not null references decisions(id) on delete cascade,
+    check (decision_id <> supersedes_id),
     primary key (decision_id, supersedes_id)
 );
+create index on decision_supersedes (supersedes_id);          -- inbound + derived status
+
 create table decision_related (
     decision_id uuid not null references decisions(id) on delete cascade,
     ref_id      uuid not null references decisions(id) on delete cascade,
     why         text,
+    check (decision_id <> ref_id),
     primary key (decision_id, ref_id)
 );
+create index on decision_related (ref_id);                    -- inbound cross-refs

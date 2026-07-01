@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select decision_id from decision_supersedes where supersedes_id = $1\n             order by decision_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0e62a646cd9348468b19af6a1be44e51be36e469e6e548c4945c02a045c432ba"
+}

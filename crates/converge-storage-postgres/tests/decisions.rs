@@ -3,7 +3,7 @@
 
 use converge_storage::{
     Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupId,
-    NewDecision, ProjectId, Storage, StoreError, UserId,
+    NewDecision, ProjectId, Related, Storage, StoreError, UserId,
 };
 use converge_storage_postgres::PgStorage;
 use sqlx::PgPool;
@@ -60,6 +60,7 @@ fn decision(project: ProjectId, title: &str) -> NewDecision {
             why_rejected: "slower".into(),
         }],
         authors: Vec::new(),
+        supersedes: Vec::new(),
     }
 }
 
@@ -143,7 +144,7 @@ async fn edit_batch() {
             id,
             vec![
                 DecisionEdit::SetTitle("adopt Y".into()),
-                DecisionEdit::SetStatus(DecisionStatus::Superseded),
+                DecisionEdit::SetStatus(DecisionStatus::Rejected),
                 DecisionEdit::SetContext(None),
                 DecisionEdit::SetAlternatives(Vec::new()),
             ],
@@ -153,7 +154,7 @@ async fn edit_batch() {
 
     let got = store.decision_get(id).await.unwrap().unwrap();
     assert_eq!(got.title, "adopt Y");
-    assert_eq!(got.status, DecisionStatus::Superseded);
+    assert_eq!(got.status, DecisionStatus::Rejected);
     assert_eq!(got.context, None);
     assert!(got.alternatives.is_empty());
     // Untouched fields stay.
@@ -164,6 +165,136 @@ async fn edit_batch() {
         .decision_edit(DecisionId::new(), vec![DecisionEdit::SetTitle("x".into())])
         .await;
     assert!(matches!(missing, Err(StoreError::NotFound)));
+}
+
+#[tokio::test]
+async fn supersession_derives_status() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+
+    let old = store.decision_add(decision(project, "v1")).await.unwrap();
+    let new = store
+        .decision_add(NewDecision { supersedes: vec![old], ..decision(project, "v2") })
+        .await
+        .unwrap();
+
+    // The stored status of `old` is untouched, but it *reads* superseded.
+    let got_old = store.decision_get(old).await.unwrap().unwrap();
+    assert_eq!(got_old.status, DecisionStatus::Superseded);
+    let got_new = store.decision_get(new).await.unwrap().unwrap();
+    assert_eq!(got_new.status, DecisionStatus::Accepted);
+
+    // Edges, both directions.
+    let edges_old = store.decision_edges(old).await.unwrap().unwrap();
+    assert_eq!(edges_old.superseded_by, vec![new]);
+    assert!(edges_old.supersedes.is_empty());
+    let edges_new = store.decision_edges(new).await.unwrap().unwrap();
+    assert_eq!(edges_new.supersedes, vec![old]);
+
+    // The list status filter matches the derived status.
+    let superseded = store
+        .decision_list(DecisionFilter {
+            status: Some(DecisionStatus::Superseded),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(superseded.iter().map(|d| d.id).collect::<Vec<_>>(), vec![old]);
+
+    // Removing the edge restores the stored status.
+    store
+        .decision_edit(new, vec![DecisionEdit::RemoveSupersedes(old)])
+        .await
+        .unwrap();
+    let restored = store.decision_get(old).await.unwrap().unwrap();
+    assert_eq!(restored.status, DecisionStatus::Accepted);
+
+    // Edges of a missing decision → None.
+    assert!(store.decision_edges(DecisionId::new()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn related_upsert() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+    let a = store.decision_add(decision(project, "a")).await.unwrap();
+    let b = store.decision_add(decision(project, "b")).await.unwrap();
+
+    // Re-adding an existing cross-ref updates `why` (upsert, no duplicate).
+    store
+        .decision_edit(a, vec![DecisionEdit::AddRelated { to: b, why: Some("first".into()) }])
+        .await
+        .unwrap();
+    store
+        .decision_edit(a, vec![DecisionEdit::AddRelated { to: b, why: Some("updated".into()) }])
+        .await
+        .unwrap();
+
+    let ea = store.decision_edges(a).await.unwrap().unwrap();
+    assert_eq!(ea.related_to, vec![Related { id: b, why: Some("updated".into()) }]);
+    assert!(ea.related_by.is_empty());
+    let eb = store.decision_edges(b).await.unwrap().unwrap();
+    assert_eq!(eb.related_by, vec![Related { id: a, why: Some("updated".into()) }]);
+    assert!(eb.related_to.is_empty());
+
+    // Removal is idempotent.
+    store.decision_edit(a, vec![DecisionEdit::RemoveRelated(b)]).await.unwrap();
+    store.decision_edit(a, vec![DecisionEdit::RemoveRelated(b)]).await.unwrap();
+    assert!(store.decision_edges(a).await.unwrap().unwrap().related_to.is_empty());
+}
+
+#[tokio::test]
+async fn graph_guards() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(store.pool()).await;
+    let a = store.decision_add(decision(project, "a")).await.unwrap();
+
+    // Self-loops are rejected.
+    assert!(matches!(
+        store.decision_edit(a, vec![DecisionEdit::AddSupersedes(a)]).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store
+            .decision_edit(a, vec![DecisionEdit::AddRelated { to: a, why: None }])
+            .await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // Superseded is derived — it can't be set or created.
+    assert!(matches!(
+        store
+            .decision_edit(a, vec![DecisionEdit::SetStatus(DecisionStatus::Superseded)])
+            .await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store
+            .decision_add(NewDecision {
+                status: DecisionStatus::Superseded,
+                ..decision(project, "born superseded")
+            })
+            .await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // A creation-time edge to a missing decision fails whole (FK, atomic).
+    let orphan_edge = NewDecision {
+        supersedes: vec![DecisionId::new()],
+        ..decision(project, "dangling")
+    };
+    assert!(matches!(
+        store.decision_add(orphan_edge).await,
+        Err(StoreError::Invalid(_))
+    ));
+    let titles: Vec<String> = store
+        .decision_list(DecisionFilter::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| d.title)
+        .collect();
+    assert!(!titles.contains(&"dangling".to_string()));
 }
 
 #[tokio::test]

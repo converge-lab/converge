@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from decision_supersedes where decision_id = $1 and supersedes_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c009003cc3c3c23960d0052a4d001536247bd098049e12fd12551ef4be86838"
+}

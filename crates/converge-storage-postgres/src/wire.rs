@@ -2,9 +2,15 @@
 //!
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
-use converge_storage::{Alternative, Decision, DecisionId, ProjectId, StoreError};
+use converge_storage::{Alternative, Decision, ProjectId, StoreError};
 use time::OffsetDateTime;
+use ulid::Ulid;
 use uuid::Uuid;
+
+/// Convert a stored `uuid` back into one of the domain id newtypes.
+pub(crate) fn id<T: From<Ulid>>(u: Uuid) -> T {
+    T::from(Ulid::from(u))
+}
 
 /// The `decision_status` Postgres enum.
 #[derive(Debug, Clone, Copy, sqlx::Type)]
@@ -63,8 +69,8 @@ impl TryFrom<DecisionRow> for Decision {
         let alternatives: Vec<Alternative> = serde_json::from_value(r.alternatives)
             .map_err(|e| StoreError::Backend(format!("corrupt alternatives json: {e}")))?;
         Ok(Decision {
-            id: DecisionId::from(ulid::Ulid::from(r.id)),
-            project_id: ProjectId::from(ulid::Ulid::from(r.project_id)),
+            id: id(r.id),
+            project_id: id::<ProjectId>(r.project_id),
             status: r.status.into(),
             title: r.title,
             summary: r.summary,

@@ -1,0 +1,99 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id as \"id!\", project_id as \"project_id!\", status as \"status!: _\",\n                      title as \"title!\", summary as \"summary!\", context, consequences,\n                      alternatives as \"alternatives!\", captured_at as \"captured_at!\"\n               from (\n                   select d.id, d.project_id, p.group_id,\n                          case when exists (select 1 from decision_supersedes s\n                                            where s.supersedes_id = d.id)\n                               then 'superseded'::decision_status\n                               else d.status\n                          end as status,\n                          d.title, d.summary, d.context, d.consequences,\n                          d.alternatives, d.captured_at\n                   from decisions d\n                   join projects p on p.id = d.project_id\n               ) d\n               where ($1::uuid is null or d.project_id = $1)\n                 and ($2::uuid is null or d.group_id = $2)\n                 and ($3::decision_status is null or d.status = $3)\n               order by d.id desc\n               limit $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "status!: _",
+        "type_info": {
+          "Custom": {
+            "name": "decision_status",
+            "kind": {
+              "Enum": [
+                "accepted",
+                "draft",
+                "proposed",
+                "superseded",
+                "rejected"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "summary!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "context",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "consequences",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "alternatives!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "captured_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "decision_status",
+            "kind": {
+              "Enum": [
+                "accepted",
+                "draft",
+                "proposed",
+                "superseded",
+                "rejected"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1bad5570fcde40d091e8720d24067aadcaea3ecd7988f167fc8528180f608883"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select decision_id, why from decision_related where ref_id = $1\n             order by decision_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "why",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "800e5acb79eb1f10686f0743acd063ae089a274297c2f0bc9ca200dc56460281"
+}

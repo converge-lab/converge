@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into decision_supersedes (decision_id, supersedes_id)\n                 values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd4eded4dd651b7680de9ada91594d374dd7a8042bcd2b002ec28894de1ba462"
+}

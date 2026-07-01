@@ -6,6 +6,11 @@ use time::OffsetDateTime;
 use crate::ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 
 /// Lifecycle of a decision.
+///
+/// `Superseded` is **derived**: a decision with any inbound supersedes-edge
+/// reads as superseded, whatever its stored status. It can't be stored or
+/// set directly — supersede via edges; removing the last inbound edge
+/// restores the stored status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DecisionStatus {
@@ -63,18 +68,49 @@ pub struct NewDecision {
     pub consequences: Option<String>,
     pub alternatives: Vec<Alternative>,
     pub authors: Vec<Author>,
+    /// Decisions this one replaces — creation-time supersession edges.
+    pub supersedes: Vec<DecisionId>,
 }
 
 /// A single edit operation. Applied as a batch (`Vec<DecisionEdit>`)
 /// atomically — sparse (only the ops you send) and race-safe.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DecisionEdit {
+    /// `SetStatus(Superseded)` is invalid — superseded is derived from edges.
     SetStatus(DecisionStatus),
     SetTitle(String),
     SetSummary(String),
     SetContext(Option<String>),
     SetConsequences(Option<String>),
     SetAlternatives(Vec<Alternative>),
+    /// Add a supersession edge: this decision replaces the target.
+    AddSupersedes(DecisionId),
+    /// Remove a supersession edge (no-op when absent).
+    RemoveSupersedes(DecisionId),
+    /// Add a cross-reference; re-adding an existing one updates `why`.
+    AddRelated { to: DecisionId, why: Option<String> },
+    /// Remove a cross-reference (no-op when absent).
+    RemoveRelated(DecisionId),
+}
+
+/// One end of a cross-reference edge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Related {
+    pub id: DecisionId,
+    pub why: Option<String>,
+}
+
+/// The direct graph edges of one decision, both directions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Edges {
+    /// Decisions this one replaced.
+    pub supersedes: Vec<DecisionId>,
+    /// Decisions that replaced this one (non-empty ⇒ reads as superseded).
+    pub superseded_by: Vec<DecisionId>,
+    /// Outgoing cross-refs.
+    pub related_to: Vec<Related>,
+    /// Incoming cross-refs.
+    pub related_by: Vec<Related>,
 }
 
 /// Filter for listing decisions. All fields optional; combine to narrow.

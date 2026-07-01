@@ -18,7 +18,8 @@ pub mod decision;
 pub mod ids;
 
 pub use decision::{
-    Alternative, Author, Decision, DecisionEdit, DecisionFilter, DecisionStatus, NewDecision,
+    Alternative, Author, Decision, DecisionEdit, DecisionFilter, DecisionStatus, Edges,
+    NewDecision, Related,
 };
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 
@@ -65,4 +66,10 @@ pub trait Storage: Clone + Send + Sync {
         id: DecisionId,
         edits: Vec<DecisionEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The direct graph edges of `id`, or `None` when it doesn't exist.
+    fn decision_edges(
+        &self,
+        id: DecisionId,
+    ) -> impl Future<Output = Result<Option<Edges>, StoreError>> + Send;
 }

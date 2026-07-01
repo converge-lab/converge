@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into decision_related (decision_id, ref_id, why)\n                 values ($1, $2, $3)\n                 on conflict (decision_id, ref_id) do update set why = excluded.why",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "176673f3f8568ed1b2b8c3e3c54b6afc90009a87d330adc9c6f7fc42b1b56de3"
+}

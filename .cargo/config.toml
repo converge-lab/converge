@@ -1,0 +1,4 @@
+# `cargo xtask <cmd>` → the dev-tooling binary (testcontainers dev DB, sqlx
+# offline-cache generation). See crates/xtask.
+[alias]
+xtask = "run -p xtask --"

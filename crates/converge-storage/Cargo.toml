@@ -1,0 +1,13 @@
+[package]
+name = "converge-storage"
+description = "Domain storage trait (the Repository seam) for Converge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+time.workspace = true

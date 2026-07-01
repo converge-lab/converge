@@ -1,0 +1,11 @@
+[package]
+name = "converge-storage-postgres"
+description = "PostgreSQL implementation of the Converge storage trait."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+converge-storage.workspace = true
+# sqlx + tokio are added with the first query slice.

@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/converge-storage",
+    "crates/converge-storage-postgres",
+    "crates/xtask",
+]
+# xtask (dev tooling: testcontainers dev DB + sqlx offline-cache generation) is
+# a member so `cargo xtask` / `-p xtask` resolve it, but it's out of the default
+# set so a bare `cargo check`/`build`/`test` never compiles its Docker deps.
+default-members = [
+    "crates/converge-storage",
+    "crates/converge-storage-postgres",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+repository = "https://github.com/converge-lab/converge"
+
+[workspace.dependencies]
+converge-storage = { path = "crates/converge-storage" }
+
+# Async
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+
+# PostgreSQL — the bundled storage backend. tls-rustls keeps it pure-Rust
+# and cross-compilable.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid", "time",
+] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+thiserror = "2"
+
+# Ids / time
+ulid = { version = "1", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

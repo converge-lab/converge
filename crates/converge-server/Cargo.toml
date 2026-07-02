@@ -1,0 +1,23 @@
+[package]
+name = "converge-server"
+description = "The Converge server: HTTP API and MCP endpoint over the storage seam."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+converge-storage.workspace = true
+converge-storage-postgres.workspace = true
+axum.workspace = true
+anyhow.workspace = true
+config.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+[dev-dependencies]
+testcontainers-modules.workspace = true
+tower = { workspace = true, features = ["util"] }

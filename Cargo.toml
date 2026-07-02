@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
     "crates/xtask",
@@ -9,6 +10,7 @@ members = [
 # a member so `cargo xtask` / `-p xtask` resolve it, but it's out of the default
 # set so a bare `cargo check`/`build`/`test` never compiles its Docker deps.
 default-members = [
+    "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
 ]
@@ -22,9 +24,21 @@ repository = "https://github.com/converge-lab/converge"
 
 [workspace.dependencies]
 converge-storage = { path = "crates/converge-storage" }
+converge-storage-postgres = { path = "crates/converge-storage-postgres" }
 
 # Async
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "net"] }
+
+# HTTP server
+axum = "0.8"
+tower = "0.5"
+
+# Binary plumbing
+anyhow = "1"
+config = { version = "0.15", default-features = false, features = ["toml"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # PostgreSQL — the bundled storage backend. tls-rustls keeps it pure-Rust
 # and cross-compilable.

@@ -10,7 +10,11 @@ use converge_storage::{
 };
 
 fn group(name: &str, kind: GroupKind) -> NewGroup {
-    NewGroup { name: name.into(), description: None, kind }
+    NewGroup {
+        name: name.into(),
+        description: None,
+        kind,
+    }
 }
 
 #[tokio::test]
@@ -31,10 +35,16 @@ async fn group_round_trip() {
     assert_eq!(got.description.as_deref(), Some("owns infra"));
     assert_eq!(got.kind, GroupKind::Shared);
 
-    let personal = store.group_add(group("me", GroupKind::Personal)).await.unwrap();
+    let personal = store
+        .group_add(group("me", GroupKind::Personal))
+        .await
+        .unwrap();
     let all = store.group_list().await.unwrap();
     // Newest first (ULID = time order).
-    assert_eq!(all.iter().map(|g| g.id).collect::<Vec<_>>(), vec![personal, id]);
+    assert_eq!(
+        all.iter().map(|g| g.id).collect::<Vec<_>>(),
+        vec![personal, id]
+    );
     assert_eq!(all[0].kind, GroupKind::Personal);
 
     store
@@ -53,7 +63,9 @@ async fn group_round_trip() {
 
     assert!(store.group_get(GroupId::new()).await.unwrap().is_none());
     assert!(matches!(
-        store.group_edit(GroupId::new(), vec![GroupEdit::SetName("x".into())]).await,
+        store
+            .group_edit(GroupId::new(), vec![GroupEdit::SetName("x".into())])
+            .await,
         Err(StoreError::NotFound)
     ));
 }
@@ -61,8 +73,14 @@ async fn group_round_trip() {
 #[tokio::test]
 async fn project_round_trip() {
     let (_pg, store) = store().await;
-    let home = store.group_add(group("home", GroupKind::Shared)).await.unwrap();
-    let other = store.group_add(group("other", GroupKind::Shared)).await.unwrap();
+    let home = store
+        .group_add(group("home", GroupKind::Shared))
+        .await
+        .unwrap();
+    let other = store
+        .group_add(group("other", GroupKind::Shared))
+        .await
+        .unwrap();
 
     let p1 = store
         .project_add(NewProject {
@@ -73,11 +91,19 @@ async fn project_round_trip() {
         .await
         .unwrap();
     let p2 = store
-        .project_add(NewProject { group_id: home, name: "web".into(), description: None })
+        .project_add(NewProject {
+            group_id: home,
+            name: "web".into(),
+            description: None,
+        })
         .await
         .unwrap();
     let p3 = store
-        .project_add(NewProject { group_id: other, name: "infra".into(), description: None })
+        .project_add(NewProject {
+            group_id: other,
+            name: "infra".into(),
+            description: None,
+        })
         .await
         .unwrap();
 
@@ -88,13 +114,22 @@ async fn project_round_trip() {
 
     // Group filter; newest first.
     let of_home = store
-        .project_list(ProjectFilter { group: Some(home), ..Default::default() })
+        .project_list(ProjectFilter {
+            group: Some(home),
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert_eq!(of_home.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p2, p1]);
+    assert_eq!(
+        of_home.iter().map(|p| p.id).collect::<Vec<_>>(),
+        vec![p2, p1]
+    );
 
     let latest = store
-        .project_list(ProjectFilter { limit: Some(1), ..Default::default() })
+        .project_list(ProjectFilter {
+            limit: Some(1),
+            ..Default::default()
+        })
         .await
         .unwrap();
     assert_eq!(latest.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p3]);
@@ -125,7 +160,9 @@ async fn project_round_trip() {
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        store.project_edit(ProjectId::new(), vec![ProjectEdit::SetName("x".into())]).await,
+        store
+            .project_edit(ProjectId::new(), vec![ProjectEdit::SetName("x".into())])
+            .await,
         Err(StoreError::NotFound)
     ));
 }

@@ -21,11 +21,14 @@
 
 use thiserror::Error;
 
+pub mod agent;
 pub mod decision;
 pub mod group;
 pub mod ids;
 pub mod project;
+pub mod user;
 
+pub use agent::{Agent, AgentKind, Agents, NewAgent};
 pub use decision::{
     Alternative, Author, Decision, DecisionEdit, DecisionFilter, DecisionStatus, Decisions, Edges,
     NewDecision, Related,
@@ -33,6 +36,7 @@ pub use decision::{
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
+pub use user::{NewUser, User, Users};
 
 /// Backend-agnostic storage error. A backend maps its native failures into
 /// these; callers distinguish only what they need to act on.
@@ -53,6 +57,6 @@ pub enum StoreError {
 
 /// The full storage surface — every resource trait, bundled. Implemented
 /// automatically for any type that implements them all.
-pub trait Storage: Groups + Projects + Decisions + Clone + Send + Sync {}
+pub trait Storage: Groups + Projects + Users + Agents + Decisions + Clone + Send + Sync {}
 
-impl<T: Groups + Projects + Decisions + Clone + Send + Sync> Storage for T {}
+impl<T: Groups + Projects + Users + Agents + Decisions + Clone + Send + Sync> Storage for T {}

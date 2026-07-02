@@ -74,7 +74,14 @@ async fn prepare(check: bool) -> Result<()> {
     if !status.success() {
         bail!("`cargo sqlx prepare` failed with {status}");
     }
-    println!("{}", if check { ".sqlx/ is current" } else { "regenerated .sqlx/" });
+    println!(
+        "{}",
+        if check {
+            ".sqlx/ is current"
+        } else {
+            "regenerated .sqlx/"
+        }
+    );
     Ok(())
 }
 

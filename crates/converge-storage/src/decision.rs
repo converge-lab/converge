@@ -56,6 +56,8 @@ pub struct Decision {
     pub context: Option<String>,
     pub consequences: Option<String>,
     pub alternatives: Vec<Alternative>,
+    /// Authorship is a set (duplicates collapse on write); reads return a
+    /// stable but unspecified order.
     pub authors: Vec<Author>,
     pub captured_at: OffsetDateTime,
 }
@@ -91,7 +93,10 @@ pub enum DecisionEdit {
     /// Remove a supersession edge (no-op when absent).
     RemoveSupersedes(DecisionId),
     /// Add a cross-reference; re-adding an existing one updates `why`.
-    AddRelated { to: DecisionId, why: Option<String> },
+    AddRelated {
+        to: DecisionId,
+        why: Option<String>,
+    },
     /// Remove a cross-reference (no-op when absent).
     RemoveRelated(DecisionId),
 }

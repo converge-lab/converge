@@ -2,7 +2,9 @@
 //!
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
-use converge_storage::{Alternative, Decision, Group, Project, ProjectId, StoreError};
+use converge_storage::{
+    Agent, Alternative, Author, Decision, Group, Project, ProjectId, StoreError, User,
+};
 use time::OffsetDateTime;
 use ulid::Ulid;
 use uuid::Uuid;
@@ -77,6 +79,97 @@ impl From<GroupKind> for converge_storage::GroupKind {
     }
 }
 
+/// The `agent_kind` Postgres enum.
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "agent_kind", rename_all = "lowercase")]
+pub(crate) enum AgentKind {
+    Model,
+    Tool,
+}
+
+impl From<converge_storage::AgentKind> for AgentKind {
+    fn from(k: converge_storage::AgentKind) -> Self {
+        use converge_storage::AgentKind as D;
+        match k {
+            D::Model => Self::Model,
+            D::Tool => Self::Tool,
+        }
+    }
+}
+
+impl From<AgentKind> for converge_storage::AgentKind {
+    fn from(k: AgentKind) -> Self {
+        use AgentKind as P;
+        match k {
+            P::Model => Self::Model,
+            P::Tool => Self::Tool,
+        }
+    }
+}
+
+/// One `users` row, as fetched.
+pub(crate) struct UserRow {
+    pub id: Uuid,
+    pub handle: String,
+    pub name: String,
+}
+
+impl From<UserRow> for User {
+    fn from(r: UserRow) -> Self {
+        User {
+            id: id(r.id),
+            handle: r.handle,
+            name: r.name,
+        }
+    }
+}
+
+/// One `agents` row, as fetched.
+pub(crate) struct AgentRow {
+    pub id: Uuid,
+    pub kind: AgentKind,
+    pub name: String,
+}
+
+impl From<AgentRow> for Agent {
+    fn from(r: AgentRow) -> Self {
+        Agent {
+            id: id(r.id),
+            kind: r.kind.into(),
+            name: r.name,
+        }
+    }
+}
+
+/// One `decision_author` `(user_id?, agent_id?)` pair back into the
+/// three-state [`Author`]. Both-null is unrepresentable in the domain and
+/// checked out by the schema — hitting it means a corrupt row.
+pub(crate) fn author(user: Option<Uuid>, agent: Option<Uuid>) -> Result<Author, StoreError> {
+    match (user, agent) {
+        (Some(u), None) => Ok(Author::User(id(u))),
+        (None, Some(a)) => Ok(Author::Agent(id(a))),
+        (Some(u), Some(a)) => Ok(Author::UserViaAgent {
+            user: id(u),
+            agent: id(a),
+        }),
+        (None, None) => Err(StoreError::Backend(
+            "decision_author row with neither user nor agent".into(),
+        )),
+    }
+}
+
+/// An [`Author`] split into the `(user_id?, agent_id?)` column pair.
+pub(crate) fn split(author: &Author) -> (Option<Uuid>, Option<Uuid>) {
+    match author {
+        Author::User(u) => (Some(Uuid::from(u.ulid())), None),
+        Author::Agent(a) => (None, Some(Uuid::from(a.ulid()))),
+        Author::UserViaAgent { user, agent } => (
+            Some(Uuid::from(user.ulid())),
+            Some(Uuid::from(agent.ulid())),
+        ),
+    }
+}
+
 /// One `groups` row, as fetched.
 pub(crate) struct GroupRow {
     pub id: Uuid,
@@ -147,8 +240,7 @@ impl TryFrom<DecisionRow> for Decision {
             context: r.context,
             consequences: r.consequences,
             alternatives,
-            // Authorship lands with the users/agents slice; until then nothing
-            // is stored (decision_add rejects non-empty authors).
+            // Attached by the caller — a separate decision_author read.
             authors: Vec::new(),
             captured_at: r.captured_at,
         })

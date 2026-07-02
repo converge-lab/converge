@@ -8,13 +8,17 @@
 
 mod wire;
 
+use std::collections::HashMap;
+
 use converge_storage::{
-    Decision, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions, Edges, Group,
-    GroupEdit, GroupId, Groups, NewDecision, NewGroup, NewProject, Project, ProjectEdit,
-    ProjectFilter, ProjectId, Projects, Related, StoreError,
+    Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
+    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, NewAgent, NewDecision,
+    NewGroup, NewProject, NewUser, Project, ProjectEdit, ProjectFilter, ProjectId, Projects,
+    Related, StoreError, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
+use wire::AgentKind as PgAgentKind;
 use wire::DecisionStatus as PgStatus;
 use wire::GroupKind as PgGroupKind;
 
@@ -54,6 +58,93 @@ impl PgStorage {
     /// The underlying pool, for embedding and tests.
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Authors for a set of decisions — one query, grouped by decision.
+    /// Ordering is stable (arbitrary but deterministic).
+    async fn authors(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<Author>>, StoreError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "select decision_id, user_id, agent_id from decision_author
+             where decision_id = any($1)
+             order by user_id nulls last, agent_id",
+            ids,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut authors: HashMap<Uuid, Vec<Author>> = HashMap::new();
+        for row in rows {
+            authors
+                .entry(row.decision_id)
+                .or_default()
+                .push(wire::author(row.user_id, row.agent_id)?);
+        }
+        Ok(authors)
+    }
+}
+
+impl Users for PgStorage {
+    async fn user_ensure(&self, new: NewUser) -> Result<UserId, StoreError> {
+        // The no-op update makes `returning` yield the existing row on
+        // conflict (the freshly minted id is discarded); name stays as
+        // first created.
+        let row = sqlx::query!(
+            r#"insert into users (id, handle, name) values ($1, $2, $3)
+               on conflict (handle) do update set handle = excluded.handle
+               returning id"#,
+            Uuid::from(UserId::new().ulid()),
+            new.handle,
+            new.name,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(wire::id(row.id))
+    }
+
+    async fn user_get(&self, id: UserId) -> Result<Option<User>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::UserRow,
+            "select id, handle, name from users where id = $1",
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(User::from))
+    }
+}
+
+impl Agents for PgStorage {
+    async fn agent_ensure(&self, new: NewAgent) -> Result<AgentId, StoreError> {
+        let kind = PgAgentKind::from(new.kind);
+        let row = sqlx::query!(
+            r#"insert into agents (id, kind, name) values ($1, $2, $3)
+               on conflict (kind, name) do update set name = excluded.name
+               returning id"#,
+            Uuid::from(AgentId::new().ulid()),
+            kind as PgAgentKind,
+            new.name,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(wire::id(row.id))
+    }
+
+    async fn agent_get(&self, id: AgentId) -> Result<Option<Agent>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::AgentRow,
+            r#"select id, kind as "kind: _", name from agents where id = $1"#,
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(Agent::from))
     }
 }
 
@@ -216,11 +307,6 @@ impl Projects for PgStorage {
 
 impl Decisions for PgStorage {
     async fn decision_add(&self, new: NewDecision) -> Result<DecisionId, StoreError> {
-        if !new.authors.is_empty() {
-            return Err(StoreError::Invalid(
-                "authorship is not implemented yet; authors must be empty".into(),
-            ));
-        }
         if new.status == DecisionStatus::Superseded {
             return Err(StoreError::Invalid(SUPERSEDED_IS_DERIVED.into()));
         }
@@ -245,9 +331,29 @@ impl Decisions for PgStorage {
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
+        if !new.authors.is_empty() {
+            // Parallel (user?, agent?) arrays, one row per author; the
+            // unique arbiter collapses duplicates within the batch too.
+            let (users, agents): (Vec<_>, Vec<_>) = new.authors.iter().map(wire::split).unzip();
+            sqlx::query!(
+                r#"insert into decision_author (decision_id, user_id, agent_id)
+                   select $1, a.user_id, a.agent_id
+                   from unnest($2::uuid[], $3::uuid[]) as a(user_id, agent_id)
+                   on conflict do nothing"#,
+                Uuid::from(id.ulid()),
+                &users as &[Option<Uuid>],
+                &agents as &[Option<Uuid>],
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
         if !new.supersedes.is_empty() {
-            let targets: Vec<Uuid> =
-                new.supersedes.iter().map(|d| Uuid::from(d.ulid())).collect();
+            let targets: Vec<Uuid> = new
+                .supersedes
+                .iter()
+                .map(|d| Uuid::from(d.ulid()))
+                .collect();
             sqlx::query!(
                 r#"insert into decision_supersedes (decision_id, supersedes_id)
                    select $1, unnest($2::uuid[])
@@ -264,7 +370,7 @@ impl Decisions for PgStorage {
     }
 
     async fn decision_get(&self, id: DecisionId) -> Result<Option<Decision>, StoreError> {
-        sqlx::query_as!(
+        let row = sqlx::query_as!(
             wire::DecisionRow,
             r#"select id, project_id,
                       case when exists (select 1 from decision_supersedes s
@@ -279,9 +385,16 @@ impl Decisions for PgStorage {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(db_err)?
-        .map(Decision::try_from)
-        .transpose()
+        .map_err(db_err)?;
+        let Some(row) = row else { return Ok(None) };
+        let uuid = row.id;
+        let mut decision = Decision::try_from(row)?;
+        decision.authors = self
+            .authors(&[uuid])
+            .await?
+            .remove(&uuid)
+            .unwrap_or_default();
+        Ok(Some(decision))
     }
 
     async fn decision_list(&self, filter: DecisionFilter) -> Result<Vec<Decision>, StoreError> {
@@ -289,7 +402,7 @@ impl Decisions for PgStorage {
         // Static SQL (compile-checked): absent filters collapse to `$n is null`;
         // `limit null` means no limit. The status filter matches the *derived*
         // status, hence the inner select. ULID ids sort by time — newest first.
-        sqlx::query_as!(
+        let mut decisions = sqlx::query_as!(
             wire::DecisionRow,
             r#"select id as "id!", project_id as "project_id!", status as "status!: _",
                       title as "title!", summary as "summary!", context, consequences,
@@ -321,7 +434,14 @@ impl Decisions for PgStorage {
         .map_err(db_err)?
         .into_iter()
         .map(Decision::try_from)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+        let ids: Vec<Uuid> = decisions.iter().map(|d| Uuid::from(d.id.ulid())).collect();
+        let mut authors = self.authors(&ids).await?;
+        for decision in &mut decisions {
+            let uuid = Uuid::from(decision.id.ulid());
+            decision.authors = authors.remove(&uuid).unwrap_or_default();
+        }
+        Ok(decisions)
     }
 
     async fn decision_edit(
@@ -384,7 +504,10 @@ impl Decisions for PgStorage {
         .await
         .map_err(db_err)?
         .into_iter()
-        .map(|r| Related { id: wire::id(r.ref_id), why: r.why })
+        .map(|r| Related {
+            id: wire::id(r.ref_id),
+            why: r.why,
+        })
         .collect();
         let related_by = sqlx::query!(
             "select decision_id, why from decision_related where ref_id = $1
@@ -395,9 +518,17 @@ impl Decisions for PgStorage {
         .await
         .map_err(db_err)?
         .into_iter()
-        .map(|r| Related { id: wire::id(r.decision_id), why: r.why })
+        .map(|r| Related {
+            id: wire::id(r.decision_id),
+            why: r.why,
+        })
         .collect();
-        Ok(Some(Edges { supersedes, superseded_by, related_to, related_by }))
+        Ok(Some(Edges {
+            supersedes,
+            superseded_by,
+            related_to,
+            related_by,
+        }))
     }
 }
 
@@ -428,14 +559,22 @@ async fn apply(
                 .await
         }
         DecisionEdit::SetSummary(summary) => {
-            sqlx::query!("update decisions set summary = $2 where id = $1", id, summary)
-                .execute(&mut **tx)
-                .await
+            sqlx::query!(
+                "update decisions set summary = $2 where id = $1",
+                id,
+                summary
+            )
+            .execute(&mut **tx)
+            .await
         }
         DecisionEdit::SetContext(context) => {
-            sqlx::query!("update decisions set context = $2 where id = $1", id, context)
-                .execute(&mut **tx)
-                .await
+            sqlx::query!(
+                "update decisions set context = $2 where id = $1",
+                id,
+                context
+            )
+            .execute(&mut **tx)
+            .await
         }
         DecisionEdit::SetConsequences(consequences) => {
             sqlx::query!(

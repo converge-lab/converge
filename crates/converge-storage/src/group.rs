@@ -45,8 +45,7 @@ pub enum GroupEdit {
 
 /// Storage operations on groups.
 pub trait Groups {
-    fn group_add(&self, new: NewGroup)
-    -> impl Future<Output = Result<GroupId, StoreError>> + Send;
+    fn group_add(&self, new: NewGroup) -> impl Future<Output = Result<GroupId, StoreError>> + Send;
 
     fn group_get(
         &self,

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into decision_author (decision_id, user_id, agent_id)\n                   select $1, a.user_id, a.agent_id\n                   from unnest($2::uuid[], $3::uuid[]) as a(user_id, agent_id)\n                   on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "61fd5e66b7ce481479d9a46955fa99666d9fe0de222be11df90e716dc3a206f1"
+}

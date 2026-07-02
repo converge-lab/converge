@@ -29,9 +29,20 @@ create table projects (
 );
 create index on projects (group_id);
 
--- The two author kinds.
-create table users  (id uuid primary key, name text not null);
-create table agents (id uuid primary key, kind agent_kind not null, name text not null);
+-- The two author kinds. Both resolve by natural key: `ensure` is a
+-- deterministic create-if-absent (insert … on conflict), never
+-- scan-then-create.
+create table users (
+    id     uuid primary key,
+    handle text not null unique,                                    -- natural key
+    name   text not null                                            -- display only
+);
+create table agents (
+    id   uuid primary key,
+    kind agent_kind not null,
+    name text not null,
+    unique (kind, name)                                             -- natural key
+);
 
 -- The ADR record AND the graph node.
 create table decisions (

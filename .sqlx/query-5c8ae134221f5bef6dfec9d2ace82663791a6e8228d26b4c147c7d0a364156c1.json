@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into agents (id, kind, name) values ($1, $2, $3)\n               on conflict (kind, name) do update set name = excluded.name\n               returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "agent_kind",
+            "kind": {
+              "Enum": [
+                "model",
+                "tool"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5c8ae134221f5bef6dfec9d2ace82663791a6e8228d26b4c147c7d0a364156c1"
+}

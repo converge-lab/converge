@@ -54,8 +54,15 @@ async fn round_trip() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
 
-    let id = store.decision_add(decision(project, "adopt X")).await.unwrap();
-    let got = store.decision_get(id).await.unwrap().expect("stored decision");
+    let id = store
+        .decision_add(decision(project, "adopt X"))
+        .await
+        .unwrap();
+    let got = store
+        .decision_get(id)
+        .await
+        .unwrap()
+        .expect("stored decision");
     assert_eq!(got.id, id);
     assert_eq!(got.project_id, project);
     assert_eq!(got.status, DecisionStatus::Accepted);
@@ -67,7 +74,13 @@ async fn round_trip() {
     assert_eq!(got.alternatives[0].option, "the other way");
     assert!(got.authors.is_empty());
 
-    assert!(store.decision_get(DecisionId::new()).await.unwrap().is_none());
+    assert!(
+        store
+            .decision_get(DecisionId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -87,20 +100,35 @@ async fn list_filters() {
     let d3 = store.decision_add(decision(b, "three")).await.unwrap();
 
     // No filter: everything, newest first (ULID = time order).
-    let all = store.decision_list(DecisionFilter::default()).await.unwrap();
-    assert_eq!(all.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3, d2, d1]);
+    let all = store
+        .decision_list(DecisionFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        all.iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![d3, d2, d1]
+    );
 
     let of_a = store
-        .decision_list(DecisionFilter { project: Some(a), ..Default::default() })
+        .decision_list(DecisionFilter {
+            project: Some(a),
+            ..Default::default()
+        })
         .await
         .unwrap();
     assert_eq!(of_a.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2, d1]);
 
     let of_group_b = store
-        .decision_list(DecisionFilter { group: Some(group_b), ..Default::default() })
+        .decision_list(DecisionFilter {
+            group: Some(group_b),
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert_eq!(of_group_b.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3]);
+    assert_eq!(
+        of_group_b.iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![d3]
+    );
 
     let proposed = store
         .decision_list(DecisionFilter {
@@ -112,17 +140,26 @@ async fn list_filters() {
     assert_eq!(proposed.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2]);
 
     let latest = store
-        .decision_list(DecisionFilter { limit: Some(2), ..Default::default() })
+        .decision_list(DecisionFilter {
+            limit: Some(2),
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert_eq!(latest.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d3, d2]);
+    assert_eq!(
+        latest.iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![d3, d2]
+    );
 }
 
 #[tokio::test]
 async fn edit_batch() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
-    let id = store.decision_add(decision(project, "draft Y")).await.unwrap();
+    let id = store
+        .decision_add(decision(project, "draft Y"))
+        .await
+        .unwrap();
 
     store
         .decision_edit(
@@ -159,7 +196,10 @@ async fn supersession_derives_status() {
 
     let old = store.decision_add(decision(project, "v1")).await.unwrap();
     let new = store
-        .decision_add(NewDecision { supersedes: vec![old], ..decision(project, "v2") })
+        .decision_add(NewDecision {
+            supersedes: vec![old],
+            ..decision(project, "v2")
+        })
         .await
         .unwrap();
 
@@ -184,7 +224,10 @@ async fn supersession_derives_status() {
         })
         .await
         .unwrap();
-    assert_eq!(superseded.iter().map(|d| d.id).collect::<Vec<_>>(), vec![old]);
+    assert_eq!(
+        superseded.iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![old]
+    );
 
     // Removing the edge restores the stored status.
     store
@@ -195,7 +238,13 @@ async fn supersession_derives_status() {
     assert_eq!(restored.status, DecisionStatus::Accepted);
 
     // Edges of a missing decision → None.
-    assert!(store.decision_edges(DecisionId::new()).await.unwrap().is_none());
+    assert!(
+        store
+            .decision_edges(DecisionId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -207,25 +256,63 @@ async fn related_upsert() {
 
     // Re-adding an existing cross-ref updates `why` (upsert, no duplicate).
     store
-        .decision_edit(a, vec![DecisionEdit::AddRelated { to: b, why: Some("first".into()) }])
+        .decision_edit(
+            a,
+            vec![DecisionEdit::AddRelated {
+                to: b,
+                why: Some("first".into()),
+            }],
+        )
         .await
         .unwrap();
     store
-        .decision_edit(a, vec![DecisionEdit::AddRelated { to: b, why: Some("updated".into()) }])
+        .decision_edit(
+            a,
+            vec![DecisionEdit::AddRelated {
+                to: b,
+                why: Some("updated".into()),
+            }],
+        )
         .await
         .unwrap();
 
     let ea = store.decision_edges(a).await.unwrap().unwrap();
-    assert_eq!(ea.related_to, vec![Related { id: b, why: Some("updated".into()) }]);
+    assert_eq!(
+        ea.related_to,
+        vec![Related {
+            id: b,
+            why: Some("updated".into())
+        }]
+    );
     assert!(ea.related_by.is_empty());
     let eb = store.decision_edges(b).await.unwrap().unwrap();
-    assert_eq!(eb.related_by, vec![Related { id: a, why: Some("updated".into()) }]);
+    assert_eq!(
+        eb.related_by,
+        vec![Related {
+            id: a,
+            why: Some("updated".into())
+        }]
+    );
     assert!(eb.related_to.is_empty());
 
     // Removal is idempotent.
-    store.decision_edit(a, vec![DecisionEdit::RemoveRelated(b)]).await.unwrap();
-    store.decision_edit(a, vec![DecisionEdit::RemoveRelated(b)]).await.unwrap();
-    assert!(store.decision_edges(a).await.unwrap().unwrap().related_to.is_empty());
+    store
+        .decision_edit(a, vec![DecisionEdit::RemoveRelated(b)])
+        .await
+        .unwrap();
+    store
+        .decision_edit(a, vec![DecisionEdit::RemoveRelated(b)])
+        .await
+        .unwrap();
+    assert!(
+        store
+            .decision_edges(a)
+            .await
+            .unwrap()
+            .unwrap()
+            .related_to
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -236,7 +323,9 @@ async fn graph_guards() {
 
     // Self-loops are rejected.
     assert!(matches!(
-        store.decision_edit(a, vec![DecisionEdit::AddSupersedes(a)]).await,
+        store
+            .decision_edit(a, vec![DecisionEdit::AddSupersedes(a)])
+            .await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
@@ -286,7 +375,10 @@ async fn graph_guards() {
 async fn edit_batch_is_atomic() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
-    let id = store.decision_add(decision(project, "stable")).await.unwrap();
+    let id = store
+        .decision_add(decision(project, "stable"))
+        .await
+        .unwrap();
 
     // Postgres rejects NUL bytes in text, so the second op fails — and the
     // already-applied first op must roll back with it.

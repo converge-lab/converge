@@ -16,6 +16,7 @@ pub struct Project {
     /// Display name only — identity is the id.
     pub name: String,
     pub description: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -29,6 +30,7 @@ pub struct NewProject {
 
 /// A single project edit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectEdit {
     SetName(String),
     SetDescription(Option<String>),

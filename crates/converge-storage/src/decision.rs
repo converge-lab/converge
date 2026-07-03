@@ -28,6 +28,7 @@ pub enum DecisionStatus {
 /// a "neither" author is unrepresentable. Maps to the `decision_author`
 /// `(user_id?, agent_id?)` columns at the storage boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Author {
     /// Created directly by a person (e.g. in the UI).
     User(UserId),
@@ -59,6 +60,7 @@ pub struct Decision {
     /// Authorship is a set (duplicates collapse on write); reads return a
     /// stable but unspecified order.
     pub authors: Vec<Author>,
+    #[serde(with = "time::serde::rfc3339")]
     pub captured_at: OffsetDateTime,
 }
 
@@ -80,6 +82,7 @@ pub struct NewDecision {
 /// A single edit operation. Applied as a batch (`Vec<DecisionEdit>`)
 /// atomically — sparse (only the ops you send) and race-safe.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DecisionEdit {
     /// `SetStatus(Superseded)` is invalid — superseded is derived from edges.
     SetStatus(DecisionStatus),

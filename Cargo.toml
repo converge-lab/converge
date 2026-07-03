@@ -57,10 +57,11 @@ thiserror = "2"
 # storage boundary relies on.
 ulid = { version = "1", features = ["serde", "uuid"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-time = { version = "0.3", features = ["serde"] }
+time = { version = "0.3", features = ["serde-well-known"] }
 
 # Dev / test infra
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
+http-body-util = "0.1"
 
 [profile.release]
 lto = "thin"

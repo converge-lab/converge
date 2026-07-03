@@ -5,19 +5,6 @@
 //! against the `converge_storage` traits, never a concrete backend — the
 //! binary picks the backend (PostgreSQL) at the edge.
 
-use axum::Router;
-use axum::routing::get;
-use converge_storage::Storage;
+pub mod http;
 
-/// The application router over any storage backend.
-pub fn app<S: Storage + 'static>(store: S) -> Router {
-    Router::new()
-        .route("/api/v1/healthz", get(healthz))
-        .with_state(store)
-}
-
-/// Process liveness only. Storage connectivity is proven at startup
-/// (connect + migrate); a readiness probe can come when something needs it.
-async fn healthz() -> &'static str {
-    "ok"
-}
+pub use http::app;

@@ -23,6 +23,7 @@ pub struct Group {
     pub name: String,
     pub description: Option<String>,
     pub kind: GroupKind,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
 
@@ -38,6 +39,7 @@ pub struct NewGroup {
 /// personal space into a shared one is a different (future) operation, not
 /// a field write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GroupEdit {
     SetName(String),
     SetDescription(Option<String>),

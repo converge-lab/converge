@@ -22,3 +22,6 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # rsa Marvin advisory: reachable only via sqlx-mysql, which is
+          # never built here — full rationale in .cargo/audit.toml.
+          ignore: RUSTSEC-2023-0071

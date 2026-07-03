@@ -1,0 +1,13 @@
+# cargo-audit configuration — honored by local `cargo audit` runs.
+# CI (rustsec/audit-check) carries the same list via its `ignore` input.
+
+[advisories]
+ignore = [
+    # rsa: Marvin timing sidechannel (RUSTSEC-2023-0071) — no patched
+    # release exists. The crate is pinned in Cargo.lock only through
+    # sqlx-mysql, which this workspace never enables (sqlx is
+    # default-features = false, postgres only); `cargo tree -i rsa`
+    # confirms it is not in the build graph of any artifact. Revisit when
+    # sqlx ships a fixed rsa or drops the dependency.
+    "RUSTSEC-2023-0071",
+]

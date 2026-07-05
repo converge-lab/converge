@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
     DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, NewAgent, NewDecision,
-    NewGroup, NewProject, NewUser, Project, ProjectEdit, ProjectFilter, ProjectId, Projects,
-    Related, StoreError, User, UserId, Users,
+    NewGroup, NewProject, NewUser, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
+    Projects, Related, StoreError, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -178,11 +178,16 @@ impl Groups for PgStorage {
         .map(Group::from))
     }
 
-    async fn group_list(&self) -> Result<Vec<Group>, StoreError> {
+    async fn group_list(&self, page: Pagination<GroupId>) -> Result<Vec<Group>, StoreError> {
         Ok(sqlx::query_as!(
             wire::GroupRow,
             r#"select id, name, description, kind as "kind: _", created_at
-               from groups order by id desc"#,
+               from groups
+               where ($1::uuid is null or id < $1)
+               order by id desc
+               limit $2"#,
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+            page.limit.map(i64::from),
         )
         .fetch_all(&self.pool)
         .await
@@ -253,16 +258,22 @@ impl Projects for PgStorage {
         .map(Project::from))
     }
 
-    async fn project_list(&self, filter: ProjectFilter) -> Result<Vec<Project>, StoreError> {
+    async fn project_list(
+        &self,
+        filter: ProjectFilter,
+        page: Pagination<ProjectId>,
+    ) -> Result<Vec<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
             r#"select id, group_id, name, description, created_at
                from projects
                where ($1::uuid is null or group_id = $1)
+                 and ($3::uuid is null or id < $3)
                order by id desc
                limit $2"#,
             filter.group.map(|g| Uuid::from(g.ulid())),
-            filter.limit.map(i64::from),
+            page.limit.map(i64::from),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
         )
         .fetch_all(&self.pool)
         .await
@@ -397,7 +408,11 @@ impl Decisions for PgStorage {
         Ok(Some(decision))
     }
 
-    async fn decision_list(&self, filter: DecisionFilter) -> Result<Vec<Decision>, StoreError> {
+    async fn decision_list(
+        &self,
+        filter: DecisionFilter,
+        page: Pagination<DecisionId>,
+    ) -> Result<Vec<Decision>, StoreError> {
         let status = filter.status.map(PgStatus::from);
         // Static SQL (compile-checked): absent filters collapse to `$n is null`;
         // `limit null` means no limit. The status filter matches the *derived*
@@ -422,12 +437,14 @@ impl Decisions for PgStorage {
                where ($1::uuid is null or d.project_id = $1)
                  and ($2::uuid is null or d.group_id = $2)
                  and ($3::decision_status is null or d.status = $3)
+                 and ($5::uuid is null or d.id < $5)
                order by d.id desc
                limit $4"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
             filter.group.map(|g| Uuid::from(g.ulid())),
             status as Option<PgStatus>,
-            filter.limit.map(i64::from),
+            page.limit.map(i64::from),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
         )
         .fetch_all(&self.pool)
         .await

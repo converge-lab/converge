@@ -21,24 +21,33 @@ impl From<StoreError> for Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, message) = match &self.0 {
-            StoreError::NotFound => (StatusCode::NOT_FOUND, self.0.to_string()),
-            StoreError::Invalid(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            StoreError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
+        let (status, code, message) = match &self.0 {
+            StoreError::NotFound => (StatusCode::NOT_FOUND, "not_found", self.0.to_string()),
+            StoreError::Invalid(m) => (StatusCode::BAD_REQUEST, "invalid", m.clone()),
+            StoreError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m.clone()),
             // 5xx: log the detail, answer generically — backend internals
             // (connection strings, SQL) don't belong in responses.
             StoreError::Unavailable(_) => {
                 error!(error = %self.0, "storage unavailable");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
+                    "unavailable",
                     "storage unavailable".into(),
                 )
             }
             StoreError::Backend(_) => {
                 error!(error = %self.0, "storage failure");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal error".into(),
+                )
             }
         };
-        (status, Json(json!({ "error": message }))).into_response()
+        (
+            status,
+            Json(json!({ "error": { "code": code, "message": message } })),
+        )
+            .into_response()
     }
 }

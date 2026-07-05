@@ -19,6 +19,7 @@
 //! (Methods are spelled `-> impl Future + Send` so the returned futures are
 //! `Send`.)
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod agent;
@@ -37,6 +38,28 @@ pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
 pub use user::{NewUser, User, Users};
+
+/// Cursor pagination for list reads, generic over the listed resource's id.
+/// Lists are newest-first; `cursor` is the last id of the previous page and
+/// only strictly older ids (ULID = time-ordered) are returned. Travels
+/// separately from the per-resource filters: a filter says *what*, this
+/// says *how much and from where*.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pagination<Id> {
+    pub limit: Option<u32>,
+    pub cursor: Option<Id>,
+}
+
+// Manual: `derive(Default)` would demand `Id: Default`, and ids have no
+// default by design.
+impl<Id> Default for Pagination<Id> {
+    fn default() -> Self {
+        Self {
+            limit: None,
+            cursor: None,
+        }
+    }
+}
 
 /// Backend-agnostic storage error. A backend maps its native failures into
 /// these; callers distinguish only what they need to act on.

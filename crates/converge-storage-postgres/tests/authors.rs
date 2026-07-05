@@ -6,8 +6,8 @@ mod common;
 use common::store;
 use converge_storage::{
     AgentId, AgentKind, Agents, Author, DecisionFilter, DecisionStatus, Decisions, GroupKind,
-    Groups, NewAgent, NewDecision, NewGroup, NewProject, NewUser, ProjectId, Projects, StoreError,
-    UserId, Users,
+    Groups, NewAgent, NewDecision, NewGroup, NewProject, NewUser, Pagination, ProjectId, Projects,
+    StoreError, UserId, Users,
 };
 use converge_storage_postgres::PgStorage;
 
@@ -140,7 +140,10 @@ async fn authorship_round_trip() {
         project: Some(project_id),
         ..Default::default()
     };
-    let listed = store.decision_list(filter).await.unwrap();
+    let listed = store
+        .decision_list(filter, Pagination::default())
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].authors.len(), 3);
 
@@ -172,5 +175,11 @@ async fn unknown_author_rejected() {
         project: Some(project_id),
         ..Default::default()
     };
-    assert!(store.decision_list(filter).await.unwrap().is_empty());
+    assert!(
+        store
+            .decision_list(filter, Pagination::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -7,6 +7,7 @@ mod telemetry;
 use anyhow::Context;
 use config::ConfigService;
 use converge_server::app;
+use converge_storage::NewUser;
 use converge_storage_postgres::PgStorage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -23,9 +24,13 @@ async fn main() -> anyhow::Result<()> {
     let store = PgStorage::connect(&config.database_url).await?;
     store.migrate().await?;
 
+    let me = NewUser {
+        handle: config.user.handle.clone(),
+        name: config.user.name.clone(),
+    };
     let listener = TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "converge-server listening");
-    axum::serve(listener, app(store))
+    axum::serve(listener, app(store, me))
         .with_graceful_shutdown(shutdown())
         .await?;
     info!("shut down cleanly");

@@ -5,8 +5,8 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::StoreError;
 use crate::ids::{GroupId, ProjectId};
+use crate::{Pagination, StoreError};
 
 /// A project.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,10 +37,10 @@ pub enum ProjectEdit {
 }
 
 /// Filter for listing projects. All fields optional; combine to narrow.
+/// Pagination travels separately ([`Pagination`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectFilter {
     pub group: Option<GroupId>,
-    pub limit: Option<u32>,
 }
 
 /// Storage operations on projects.
@@ -58,6 +58,7 @@ pub trait Projects {
     fn project_list(
         &self,
         filter: ProjectFilter,
+        page: Pagination<ProjectId>,
     ) -> impl Future<Output = Result<Vec<Project>, StoreError>> + Send;
 
     fn project_edit(

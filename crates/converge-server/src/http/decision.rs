@@ -6,12 +6,13 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, NewDecision, ProjectId, Storage,
-    StoreError,
+    Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, GroupId, NewDecision, Pagination,
+    ProjectId, Storage, StoreError,
 };
 use serde_json::{Value, json};
 
 use super::error::Result;
+use super::page::Page;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -19,6 +20,7 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
         .route("/api/v1/decisions/{id}", get(fetch::<S>).patch(edit::<S>))
         .route("/api/v1/decisions/{id}/edges", get(edges::<S>))
         .route("/api/v1/projects/{id}/decisions", get(by_project::<S>))
+        .route("/api/v1/groups/{id}/decisions", get(by_group::<S>))
 }
 
 async fn add<S: Storage>(
@@ -29,25 +31,27 @@ async fn add<S: Storage>(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-/// List, narrowed by the filter
-/// (`?project=<id>&group=<id>&status=<status>&limit=<n>`). Status matches
-/// the *derived* status — `superseded` finds decisions with inbound edges.
+/// List, narrowed by the filter (`?project=&group=&status=`), paged by
+/// `?limit=&cursor=`. Status matches the *derived* status — `superseded`
+/// finds decisions with inbound edges.
 async fn list<S: Storage>(
     State(store): State<S>,
     Query(filter): Query<DecisionFilter>,
-) -> Result<Json<Vec<Decision>>> {
-    Ok(Json(store.decision_list(filter).await?))
+    Query(page): Query<Pagination<DecisionId>>,
+) -> Result<Json<Page<Decision>>> {
+    let items = store.decision_list(filter, page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }
 
-/// Read-only relation projection: the flat list with the project bound by
-/// the path (the canonical form stays `/decisions?project=`). Unlike the
-/// flat filter, the bound parent must exist — an unknown project is 404,
-/// not `[]`.
+/// Read-only relation projection: one project's decision log (the canonical
+/// form stays `/decisions?project=`). The bound parent must exist — an
+/// unknown project is 404, not `[]`.
 async fn by_project<S: Storage>(
     State(store): State<S>,
     Path(id): Path<ProjectId>,
     Query(mut filter): Query<DecisionFilter>,
-) -> Result<Json<Vec<Decision>>> {
+    Query(page): Query<Pagination<DecisionId>>,
+) -> Result<Json<Page<Decision>>> {
     if filter.project.is_some() || filter.group.is_some() {
         return Err(StoreError::Invalid(
             "project is bound by the path; drop the project/group query parameters".into(),
@@ -56,7 +60,30 @@ async fn by_project<S: Storage>(
     }
     store.project_get(id).await?.ok_or(StoreError::NotFound)?;
     filter.project = Some(id);
-    Ok(Json(store.decision_list(filter).await?))
+    let items = store.decision_list(filter, page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
+}
+
+/// Read-only relation projection: the group-wide feed, spanning the group's
+/// projects. `?project=` narrows *within* the group — a child axis, not a
+/// re-bind, so it stays allowed (a project outside the group just yields
+/// nothing). The bound group must exist — unknown is 404, not `[]`.
+async fn by_group<S: Storage>(
+    State(store): State<S>,
+    Path(id): Path<GroupId>,
+    Query(mut filter): Query<DecisionFilter>,
+    Query(page): Query<Pagination<DecisionId>>,
+) -> Result<Json<Page<Decision>>> {
+    if filter.group.is_some() {
+        return Err(StoreError::Invalid(
+            "group is bound by the path; drop the query parameter".into(),
+        )
+        .into());
+    }
+    store.group_get(id).await?.ok_or(StoreError::NotFound)?;
+    filter.group = Some(id);
+    let items = store.decision_list(filter, page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }
 
 async fn fetch<S: Storage>(

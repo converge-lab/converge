@@ -5,11 +5,13 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    GroupId, NewProject, Project, ProjectEdit, ProjectFilter, ProjectId, Storage, StoreError,
+    GroupId, NewProject, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Storage,
+    StoreError,
 };
 use serde_json::{Value, json};
 
 use super::error::Result;
+use super::page::Page;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -26,12 +28,14 @@ async fn add<S: Storage>(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-/// List, narrowed by the filter (`?group=<id>&limit=<n>`).
+/// List, narrowed by the filter (`?group=`), paged by `?limit=&cursor=`.
 async fn list<S: Storage>(
     State(store): State<S>,
     Query(filter): Query<ProjectFilter>,
-) -> Result<Json<Vec<Project>>> {
-    Ok(Json(store.project_list(filter).await?))
+    Query(page): Query<Pagination<ProjectId>>,
+) -> Result<Json<Page<Project>>> {
+    let items = store.project_list(filter, page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |p| p.id.to_string())))
 }
 
 /// Read-only relation projection: the flat list with the group bound by
@@ -41,7 +45,8 @@ async fn by_group<S: Storage>(
     State(store): State<S>,
     Path(id): Path<GroupId>,
     Query(mut filter): Query<ProjectFilter>,
-) -> Result<Json<Vec<Project>>> {
+    Query(page): Query<Pagination<ProjectId>>,
+) -> Result<Json<Page<Project>>> {
     if filter.group.is_some() {
         return Err(StoreError::Invalid(
             "group is bound by the path; drop the query parameter".into(),
@@ -50,7 +55,8 @@ async fn by_group<S: Storage>(
     }
     store.group_get(id).await?.ok_or(StoreError::NotFound)?;
     filter.group = Some(id);
-    Ok(Json(store.project_list(filter).await?))
+    let items = store.project_list(filter, page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |p| p.id.to_string())))
 }
 
 async fn fetch<S: Storage>(

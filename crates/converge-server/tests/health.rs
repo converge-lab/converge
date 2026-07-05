@@ -4,6 +4,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use converge_server::app;
+use converge_storage::NewUser;
 use converge_storage_postgres::PgStorage;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::ImageExt;
@@ -22,13 +23,17 @@ async fn healthz() {
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
 
-    let response = app(store)
+    let me = NewUser {
+        handle: "admin".into(),
+        name: "Admin".into(),
+    };
+    let response = app(store, me.clone())
         .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let missing = app(PgStorage::connect(&url).await.unwrap())
+    let missing = app(PgStorage::connect(&url).await.unwrap(), me)
         .oneshot(Request::get("/api/v1/nope").body(Body::empty()).unwrap())
         .await
         .unwrap();

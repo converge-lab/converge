@@ -105,7 +105,7 @@ async fn decision_crud() {
         None,
     )
     .await;
-    assert_eq!(by_project.as_array().unwrap().len(), 2);
+    assert_eq!(by_project["items"].as_array().unwrap().len(), 2);
     let (_, by_group) = send(
         &app,
         "GET",
@@ -113,7 +113,7 @@ async fn decision_crud() {
         None,
     )
     .await;
-    assert_eq!(by_group.as_array().unwrap().len(), 1);
+    assert_eq!(by_group["items"].as_array().unwrap().len(), 1);
 
     // `superseded` is derived — storing it is the caller's error.
     let (status, body) = send(
@@ -124,7 +124,12 @@ async fn decision_crud() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("derived"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("derived")
+    );
 
     // Unknown ids → 404 on every read/write path.
     let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -160,8 +165,8 @@ async fn relation_projections() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(projects.as_array().unwrap().len(), 1);
-    assert_eq!(projects[0]["id"].as_str().unwrap(), project);
+    assert_eq!(projects["items"].as_array().unwrap().len(), 1);
+    assert_eq!(projects["items"][0]["id"].as_str().unwrap(), project);
     let (status, decisions) = send(
         &app,
         "GET",
@@ -170,7 +175,7 @@ async fn relation_projections() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(decisions[0]["id"].as_str().unwrap(), id);
+    assert_eq!(decisions["items"][0]["id"].as_str().unwrap(), id);
 
     // …but the bound parent must exist: 404, not an empty list.
     let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -201,7 +206,7 @@ async fn relation_projections() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        body["error"]
+        body["error"]["message"]
             .as_str()
             .unwrap()
             .contains("bound by the path")
@@ -214,6 +219,44 @@ async fn relation_projections() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The group feed spans the group's projects; `?project=` narrows within
+    // it (child axis — allowed), `?group=` re-binds (rejected).
+    let (status, feed) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(feed["items"][0]["id"].as_str().unwrap(), id);
+    let (status, narrowed) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions?project={project}&status=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(narrowed["items"].as_array().unwrap().len(), 1);
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions?group={group}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{missing}/decisions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -239,8 +282,8 @@ async fn decision_graph() {
     let (_, got) = send(&app, "GET", &format!("/api/v1/decisions/{a}"), None).await;
     assert_eq!(got["status"], "superseded");
     let (_, listed) = send(&app, "GET", "/api/v1/decisions?status=superseded", None).await;
-    assert_eq!(listed.as_array().unwrap().len(), 1);
-    assert_eq!(listed[0]["id"].as_str().unwrap(), a);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["id"].as_str().unwrap(), a);
 
     // The projection carries both directions.
     let (status, edges) = send(&app, "GET", &format!("/api/v1/decisions/{b}/edges"), None).await;

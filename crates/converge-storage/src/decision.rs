@@ -5,8 +5,8 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::StoreError;
 use crate::ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
+use crate::{Pagination, StoreError};
 
 /// Lifecycle of a decision.
 ///
@@ -129,12 +129,12 @@ pub struct Edges {
 }
 
 /// Filter for listing decisions. All fields optional; combine to narrow.
+/// Pagination travels separately ([`Pagination`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DecisionFilter {
     pub project: Option<ProjectId>,
     pub group: Option<GroupId>,
     pub status: Option<DecisionStatus>,
-    pub limit: Option<u32>,
 }
 
 /// Storage operations on decisions and their graph edges.
@@ -152,6 +152,7 @@ pub trait Decisions {
     fn decision_list(
         &self,
         filter: DecisionFilter,
+        page: Pagination<DecisionId>,
     ) -> impl Future<Output = Result<Vec<Decision>, StoreError>> + Send;
 
     fn decision_edit(

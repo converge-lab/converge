@@ -5,8 +5,8 @@ mod common;
 
 use common::store;
 use converge_storage::{
-    GroupEdit, GroupId, GroupKind, Groups, NewGroup, NewProject, ProjectEdit, ProjectFilter,
-    ProjectId, Projects, StoreError,
+    GroupEdit, GroupId, GroupKind, Groups, NewGroup, NewProject, Pagination, ProjectEdit,
+    ProjectFilter, ProjectId, Projects, StoreError,
 };
 
 fn group(name: &str, kind: GroupKind) -> NewGroup {
@@ -39,7 +39,7 @@ async fn group_round_trip() {
         .group_add(group("me", GroupKind::Personal))
         .await
         .unwrap();
-    let all = store.group_list().await.unwrap();
+    let all = store.group_list(Pagination::default()).await.unwrap();
     // Newest first (ULID = time order).
     assert_eq!(
         all.iter().map(|g| g.id).collect::<Vec<_>>(),
@@ -114,10 +114,7 @@ async fn project_round_trip() {
 
     // Group filter; newest first.
     let of_home = store
-        .project_list(ProjectFilter {
-            group: Some(home),
-            ..Default::default()
-        })
+        .project_list(ProjectFilter { group: Some(home) }, Pagination::default())
         .await
         .unwrap();
     assert_eq!(
@@ -126,13 +123,29 @@ async fn project_round_trip() {
     );
 
     let latest = store
-        .project_list(ProjectFilter {
-            limit: Some(1),
-            ..Default::default()
-        })
+        .project_list(
+            ProjectFilter::default(),
+            Pagination {
+                limit: Some(1),
+                cursor: None,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(latest.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p3]);
+
+    // Cursor paging: ids strictly older than the cursor, newest first.
+    let paged = store
+        .project_list(
+            ProjectFilter::default(),
+            Pagination {
+                limit: Some(2),
+                cursor: Some(p3),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(paged.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p2, p1]);
 
     store
         .project_edit(

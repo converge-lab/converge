@@ -59,10 +59,40 @@ pub struct Config {
     /// Logging (`[log]` table).
     #[serde(default)]
     pub log: Log,
+    /// The deployment's user (`[user]` table) — what `/api/v1/users/me`
+    /// resolves to in single-user mode, until real auth lands.
+    #[serde(default)]
+    pub user: User,
     /// The config files that existed and merged, weakest first — provenance
     /// for the startup log, not a setting.
     #[serde(skip)]
     pub sources: Vec<String>,
+}
+
+/// The single-user identity (`handle` is the natural key; `name` display).
+#[derive(Debug, Clone, Deserialize)]
+pub struct User {
+    #[serde(default = "handle")]
+    pub handle: String,
+    #[serde(default = "display")]
+    pub name: String,
+}
+
+impl Default for User {
+    fn default() -> Self {
+        Self {
+            handle: handle(),
+            name: display(),
+        }
+    }
+}
+
+fn handle() -> String {
+    "admin".into()
+}
+
+fn display() -> String {
+    "Admin".into()
 }
 
 /// Logging configuration.

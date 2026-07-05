@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, group_id, name, description, created_at\n               from projects\n               where ($1::uuid is null or group_id = $1)\n               order by id desc\n               limit $2",
+  "query": "select id, group_id, name, description, created_at\n               from projects\n               where ($1::uuid is null or group_id = $1)\n                 and ($3::uuid is null or id < $3)\n               order by id desc\n               limit $2",
   "describe": {
     "columns": [
       {
@@ -32,7 +32,8 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Int8"
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -43,5 +44,5 @@
       false
     ]
   },
-  "hash": "f9ce238daa229a4150f440a97c7f842376aa1615771350b5a639e02ce4480fb0"
+  "hash": "754dd50e0f839add984807f0a3b8f8753f3cb5716cb8014f869530a1b7d365ad"
 }

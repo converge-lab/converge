@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, name, description, kind as \"kind: _\", created_at\n               from groups order by id desc",
+  "query": "select id, name, description, kind as \"kind: _\", created_at\n               from groups\n               where ($1::uuid is null or id < $1)\n               order by id desc\n               limit $2",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,10 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
     },
     "nullable": [
       false,
@@ -50,5 +53,5 @@
       false
     ]
   },
-  "hash": "e605adb6ff2201cdc7cf8bee3582eb7e36c96efba48f3f4b742d272bd299ead1"
+  "hash": "7493400e19afb4eb0bd07e42c6ccf4d202801f57b5457c4d52504940b25d9cb4"
 }

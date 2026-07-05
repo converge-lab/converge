@@ -6,8 +6,8 @@ mod common;
 use common::store;
 use converge_storage::{
     Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions,
-    GroupId, GroupKind, Groups, NewDecision, NewGroup, NewProject, ProjectId, Projects, Related,
-    StoreError, UserId,
+    GroupId, GroupKind, Groups, NewDecision, NewGroup, NewProject, Pagination, ProjectId, Projects,
+    Related, StoreError, UserId,
 };
 use converge_storage_postgres::PgStorage;
 
@@ -101,7 +101,7 @@ async fn list_filters() {
 
     // No filter: everything, newest first (ULID = time order).
     let all = store
-        .decision_list(DecisionFilter::default())
+        .decision_list(DecisionFilter::default(), Pagination::default())
         .await
         .unwrap();
     assert_eq!(
@@ -110,19 +110,25 @@ async fn list_filters() {
     );
 
     let of_a = store
-        .decision_list(DecisionFilter {
-            project: Some(a),
-            ..Default::default()
-        })
+        .decision_list(
+            DecisionFilter {
+                project: Some(a),
+                ..Default::default()
+            },
+            Pagination::default(),
+        )
         .await
         .unwrap();
     assert_eq!(of_a.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2, d1]);
 
     let of_group_b = store
-        .decision_list(DecisionFilter {
-            group: Some(group_b),
-            ..Default::default()
-        })
+        .decision_list(
+            DecisionFilter {
+                group: Some(group_b),
+                ..Default::default()
+            },
+            Pagination::default(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -131,25 +137,44 @@ async fn list_filters() {
     );
 
     let proposed = store
-        .decision_list(DecisionFilter {
-            status: Some(DecisionStatus::Proposed),
-            ..Default::default()
-        })
+        .decision_list(
+            DecisionFilter {
+                status: Some(DecisionStatus::Proposed),
+                ..Default::default()
+            },
+            Pagination::default(),
+        )
         .await
         .unwrap();
     assert_eq!(proposed.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2]);
 
     let latest = store
-        .decision_list(DecisionFilter {
-            limit: Some(2),
-            ..Default::default()
-        })
+        .decision_list(
+            DecisionFilter::default(),
+            Pagination {
+                limit: Some(2),
+                cursor: None,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
         latest.iter().map(|d| d.id).collect::<Vec<_>>(),
         vec![d3, d2]
     );
+
+    // Cursor paging: strictly older than the cursor, newest first.
+    let paged = store
+        .decision_list(
+            DecisionFilter::default(),
+            Pagination {
+                limit: Some(2),
+                cursor: Some(d2),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(paged.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d1]);
 }
 
 #[tokio::test]
@@ -218,10 +243,13 @@ async fn supersession_derives_status() {
 
     // The list status filter matches the derived status.
     let superseded = store
-        .decision_list(DecisionFilter {
-            status: Some(DecisionStatus::Superseded),
-            ..Default::default()
-        })
+        .decision_list(
+            DecisionFilter {
+                status: Some(DecisionStatus::Superseded),
+                ..Default::default()
+            },
+            Pagination::default(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -362,7 +390,7 @@ async fn graph_guards() {
         Err(StoreError::Invalid(_))
     ));
     let titles: Vec<String> = store
-        .decision_list(DecisionFilter::default())
+        .decision_list(DecisionFilter::default(), Pagination::default())
         .await
         .unwrap()
         .into_iter()

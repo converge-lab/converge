@@ -1,13 +1,14 @@
 //! `/api/v1/groups` — CRUD over the [`Groups`] trait.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use converge_storage::{Group, GroupEdit, GroupId, NewGroup, Storage, StoreError};
+use converge_storage::{Group, GroupEdit, GroupId, NewGroup, Pagination, Storage, StoreError};
 use serde_json::{Value, json};
 
 use super::error::Result;
+use super::page::Page;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -23,8 +24,12 @@ async fn add<S: Storage>(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-async fn list<S: Storage>(State(store): State<S>) -> Result<Json<Vec<Group>>> {
-    Ok(Json(store.group_list().await?))
+async fn list<S: Storage>(
+    State(store): State<S>,
+    Query(page): Query<Pagination<GroupId>>,
+) -> Result<Json<Page<Group>>> {
+    let items = store.group_list(page.clone()).await?;
+    Ok(Json(Page::new(items, &page, |g| g.id.to_string())))
 }
 
 async fn fetch<S: Storage>(State(store): State<S>, Path(id): Path<GroupId>) -> Result<Json<Group>> {

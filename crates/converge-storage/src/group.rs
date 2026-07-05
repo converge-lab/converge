@@ -5,8 +5,8 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::StoreError;
 use crate::ids::GroupId;
+use crate::{Pagination, StoreError};
 
 /// Whether the group is a team space or a single person's space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,8 +54,11 @@ pub trait Groups {
         id: GroupId,
     ) -> impl Future<Output = Result<Option<Group>, StoreError>> + Send;
 
-    /// All groups, newest first.
-    fn group_list(&self) -> impl Future<Output = Result<Vec<Group>, StoreError>> + Send;
+    /// Groups, newest first.
+    fn group_list(
+        &self,
+        page: Pagination<GroupId>,
+    ) -> impl Future<Output = Result<Vec<Group>, StoreError>> + Send;
 
     fn group_edit(
         &self,

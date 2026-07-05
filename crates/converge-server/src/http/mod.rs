@@ -3,6 +3,7 @@
 //! One module per resource, mirroring the storage crate; the `error` module
 //! carries the `StoreError` → status mapping they all share.
 
+mod decision;
 mod error;
 mod group;
 mod project;
@@ -17,6 +18,7 @@ pub fn app<S: Storage + 'static>(store: S) -> Router {
         .route("/api/v1/healthz", get(healthz))
         .merge(group::routes())
         .merge(project::routes())
+        .merge(decision::routes())
         .with_state(store)
 }
 

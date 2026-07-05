@@ -64,7 +64,8 @@ pub struct Decision {
     pub captured_at: OffsetDateTime,
 }
 
-/// The fields required to create a decision.
+/// The fields required to create a decision. The collections default to
+/// empty on deserialization — wire callers omit what they don't have.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewDecision {
     pub project_id: ProjectId,
@@ -73,9 +74,12 @@ pub struct NewDecision {
     pub summary: String,
     pub context: Option<String>,
     pub consequences: Option<String>,
+    #[serde(default)]
     pub alternatives: Vec<Alternative>,
+    #[serde(default)]
     pub authors: Vec<Author>,
     /// Decisions this one replaces — creation-time supersession edges.
+    #[serde(default)]
     pub supersedes: Vec<DecisionId>,
 }
 

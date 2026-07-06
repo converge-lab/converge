@@ -1,0 +1,37 @@
+# Quickstart: `docker compose up --build`, then open http://127.0.0.1:8080
+# and/or connect an MCP client to http://127.0.0.1:8080/mcp.
+#
+# SECURITY: there is no authentication yet (OAuth is the next milestone).
+# The port is published on the host loopback only — keep it that way, or
+# behind a private network you trust, until auth lands.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: converge
+      POSTGRES_PASSWORD: converge
+      POSTGRES_DB: converge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U converge"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  converge:
+    build: .
+    environment:
+      CONVERGE_DATABASE_URL: postgres://converge:converge@postgres/converge
+      # The identity /users/me resolves to (and MCP authorship records):
+      CONVERGE_USER__HANDLE: admin
+      CONVERGE_USER__NAME: Admin
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

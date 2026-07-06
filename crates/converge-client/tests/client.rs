@@ -32,7 +32,7 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app(store, me)).await.unwrap();
+        axum::serve(listener, app(store, me, None)).await.unwrap();
     });
     (node, Client::new(format!("http://{addr}").parse().unwrap()))
 }

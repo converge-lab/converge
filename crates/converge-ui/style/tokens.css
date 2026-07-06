@@ -2,6 +2,25 @@
    Dark is the default; [data-theme="light"] overrides. CSS vars cascade, so
    wrapping any subtree in [data-theme] themes it. */
 
+/* Geist + Geist Mono, vendored (style/fonts/, OFL-licensed): variable
+   weight, latin subset — no font CDN in the head. The consuming app copies
+   style/fonts/ into its bundle (trunk rel="copy-dir"), landing the files
+   next to this (hashed) stylesheet's dist root. */
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root,
 [data-theme="dark"] {
   --cv-bg: #0a0c0f;

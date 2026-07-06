@@ -28,9 +28,12 @@ async fn main() -> anyhow::Result<()> {
         handle: config.user.handle.clone(),
         name: config.user.name.clone(),
     };
+    if let Some(assets) = &config.web.assets {
+        info!(assets = %assets.display(), "serving web assets");
+    }
     let listener = TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "converge-server listening");
-    axum::serve(listener, app(store, me))
+    axum::serve(listener, app(store, me, config.web.assets.as_deref()))
         .with_graceful_shutdown(shutdown())
         .await?;
     info!("shut down cleanly");

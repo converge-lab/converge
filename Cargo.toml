@@ -63,6 +63,7 @@ tokio = { version = "1", features = [
 # HTTP server
 axum = "0.8"
 tower = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
 
 # MCP server (the /mcp endpoint) — stateless streamable-HTTP.
 rmcp = { version = "1", features = ["server", "transport-streamable-http-server"] }

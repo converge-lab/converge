@@ -63,6 +63,11 @@ pub struct Config {
     /// resolves to in single-user mode, until real auth lands.
     #[serde(default)]
     pub user: User,
+    /// Web UI assets (`[web]` table). Unset in dev — `trunk serve` fronts
+    /// the API there; set to the trunk `dist/` directory in deployments so
+    /// the server serves the app same-origin.
+    #[serde(default)]
+    pub web: Web,
     /// The config files that existed and merged, weakest first — provenance
     /// for the startup log, not a setting.
     #[serde(skip)]
@@ -93,6 +98,13 @@ fn handle() -> String {
 
 fn display() -> String {
     "Admin".into()
+}
+
+/// Web-asset serving (`assets` = a trunk `dist/` directory).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Web {
+    #[serde(default)]
+    pub assets: Option<std::path::PathBuf>,
 }
 
 /// Logging configuration.

@@ -31,7 +31,7 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
         handle: "admin".into(),
         name: "Admin".into(),
     };
-    (node, store.clone(), app(store, me))
+    (node, store.clone(), app(store, me, None))
 }
 
 /// Send one request; return status and parsed JSON body (`null` when empty).

@@ -48,7 +48,7 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
     let (fauthor, set_fauthor) = signal(String::from("all"));
     let (ftags, set_ftags) = signal::<Vec<String>>(Vec::new());
 
-    let heading = pid.clone();
+    let heading = data::proj_name(&pid);
     let desc = data::proj_desc(&pid);
 
     let mut status_opts = vec![("all".to_string(), "All statuses".to_string())];

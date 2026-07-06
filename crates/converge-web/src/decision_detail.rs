@@ -24,7 +24,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
         .into_any();
     };
 
-    let project = d.project_id.clone();
+    let project = data::proj_name(&d.project_id);
     let status = d.status;
     let title = d.title.to_string();
     let summary = d.summary.to_string();
@@ -63,7 +63,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                 x.id.clone(),
                 ChainNode {
                     title: x.title.clone(),
-                    project: x.project_id.clone(),
+                    project: data::proj_name(&x.project_id),
                     date: crate::when::when(&x.captured_at),
                     status: x.status,
                     current: x.id == d.id,
@@ -83,7 +83,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                 (
                     x.id.clone(),
                     CrossRef {
-                        project: t.project_id.clone(),
+                        project: data::proj_name(&t.project_id),
                         title: t.title.clone(),
                         why: x.why.clone(),
                     },

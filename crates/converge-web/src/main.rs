@@ -459,8 +459,8 @@ fn Sidebar(
                         data::cur_group_projects()
                             .iter()
                             .map(move |p| {
-                                let name = p.to_string();
-                                let pn = name.clone();
+                                let name = data::proj_name(p);
+                                let pn = p.to_string();
                                 let unread = data::unread_count(p);
                                 view! {
                                     <ProjectNavItem

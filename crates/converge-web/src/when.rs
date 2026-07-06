@@ -3,18 +3,25 @@
 //! strings. Pure functions, no chrono — the only platform-dependent bit is
 //! reading "now", isolated in [`when`].
 
-/// Strict `YYYY-MM-DDTHH:MM:SSZ` → epoch seconds. Anything else is `None`.
+/// `YYYY-MM-DDTHH:MM:SS[.fraction]Z` → epoch seconds; the fraction (which
+/// real server timestamps carry) is accepted and ignored. Anything else is
+/// `None`.
 pub fn parse_iso_utc(s: &str) -> Option<i64> {
     let b = s.as_bytes();
-    if b.len() != 20
+    if b.len() < 20
         || b[4] != b'-'
         || b[7] != b'-'
         || b[10] != b'T'
         || b[13] != b':'
         || b[16] != b':'
-        || b[19] != b'Z'
+        || *b.last()? != b'Z'
     {
         return None;
+    }
+    match &b[19..b.len() - 1] {
+        [] => {}
+        [b'.', digits @ ..] if !digits.is_empty() && digits.iter().all(u8::is_ascii_digit) => {}
+        _ => return None,
     }
     let num = |r: std::ops::Range<usize>| -> Option<i64> {
         let part = &s[r];
@@ -124,6 +131,17 @@ fn now_epoch() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_iso_fractional_seconds() {
+        // Real server timestamps carry micros; the fraction is ignored.
+        assert_eq!(
+            parse_iso_utc("2026-07-06T16:05:29.885155Z"),
+            parse_iso_utc("2026-07-06T16:05:29Z"),
+        );
+        assert!(parse_iso_utc("2026-07-06T16:05:29.Z").is_none());
+        assert!(parse_iso_utc("2026-07-06T16:05:29.12a4Z").is_none());
+    }
 
     #[test]
     fn parse_iso() {

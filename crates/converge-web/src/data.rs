@@ -476,6 +476,16 @@ pub fn account() -> Account {
     ds().account.clone()
 }
 
+/// Display name for a project id (the id itself when unknown — the
+/// fixture seed's names equal their ids, real data's don't).
+pub fn proj_name(pid: &str) -> String {
+    ds().projects
+        .iter()
+        .find(|p| p.id == pid)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| pid.to_string())
+}
+
 pub fn proj_desc(pid: &str) -> String {
     ds().projects
         .iter()
@@ -578,7 +588,7 @@ pub fn provenance_from(d: &Dec) -> String {
 pub fn to_card(d: &Dec) -> Decision {
     Decision {
         authors: d.authors.clone(),
-        project: d.project_id.clone(),
+        project: proj_name(&d.project_id),
         status: d.status,
         date: when(&d.captured_at),
         title: d.title.clone(),
@@ -590,7 +600,7 @@ pub fn to_card(d: &Dec) -> Decision {
 pub fn to_ref(d: &Dec) -> DecisionRef {
     DecisionRef {
         authors: d.authors.clone(),
-        project: d.project_id.clone(),
+        project: proj_name(&d.project_id),
         status: d.status,
         title: d.title.clone(),
         summary: d.summary.clone(),

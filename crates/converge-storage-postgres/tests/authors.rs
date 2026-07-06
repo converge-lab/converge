@@ -96,6 +96,22 @@ async fn ensure_by_natural_key() {
 
     assert!(store.user_get(UserId::new()).await.unwrap().is_none());
     assert!(store.agent_get(AgentId::new()).await.unwrap().is_none());
+
+    // Lists: newest first, paged like every other resource.
+    let users = store.user_list(Pagination::default()).await.unwrap();
+    assert_eq!(
+        users.iter().map(|u| u.id).collect::<Vec<_>>(),
+        vec![other, first]
+    );
+    let agents = store
+        .agent_list(Pagination {
+            limit: Some(1),
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].id, tool);
 }
 
 #[tokio::test]

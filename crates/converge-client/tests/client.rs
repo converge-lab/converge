@@ -59,6 +59,15 @@ async fn round_trip() {
     let me = api.me().await.unwrap();
     assert_eq!(me.handle, "admin");
     assert_eq!(api.me().await.unwrap().id, me.id);
+    let users = api.user_list(&Pagination::default()).await.unwrap();
+    assert!(users.items.iter().any(|u| u.id == me.id));
+    assert!(
+        api.agent_list(&Pagination::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 
     // Groups + projects through the typed surface.
     let group = api

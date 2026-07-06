@@ -9,9 +9,9 @@
 //! future CLI (native: rustls) share this one client.
 
 use converge_storage::{
-    Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, Group, GroupEdit, GroupId,
-    NewDecision, NewGroup, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter,
-    ProjectId, StoreError, User,
+    Agent, AgentId, Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, Group, GroupEdit,
+    GroupId, NewDecision, NewGroup, NewProject, Page, Pagination, Project, ProjectEdit,
+    ProjectFilter, ProjectId, StoreError, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -163,12 +163,20 @@ impl Client {
         self.fetch(&format!("decisions/{id}/edges")).await
     }
 
-    // Users
+    // Users + agents
 
     /// The caller's identity (`/users/me` — the configured deployment user
     /// until real auth lands).
     pub async fn me(&self) -> Result<User, StoreError> {
         self.fetch("users/me").await?.ok_or(StoreError::NotFound)
+    }
+
+    pub async fn user_list(&self, page: &Pagination<UserId>) -> Result<Page<User>, StoreError> {
+        self.list("users", &(), page).await
+    }
+
+    pub async fn agent_list(&self, page: &Pagination<AgentId>) -> Result<Page<Agent>, StoreError> {
+        self.list("agents", &(), page).await
     }
 
     // Plumbing — one helper per HTTP verb shape.

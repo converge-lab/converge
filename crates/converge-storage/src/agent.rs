@@ -4,8 +4,8 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use crate::StoreError;
 use crate::ids::AgentId;
+use crate::{Pagination, StoreError};
 
 /// What kind of actor an agent is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,4 +47,10 @@ pub trait Agents {
         &self,
         id: AgentId,
     ) -> impl Future<Output = Result<Option<Agent>, StoreError>> + Send;
+
+    /// Agents, newest first.
+    fn agent_list(
+        &self,
+        page: Pagination<AgentId>,
+    ) -> impl Future<Output = Result<Vec<Agent>, StoreError>> + Send;
 }

@@ -4,8 +4,8 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 
-use crate::StoreError;
 use crate::ids::UserId;
+use crate::{Pagination, StoreError};
 
 /// A person. `handle` is the natural key — how callers name the same person
 /// across calls (a login, a username); `name` is display only. Provider
@@ -33,4 +33,10 @@ pub trait Users {
 
     fn user_get(&self, id: UserId)
     -> impl Future<Output = Result<Option<User>, StoreError>> + Send;
+
+    /// Users, newest first.
+    fn user_list(
+        &self,
+        page: Pagination<UserId>,
+    ) -> impl Future<Output = Result<Vec<User>, StoreError>> + Send;
 }

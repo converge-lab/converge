@@ -116,6 +116,24 @@ impl Users for PgStorage {
         .map_err(db_err)?
         .map(User::from))
     }
+
+    async fn user_list(&self, page: Pagination<UserId>) -> Result<Vec<User>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::UserRow,
+            r#"select id, handle, name from users
+               where ($1::uuid is null or id < $1)
+               order by id desc
+               limit $2"#,
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+            page.limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(User::from)
+        .collect())
+    }
 }
 
 impl Agents for PgStorage {
@@ -145,6 +163,24 @@ impl Agents for PgStorage {
         .await
         .map_err(db_err)?
         .map(Agent::from))
+    }
+
+    async fn agent_list(&self, page: Pagination<AgentId>) -> Result<Vec<Agent>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::AgentRow,
+            r#"select id, kind as "kind: _", name from agents
+               where ($1::uuid is null or id < $1)
+               order by id desc
+               limit $2"#,
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+            page.limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Agent::from)
+        .collect())
     }
 }
 

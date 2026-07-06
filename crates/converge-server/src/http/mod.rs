@@ -5,6 +5,7 @@
 //! envelope (`Page`) comes from the storage crate — it's part of the wire
 //! contract shared with `converge-client`.
 
+mod agent;
 mod decision;
 mod error;
 mod group;
@@ -23,6 +24,7 @@ pub fn app<S: Storage + 'static>(store: S, me: NewUser) -> Router {
         .merge(group::routes().with_state(store.clone()))
         .merge(project::routes().with_state(store.clone()))
         .merge(decision::routes().with_state(store.clone()))
+        .merge(agent::routes().with_state(store.clone()))
         .merge(user::routes().with_state((store, me)))
 }
 

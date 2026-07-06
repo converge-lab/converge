@@ -5,6 +5,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{send, server};
+use converge_storage::{AgentKind, Agents, NewAgent};
 use serde_json::{Value, json};
 
 #[tokio::test]
@@ -185,7 +186,7 @@ async fn pagination() {
 
 #[tokio::test]
 async fn users_me() {
-    let (_pg, _store, app) = server().await;
+    let (_pg, store, app) = server().await;
 
     // `me` resolves to the configured single-user identity, created on
     // first read.
@@ -197,4 +198,28 @@ async fn users_me() {
     // Deterministic: the second read is the same user.
     let (_, again) = send(&app, "GET", "/api/v1/users/me", None).await;
     assert_eq!(again["id"], me["id"]);
+
+    // The users list carries the ensured identity.
+    let (status, users) = send(&app, "GET", "/api/v1/users", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(users["items"].as_array().unwrap().len(), 1);
+    assert_eq!(users["items"][0]["handle"], "admin");
+
+    // Agents: empty until a write path ensures one (no REST create).
+    let (status, agents) = send(&app, "GET", "/api/v1/agents", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(agents["items"], json!([]));
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "claude".into(),
+        })
+        .await
+        .unwrap();
+    let (_, agents) = send(&app, "GET", "/api/v1/agents", None).await;
+    assert_eq!(
+        agents["items"][0]["id"].as_str().unwrap(),
+        agent.to_string()
+    );
+    assert_eq!(agents["items"][0]["kind"], "model");
 }

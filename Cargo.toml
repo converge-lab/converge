@@ -33,6 +33,7 @@ converge-storage = { path = "crates/converge-storage" }
 converge-storage-postgres = { path = "crates/converge-storage-postgres" }
 converge-server = { path = "crates/converge-server" }
 converge-ui = { path = "crates/converge-ui" }
+converge-client = { path = "crates/converge-client" }
 
 # Web UI (Leptos CSR → wasm)
 leptos = { version = "0.8", features = ["csr"] }

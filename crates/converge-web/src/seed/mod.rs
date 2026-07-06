@@ -13,6 +13,9 @@
 pub mod assemble;
 pub mod enums;
 pub mod rows;
+// Validation guards the embedded path's debug builds; with `api` on that
+// path is dead code by design.
+#[cfg_attr(feature = "api", allow(dead_code))]
 pub mod validate;
 pub mod wire;
 

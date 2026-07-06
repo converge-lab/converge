@@ -1,0 +1,5 @@
+# Dev loop: `trunk serve --features api` + a locally running converge-server.
+# The proxy keeps the app same-origin in dev, exactly like production (where
+# the server binary serves these assets itself) — no CORS, no baked-in URLs.
+[[proxy]]
+backend = "http://127.0.0.1:8080/api"

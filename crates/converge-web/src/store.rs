@@ -56,6 +56,8 @@ pub trait DataSource {
 
 /// The embedded fixture seed, assembled in-process. Resolves immediately;
 /// stays useful as the offline / test fixture even after a real API exists.
+/// Unused (but still compiled) when the `api` feature is on.
+#[cfg_attr(feature = "api", allow(dead_code))]
 pub struct EmbeddedSource;
 
 impl DataSource for EmbeddedSource {
@@ -89,11 +91,266 @@ pub fn provide_store<S: DataSource + 'static>(source: S) -> AppStore {
     store
 }
 
-/// Provide the store from the default source for this build. Today that is
-/// the [`EmbeddedSource`]; the HTTP `ApiSource` (on `converge-client`)
-/// slots back in here when it lands.
+/// Provide the store from the default source for this build: the HTTP
+/// [`api::ApiSource`] when compiled with the `api` feature, otherwise the
+/// [`EmbeddedSource`]. This is the one line to flip between them.
 pub fn provide_default_store() -> AppStore {
-    provide_store(EmbeddedSource)
+    #[cfg(feature = "api")]
+    {
+        provide_store(api::ApiSource::same_origin())
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        provide_store(EmbeddedSource)
+    }
+}
+
+/// The HTTP data source, on the typed `converge-client`. Real resources come
+/// from the API; the not-yet-real remainder (signals, unread, extras, expert
+/// context — M4 territory) still comes from the embedded seed, so mocked
+/// features are visibly seed-scoped in exactly one place.
+#[cfg(feature = "api")]
+mod api {
+    use super::{DataSource, LoadError, Loading, build_dataset};
+    use crate::seed::{self, wire};
+    use converge_client::{Client, DecisionFilter, Pagination, ProjectFilter, StoreError};
+    use converge_ui::domain::initials;
+    use leptos::prelude::window;
+    use std::rc::Rc;
+    use time::format_description::well_known::Rfc3339;
+
+    pub struct ApiSource {
+        client: Client,
+    }
+
+    impl ApiSource {
+        /// The API lives at the app's own origin: `trunk serve` proxies
+        /// `/api` to the local server in dev, and in production the server
+        /// binary serves these assets itself. No baked-in URLs.
+        pub fn same_origin() -> Self {
+            let origin = window().location().origin().expect("window has an origin");
+            let base = origin.parse().expect("origin is a valid URL");
+            Self {
+                client: Client::new(base),
+            }
+        }
+    }
+
+    fn oops(what: &str) -> impl Fn(StoreError) -> LoadError + '_ {
+        move |e| LoadError(format!("{what}: {e}"))
+    }
+
+    impl DataSource for ApiSource {
+        fn load(&self) -> Loading {
+            let client = self.client.clone();
+            Box::pin(async move {
+                // Unpaginated boot loads: without `limit` the server returns
+                // everything — fine at v1 scale, cursor-walking later.
+                let me = client.me().await.map_err(oops("load identity"))?;
+                let groups = client
+                    .group_list(&Pagination::default())
+                    .await
+                    .map_err(oops("load groups"))?;
+                let projects = client
+                    .project_list(&ProjectFilter::default(), &Pagination::default())
+                    .await
+                    .map_err(oops("load projects"))?;
+                let users = client
+                    .user_list(&Pagination::default())
+                    .await
+                    .map_err(oops("load users"))?;
+                let agents = client
+                    .agent_list(&Pagination::default())
+                    .await
+                    .map_err(oops("load agents"))?;
+                let decisions = client
+                    .decision_list(&DecisionFilter::default(), &Pagination::default())
+                    .await
+                    .map_err(oops("load decisions"))?;
+
+                // The read-model wants each decision's one-hop edges; the API
+                // serves them as a projection per decision. Sequential is fine
+                // at boot-load scale.
+                let mut wired = Vec::with_capacity(decisions.items.len());
+                for d in &decisions.items {
+                    let edges = client
+                        .decision_edges(d.id)
+                        .await
+                        .map_err(oops("load edges"))?
+                        .unwrap_or_default();
+                    wired.push(decision(d, &edges));
+                }
+
+                // M4 residue from the fixture seed. Its ids don't intersect
+                // real data, so these features read as empty until their
+                // endpoints exist — honest, and contained here.
+                let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
+                let mock = seed::assemble(&seed);
+
+                let assembled = seed::Assembled {
+                    groups: groups
+                        .items
+                        .iter()
+                        .map(|g| group(g, &projects.items))
+                        .collect(),
+                    projects: projects.items.iter().map(project).collect(),
+                    users: users.items.iter().map(user).collect(),
+                    agents: agents.items.iter().map(agent).collect(),
+                    decisions: wired,
+                    me: wire::mock::Me {
+                        user_id: me.id.to_string(),
+                        initial: initials(&me.name),
+                        name: me.name,
+                        role: format!("@{}", me.handle),
+                        color: "var(--cv-primary)".into(),
+                        email: String::new(),
+                    },
+                    user_colors: mock.user_colors,
+                    signals: mock.signals,
+                    decision_extras: mock.decision_extras,
+                    unread: mock.unread,
+                    agent_context: mock.agent_context,
+                };
+                Ok(Rc::new(build_dataset(assembled)))
+            })
+        }
+    }
+
+    // Typed client responses → the app's read-model shapes. This is the one
+    // place the real wire meets the fixture format, converted in code the
+    // compiler checks against `converge-client`.
+
+    fn rfc3339(t: time::OffsetDateTime) -> String {
+        t.format(&Rfc3339).expect("timestamps format as RFC3339")
+    }
+
+    fn group(g: &converge_client::Group, projects: &[converge_client::Project]) -> wire::Group {
+        wire::Group {
+            id: g.id.to_string(),
+            name: g.name.clone(),
+            description: g.description.clone(),
+            kind: match g.kind {
+                converge_client::GroupKind::Shared => seed::GroupKind::Shared,
+                converge_client::GroupKind::Personal => seed::GroupKind::Personal,
+            },
+            created_at: rfc3339(g.created_at),
+            // The D3 membership read-model, derived client-side.
+            project_ids: projects
+                .iter()
+                .filter(|p| p.group_id == g.id)
+                .map(|p| p.id.to_string())
+                .collect(),
+        }
+    }
+
+    fn project(p: &converge_client::Project) -> wire::Project {
+        wire::Project {
+            id: p.id.to_string(),
+            group_id: p.group_id.to_string(),
+            name: p.name.clone(),
+            description: p.description.clone(),
+            created_at: rfc3339(p.created_at),
+        }
+    }
+
+    fn user(u: &converge_client::User) -> wire::User {
+        wire::User {
+            id: u.id.to_string(),
+            handle: u.handle.clone(),
+            name: u.name.clone(),
+        }
+    }
+
+    fn agent(a: &converge_client::Agent) -> wire::Agent {
+        wire::Agent {
+            id: a.id.to_string(),
+            kind: match a.kind {
+                converge_client::AgentKind::Model => seed::enums::AgentKind::Model,
+                converge_client::AgentKind::Tool => seed::enums::AgentKind::Tool,
+            },
+            name: a.name.clone(),
+        }
+    }
+
+    fn author(a: &converge_client::Author) -> wire::AuthorRef {
+        use converge_client::Author as A;
+        match a {
+            A::User(u) => wire::AuthorRef {
+                user_id: Some(u.to_string()),
+                agent_id: None,
+            },
+            A::Agent(g) => wire::AuthorRef {
+                user_id: None,
+                agent_id: Some(g.to_string()),
+            },
+            A::UserViaAgent { user, agent } => wire::AuthorRef {
+                user_id: Some(user.to_string()),
+                agent_id: Some(agent.to_string()),
+            },
+        }
+    }
+
+    fn status(s: converge_client::DecisionStatus) -> seed::Status {
+        use converge_client::DecisionStatus as W;
+        match s {
+            W::Accepted => seed::Status::Accepted,
+            W::Draft => seed::Status::Draft,
+            W::Proposed => seed::Status::Proposed,
+            W::Superseded => seed::Status::Superseded,
+            W::Rejected => seed::Status::Rejected,
+        }
+    }
+
+    fn related(r: &converge_client::Related) -> wire::RelatedRef {
+        wire::RelatedRef {
+            id: r.id.to_string(),
+            why: r.why.clone(),
+        }
+    }
+
+    fn decision(d: &converge_client::Decision, e: &converge_client::Edges) -> wire::Decision {
+        wire::Decision {
+            id: d.id.to_string(),
+            project_id: d.project_id.to_string(),
+            status: status(d.status),
+            title: d.title.clone(),
+            summary: d.summary.clone(),
+            context: d.context.clone(),
+            consequences: d.consequences.clone(),
+            alternatives: d
+                .alternatives
+                .iter()
+                .map(|a| wire::Alternative {
+                    option: a.option.clone(),
+                    why_rejected: a.why_rejected.clone(),
+                })
+                .collect(),
+            authors: d.authors.iter().map(author).collect(),
+            supersedes: e.supersedes.iter().map(|i| i.to_string()).collect(),
+            superseded_by: e.superseded_by.iter().map(|i| i.to_string()).collect(),
+            related_to: e.related_to.iter().map(related).collect(),
+            related_by: e.related_by.iter().map(related).collect(),
+            captured_at: rfc3339(d.captured_at),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The author pair mapping preserves all three enum states.
+        #[test]
+        fn author_states_map() {
+            use converge_client::{AgentId, Author as A, UserId};
+            let (u, g) = (UserId::new(), AgentId::new());
+            assert_eq!(author(&A::User(u)).user_id, Some(u.to_string()));
+            assert_eq!(author(&A::User(u)).agent_id, None);
+            assert_eq!(author(&A::Agent(g)).agent_id, Some(g.to_string()));
+            let via = author(&A::UserViaAgent { user: u, agent: g });
+            assert_eq!(via.user_id, Some(u.to_string()));
+            assert_eq!(via.agent_id, Some(g.to_string()));
+        }
+    }
 }
 
 /// The store for the current reactive owner.

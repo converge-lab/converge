@@ -647,12 +647,14 @@ dependencies = [
 name = "converge-web"
 version = "0.1.0"
 dependencies = [
+ "converge-client",
  "converge-ui",
  "js-sys",
  "leptos",
  "reactive_stores",
  "serde",
  "serde_json",
+ "time",
  "wasm-bindgen",
  "web-sys",
 ]

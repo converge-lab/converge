@@ -67,8 +67,10 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Check client on wasm
-        run: cargo check -p converge-client --target wasm32-unknown-unknown
+      - name: Check wasm crates
+        run: cargo check -p converge-client -p converge-ui -p converge-web --target wasm32-unknown-unknown
+      - name: Clippy wasm crates
+        run: cargo clippy -p converge-ui -p converge-web --target wasm32-unknown-unknown -- -D warnings
 
   clippy:
     runs-on: ubuntu-latest

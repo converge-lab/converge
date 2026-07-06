@@ -1,0 +1,1228 @@
+{
+  "groups": [
+    {
+      "id": "platform",
+      "name": "Hitbox",
+      "kind": "shared",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "payments",
+      "name": "Converge",
+      "kind": "shared",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "mine",
+      "name": "My workspace",
+      "kind": "personal",
+      "created_at": "2025-10-01T00:00:00Z"
+    }
+  ],
+  "projects": [
+    {
+      "id": "api-gateway",
+      "group_id": "platform",
+      "name": "api-gateway",
+      "description": "Edge routing, rate limiting, error envelope",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "auth-service",
+      "group_id": "platform",
+      "name": "auth-service",
+      "description": "Shared OIDC, tokens, service-to-service auth",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "billing",
+      "group_id": "platform",
+      "name": "billing",
+      "description": "Invoicing, money math, retries",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "notifications",
+      "group_id": "platform",
+      "name": "notifications",
+      "description": "Webhooks, queue fan-out, delivery",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "platform",
+      "group_id": "platform",
+      "name": "platform",
+      "description": "Shared infrastructure, mesh, deploy pipelines",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "scratch",
+      "group_id": "mine",
+      "name": "scratch",
+      "description": "Personal prototypes and experiments",
+      "created_at": "2025-10-01T00:00:00Z"
+    },
+    {
+      "id": "web-app",
+      "group_id": "platform",
+      "name": "web-app",
+      "description": "Client app, feature flags",
+      "created_at": "2025-10-01T00:00:00Z"
+    }
+  ],
+  "group_projects": [
+    {
+      "group_id": "platform",
+      "project_id": "platform"
+    },
+    {
+      "group_id": "platform",
+      "project_id": "api-gateway"
+    },
+    {
+      "group_id": "platform",
+      "project_id": "auth-service"
+    },
+    {
+      "group_id": "platform",
+      "project_id": "billing"
+    },
+    {
+      "group_id": "platform",
+      "project_id": "notifications"
+    },
+    {
+      "group_id": "platform",
+      "project_id": "web-app"
+    },
+    {
+      "group_id": "payments",
+      "project_id": "billing"
+    },
+    {
+      "group_id": "payments",
+      "project_id": "api-gateway"
+    },
+    {
+      "group_id": "payments",
+      "project_id": "auth-service"
+    },
+    {
+      "group_id": "mine",
+      "project_id": "scratch"
+    }
+  ],
+  "users": [
+    {
+      "id": "u_priya",
+      "handle": "priya",
+      "name": "Priya Nair"
+    },
+    {
+      "id": "u_marco",
+      "handle": "marco",
+      "name": "Marco Reyes"
+    },
+    {
+      "id": "u_lena",
+      "handle": "lena",
+      "name": "Lena Fischer"
+    },
+    {
+      "id": "u_sara",
+      "handle": "sara",
+      "name": "Sara Okonkwo"
+    },
+    {
+      "id": "u_diego",
+      "handle": "diego",
+      "name": "Diego Alvarez"
+    },
+    {
+      "id": "u_yuki",
+      "handle": "yuki",
+      "name": "Yuki Tanaka"
+    }
+  ],
+  "agents": [
+    {
+      "id": "a_claude",
+      "kind": "model",
+      "name": "Claude"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "status-field",
+      "project_id": "api-gateway",
+      "status": "accepted",
+      "title": "Error responses include a structured `status` field",
+      "summary": "Consumers read status from a dedicated structured field in the error body — never by parsing the human-readable error text.",
+      "context": "Several services derive request status from the gateway’s error response. Historically that meant **parsing the human-readable message text**, because the numeric error code is pinned by a contract with legacy services and cannot be repurposed. As more machine consumers came to depend on it, that text-parsing turned into a growing liability.",
+      "consequences": "Consumers must migrate to the `status` field. `billing` still parses the text and is tracked as an open cross-project signal. The message text stays for humans and logs but is no longer load-bearing — a wording change can no longer take down a downstream service, closing the failure mode behind the `payments-worker` outage.",
+      "alternatives": [
+        {
+          "option": "Keep parsing the error text (status quo)",
+          "why_rejected": "Brittle — a copy change silently broke payments-worker with 500s. The text was never a real contract."
+        },
+        {
+          "option": "Encode status only in the HTTP / error code",
+          "why_rejected": "The code is pinned by the legacy contract and cannot change without breaking legacy consumers."
+        }
+      ],
+      "captured_at": "2026-07-01T08:00:00Z"
+    },
+    {
+      "id": "status-http",
+      "project_id": "api-gateway",
+      "status": "accepted",
+      "title": "Success is signaled by the HTTP status code alone",
+      "summary": "Callers determine success or failure purely from the HTTP status code returned by the gateway.",
+      "context": "The first version of the gateway exposed only standard HTTP semantics. Callers were expected to branch on the status code — `2xx` success, `4xx`/`5xx` failure — and nothing else.",
+      "consequences": "Too coarse: a `4xx` couldn’t separate a retryable validation hiccup from a permanent rejection, so consumers started reading the error **text** to recover the nuance. That workaround became the next decision. **Superseded.**",
+      "alternatives": [
+        {
+          "option": "Return a status field in the body from day one",
+          "why_rejected": "Rejected as over-engineering at the time — the codes seemed expressive enough."
+        }
+      ],
+      "captured_at": "2026-01-15T10:00:00Z"
+    },
+    {
+      "id": "status-text",
+      "project_id": "api-gateway",
+      "status": "accepted",
+      "title": "Status is read from the error text, not the error code",
+      "summary": "Consumers parse the human-readable error message text to determine request status.",
+      "context": "The gateway needs to tell consumers success from failure. The error **code** is fixed by a contract with legacy services and can’t be repurposed to carry status, so a different signal was needed — quickly.",
+      "consequences": "Worked until the error wording changed without warning and `payments-worker` began returning 500s in production. That fragility is exactly what the later structured-`status`-field decision was created to remove. **This decision is superseded.**",
+      "alternatives": [
+        {
+          "option": "Change the error code to encode status",
+          "why_rejected": "Rejected — legacy consumers pinned the code in their contract; changing it would break them."
+        }
+      ],
+      "captured_at": "2026-03-03T10:00:00Z"
+    },
+    {
+      "id": "deploy-separate",
+      "project_id": "platform",
+      "status": "accepted",
+      "title": "Developer code and infrastructure services deploy separately",
+      "summary": "Application deploys and infrastructure rollouts (proxies, mesh, timeouts) run on independent pipelines.",
+      "context": "Application code and infrastructure (proxies, service mesh, timeouts) shipped through a single pipeline. Their change cadence and blast radius are very different, and coupling them made failures hard to attribute.",
+      "consequences": "Infra rollouts no longer ride along with application deploys, so an infra change can’t masquerade as an app regression. Teams must now coordinate infra rollouts explicitly — tracked as a cross-project signal toward `notifications` after **INC-3042**.",
+      "alternatives": [
+        {
+          "option": "A single combined deploy pipeline",
+          "why_rejected": "Rejected — an infra-only change silently broke a service and developers couldn’t locate the cause (INC-3042)."
+        }
+      ],
+      "captured_at": "2026-02-20T10:00:00Z"
+    },
+    {
+      "id": "shared-oidc",
+      "project_id": "auth-service",
+      "status": "accepted",
+      "title": "All team services authenticate via the shared local OIDC",
+      "summary": "Every service validates requests against one shared local OIDC provider rather than rolling its own auth.",
+      "context": "Services were beginning to implement their own authentication — inconsistent, hard to audit, and slow to onboard. A single shared identity path was needed across the group.",
+      "consequences": "Auth is uniform and new services join cheaply, but the provider becomes a **single point of dependency** for all six services. Any change to it must be broadcast group-wide before shipping — tracked as a standing cross-project signal.",
+      "alternatives": [
+        {
+          "option": "Each service implements its own auth",
+          "why_rejected": "Rejected — inconsistent, hard to audit, and slowed onboarding."
+        }
+      ],
+      "captured_at": "2026-02-11T10:00:00Z"
+    },
+    {
+      "id": "gateway-only",
+      "project_id": "api-gateway",
+      "status": "accepted",
+      "title": "All inter-service calls route through the gateway, never direct",
+      "summary": "East-west traffic goes through the gateway; direct service-to-service calls are not allowed.",
+      "context": "- A central place for auth, rate limiting, and observability.\n- Avoids a mesh of undocumented direct dependencies.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Allow direct service-to-service calls",
+          "why_rejected": "Rejected — creates hidden coupling and bypasses rate limiting and tracing."
+        }
+      ],
+      "captured_at": "2026-02-27T10:00:00Z"
+    },
+    {
+      "id": "retry-backoff",
+      "project_id": "billing",
+      "status": "accepted",
+      "title": "Retries use exponential backoff with full jitter, max 5 attempts",
+      "summary": "Failed calls retry with exponentially increasing, jittered delays, capped at five attempts.",
+      "context": "- Full jitter avoids synchronized retry storms.\n- A hard cap prevents unbounded load during outages.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Fixed-interval retries",
+          "why_rejected": "Rejected — synchronized retries create a thundering herd."
+        },
+        {
+          "option": "Unlimited retries",
+          "why_rejected": "Rejected — amplifies load during an outage."
+        }
+      ],
+      "captured_at": "2026-06-30T15:00:00Z"
+    },
+    {
+      "id": "oidc-ttl",
+      "project_id": "auth-service",
+      "status": "accepted",
+      "title": "OIDC access tokens expire in 15 minutes; refresh is client-side",
+      "summary": "Access tokens are short-lived (15 min) and refreshed silently on the client.",
+      "context": "- A short token lifetime limits the blast radius of a leaked token.\n- Client-side refresh keeps it invisible to users.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Long-lived tokens",
+          "why_rejected": "Rejected — a larger window for misuse if a token leaks."
+        }
+      ],
+      "captured_at": "2026-02-14T10:00:00Z"
+    },
+    {
+      "id": "webhook-idempotent",
+      "project_id": "notifications",
+      "status": "accepted",
+      "title": "Inbound webhooks are idempotent, deduped by event ID",
+      "summary": "Webhook processing is safe to run twice; duplicates are dropped using the provider event ID.",
+      "context": "- Providers retry webhooks; processing the same event twice must be safe.\n- Event IDs give a natural dedupe key.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Assume at-most-once delivery",
+          "why_rejected": "Rejected — providers deliver at-least-once; duplicates are normal."
+        }
+      ],
+      "captured_at": "2026-06-30T11:00:00Z"
+    },
+    {
+      "id": "money-minor-units",
+      "project_id": "billing",
+      "status": "accepted",
+      "title": "Money is stored as integer minor units, never floats",
+      "summary": "All monetary amounts are stored as integer minor units (e.g. cents).",
+      "context": "- Floats introduce rounding errors in money math.\n- Integer minor units are exact and portable.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Store amounts as floating-point",
+          "why_rejected": "Rejected — rounding errors are unacceptable in billing."
+        }
+      ],
+      "captured_at": "2026-03-08T10:00:00Z"
+    },
+    {
+      "id": "flags-request-time",
+      "project_id": "web-app",
+      "status": "accepted",
+      "title": "Feature flags are evaluated per request, not cached per process",
+      "summary": "Flag values are read at request time so rollouts take effect without a redeploy.",
+      "context": "- Rollouts take effect immediately without a redeploy.\n- Per-request evaluation supports targeting.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Cache flags per process at startup",
+          "why_rejected": "Rejected — changes wouldn’t take effect until a redeploy."
+        }
+      ],
+      "captured_at": "2026-06-26T10:00:00Z"
+    },
+    {
+      "id": "forward-only-migrations",
+      "project_id": "platform",
+      "status": "draft",
+      "title": "Schema migrations are forward-only in production",
+      "summary": "Production migrations only roll forward; there are no down migrations.",
+      "context": "- Down migrations are rarely tested and risky in production.\n- Rolling forward with a new migration is safer and auditable.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Reversible up/down migrations in prod",
+          "why_rejected": "Rejected — down paths are seldom tested and dangerous under load."
+        }
+      ],
+      "captured_at": "2026-06-29T10:00:00Z"
+    },
+    {
+      "id": "queue-fanout",
+      "project_id": "notifications",
+      "status": "accepted",
+      "title": "Notification fan-out goes through the queue, never synchronous HTTP",
+      "summary": "Producers publish to a queue; consumers pull — no synchronous HTTP fan-out.",
+      "context": "- Decouples producers from a variable number of consumers.\n- Absorbs spikes and isolates slow consumers.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Synchronous HTTP fan-out",
+          "why_rejected": "Rejected — couples latency to the slowest consumer and drops messages on spikes."
+        }
+      ],
+      "captured_at": "2026-06-28T10:00:00Z"
+    },
+    {
+      "id": "ratelimit-token",
+      "project_id": "api-gateway",
+      "status": "draft",
+      "title": "Rate limits are keyed by API token, not client IP",
+      "summary": "The gateway rate-limits per API token so clients behind shared NATs aren’t throttled together.",
+      "context": "- Clients behind shared NATs share an IP and were unfairly throttled.\n- The API token identifies the actual caller.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Rate limit by client IP",
+          "why_rejected": "Rejected — shared NATs caused unrelated clients to throttle each other."
+        }
+      ],
+      "captured_at": "2026-07-01T06:00:00Z"
+    },
+    {
+      "id": "utc-timestamps",
+      "project_id": "platform",
+      "status": "accepted",
+      "title": "All timestamps are stored UTC ISO-8601; no local timezones",
+      "summary": "Timestamps are stored as UTC ISO-8601 strings and converted to local time only at the edge.",
+      "context": "- A single canonical timezone removes ambiguity across services.\n- Convert to local only at the edge / UI.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Store local timezones",
+          "why_rejected": "Rejected — ambiguous and error-prone across services and DST."
+        }
+      ],
+      "captured_at": "2026-02-24T10:00:00Z"
+    },
+    {
+      "id": "s2s-oidc-short",
+      "project_id": "auth-service",
+      "status": "accepted",
+      "title": "Service-to-service auth uses short-lived OIDC tokens, not static keys",
+      "summary": "Services authenticate to each other with short-lived OIDC tokens instead of static API keys.",
+      "context": "- Short-lived tokens limit the damage from a leak.\n- Reuses the shared OIDC provider instead of static secrets.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Static API keys between services",
+          "why_rejected": "Rejected — long-lived secrets are a standing liability if leaked."
+        }
+      ],
+      "captured_at": "2026-06-27T10:00:00Z"
+    },
+    {
+      "id": "soft-delete",
+      "project_id": "billing",
+      "status": "accepted",
+      "title": "User records are soft-deleted with `deleted_at`; never hard-deleted",
+      "summary": "Records are marked deleted with a timestamp instead of being removed.",
+      "context": "- Accidental deletes are recoverable.\n- Preserves audit and billing history.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Hard-delete records",
+          "why_rejected": "Rejected — irreversible and destroys audit and billing history."
+        }
+      ],
+      "captured_at": "2026-03-06T10:00:00Z"
+    },
+    {
+      "id": "scratch-llm-cache",
+      "project_id": "scratch",
+      "status": "rejected",
+      "title": "Cache LLM responses by normalized prompt hash",
+      "summary": "Proposed reusing a cached completion for identical prompts — rejected: stale cache hits masked prompt regressions during iteration.",
+      "context": "During local iteration the same prompts run repeatedly. Caching completions by a normalized prompt hash was proposed to cut token spend and make runs reproducible.",
+      "consequences": "Caching was dropped. The team keeps calling the model each run and uses a cheaper model for local iteration instead.",
+      "alternatives": [
+        {
+          "option": "Cache by normalized prompt hash (the proposal)",
+          "why_rejected": "Rejected — stale hits hid real changes and made debugging confusing."
+        }
+      ],
+      "captured_at": "2026-07-01T08:30:00Z"
+    },
+    {
+      "id": "scratch-sse",
+      "project_id": "scratch",
+      "status": "draft",
+      "title": "Stream tokens to the client over SSE, not WebSocket",
+      "summary": "Token streaming uses server-sent events rather than a bidirectional WebSocket.",
+      "context": "- Streaming is one-directional, so SSE is simpler and survives proxies better.\n- No need for the overhead of a bidirectional socket.",
+      "consequences": null,
+      "alternatives": [
+        {
+          "option": "Use a WebSocket",
+          "why_rejected": "Rejected — bidirectional transport is unnecessary for one-way token streaming."
+        }
+      ],
+      "captured_at": "2026-07-01T07:00:00Z"
+    }
+  ],
+  "decision_author": [
+    {
+      "decision_id": "status-field",
+      "user_id": "u_priya"
+    },
+    {
+      "decision_id": "status-field",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "status-http",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "status-text",
+      "user_id": "u_priya"
+    },
+    {
+      "decision_id": "deploy-separate",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "shared-oidc",
+      "user_id": "u_lena"
+    },
+    {
+      "decision_id": "shared-oidc",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "gateway-only",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "retry-backoff",
+      "user_id": "u_sara"
+    },
+    {
+      "decision_id": "oidc-ttl",
+      "user_id": "u_lena"
+    },
+    {
+      "decision_id": "webhook-idempotent",
+      "user_id": "u_diego"
+    },
+    {
+      "decision_id": "money-minor-units",
+      "user_id": "u_sara"
+    },
+    {
+      "decision_id": "flags-request-time",
+      "user_id": "u_sara"
+    },
+    {
+      "decision_id": "forward-only-migrations",
+      "user_id": "u_diego"
+    },
+    {
+      "decision_id": "queue-fanout",
+      "user_id": "u_marco"
+    },
+    {
+      "decision_id": "queue-fanout",
+      "user_id": "u_diego"
+    },
+    {
+      "decision_id": "queue-fanout",
+      "user_id": "u_yuki"
+    },
+    {
+      "decision_id": "ratelimit-token",
+      "user_id": "u_yuki"
+    },
+    {
+      "decision_id": "utc-timestamps",
+      "user_id": "u_priya"
+    },
+    {
+      "decision_id": "s2s-oidc-short",
+      "user_id": "u_lena"
+    },
+    {
+      "decision_id": "soft-delete",
+      "user_id": "u_sara"
+    },
+    {
+      "decision_id": "scratch-llm-cache",
+      "user_id": "u_yuki"
+    },
+    {
+      "decision_id": "scratch-sse",
+      "user_id": "u_yuki"
+    },
+    {
+      "decision_id": "scratch-llm-cache",
+      "agent_id": "a_claude"
+    },
+    {
+      "decision_id": "scratch-sse",
+      "agent_id": "a_claude"
+    }
+  ],
+  "decision_supersedes": [
+    {
+      "decision_id": "status-field",
+      "supersedes_id": "status-text"
+    },
+    {
+      "decision_id": "status-text",
+      "supersedes_id": "status-http"
+    }
+  ],
+  "decision_related": [
+    {
+      "decision_id": "status-field",
+      "ref_id": "retry-backoff",
+      "why": "billing classifies retryable failures from the gateway error text — it must migrate to the structured status field or it will retry the wrong errors."
+    },
+    {
+      "decision_id": "deploy-separate",
+      "ref_id": "queue-fanout",
+      "why": "the proxy rollout behind INC-3042 broke notifications fan-out — infra and service rollouts must stay decoupled and coordinated."
+    },
+    {
+      "decision_id": "shared-oidc",
+      "ref_id": "gateway-only",
+      "why": "the gateway authenticates every inbound request against this shared provider."
+    },
+    {
+      "decision_id": "shared-oidc",
+      "ref_id": "webhook-idempotent",
+      "why": "notifications validates webhook callers through the same provider — changes ripple to delivery."
+    }
+  ],
+  "mock": {
+    "me": {
+      "user_id": "u_marco",
+      "initial": "MR",
+      "role": "Platform · engineer",
+      "email": "marco.reyes-platform-infrastructure@a-very-long-company-domain.engineering"
+    },
+    "user_colors": {
+      "u_priya": "#c98a3c",
+      "u_marco": "#4a7fb5",
+      "u_lena": "#3a9d6e",
+      "u_sara": "#9a6dd7",
+      "u_diego": "#c25b52",
+      "u_yuki": "#4c9aa8"
+    },
+    "signals": [
+      {
+        "id": "sig-status",
+        "from": "api-gateway",
+        "to": "billing",
+        "dec_id": "status-field",
+        "title": "billing still parses error text",
+        "text": "The new structured `status` field changes the error envelope — billing still parses error text and will break.",
+        "consequence": "billing classifies success vs. failure by reading the gateway’s error *text*, then feeds that into its retry logic. api-gateway is replacing that text with a structured `status` field. The moment it ships, billing will misread every failure — retrying non-retryable errors and surfacing 500s to customers. This is the exact outage that triggered the change in the first place.",
+        "recommended": "Migrate billing to read the structured `status` field before api-gateway removes text parsing. Until then, the two are on a collision course.",
+        "risk": "will_break",
+        "sources": [
+          "status-field",
+          "status-text",
+          "retry-backoff"
+        ]
+      },
+      {
+        "id": "sig-oidc",
+        "from": "auth-service",
+        "to": "all 6 services",
+        "dec_id": "shared-oidc",
+        "title": "shared OIDC is a single point of dependency",
+        "text": "Shared OIDC is a single dependency — any change ripples to every service. Broadcast before shipping.",
+        "consequence": "All six services authenticate against one shared OIDC provider. Any change to it — token format, lifetime, or signing keys — affects every service simultaneously. There is no gradual rollout: a bad change is a group-wide outage, not an isolated one.",
+        "recommended": "Broadcast any OIDC change to the whole group before shipping, and stage it behind a flag. Treat the provider as a frozen contract unless coordinated.",
+        "risk": "watch",
+        "sources": [
+          "shared-oidc",
+          "oidc-ttl",
+          "s2s-oidc-short"
+        ]
+      },
+      {
+        "id": "sig-deploy",
+        "from": "platform",
+        "to": "notifications",
+        "dec_id": "deploy-separate",
+        "title": "infra rollouts can still alter service behavior",
+        "text": "Infra deploys are decoupled from service deploys, but proxy rollouts can still alter timeouts. Coordinate rollouts.",
+        "consequence": "Deploys are decoupled, but infrastructure changes (proxy timeouts, mesh config) still change how running services behave. A proxy rollout already broke notifications-worker once with no code change (INC-3042) — and because the two pipelines look independent, the cause took ~30 minutes to find.",
+        "recommended": "Announce infra timeout/mesh changes to notifications ahead of time and watch its error rate during rollout.",
+        "risk": "coordinate",
+        "sources": [
+          "deploy-separate",
+          "queue-fanout"
+        ]
+      }
+    ],
+    "decision_extras": {
+      "status-field": {
+        "description": "The error envelope now carries an explicit `status` field — one of `ok`, `retryable`, or `fatal` — alongside the existing human-readable message. Consumers read **that field**, never the prose.\n\nThis keeps three contracts cleanly separated:\n\n- The **HTTP error code** stays pinned for legacy services that cannot change it.\n- The **message text** stays free-form, for humans and logs.\n- The **`status` field** becomes the single machine-readable signal every consumer agrees on.\n\n## Why the text was never safe\nParsing the message text was never a real contract — it only looked like one. A wording change in the gateway silently flipped `payments-worker` into returning 500s in production, because it matched on specific phrasing. The structured field removes that entire class of failure: copy can change freely without breaking a single downstream consumer.",
+        "session": "claude-session · a3f9",
+        "tags": [
+          "errors",
+          "contracts",
+          "api"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#platform-api",
+            "when": "today, 09:58–10:07",
+            "lines": [
+              {
+                "speaker": "Priya Nair",
+                "text": "payments-worker is throwing 500s in prod — started ~20 min ago"
+              },
+              {
+                "speaker": "Marco Reyes",
+                "text": "nothing shipped on our side though 🤔"
+              },
+              {
+                "speaker": "Priya Nair",
+                "text": "it’s reading the gateway error *text* to decide status. we reworded that message this morning.",
+                "hl": true
+              },
+              {
+                "speaker": "Lena Fischer",
+                "text": "the error *code* is pinned by the legacy contract, so everyone parses the text instead"
+              },
+              {
+                "speaker": "Marco Reyes",
+                "text": "text was never meant to be a contract. that’s the trap"
+              },
+              {
+                "speaker": "Priya Nair",
+                "text": "fix: add a real `status` field to the error body and have consumers read that, not the text",
+                "hl": true
+              },
+              {
+                "speaker": "Lena Fischer",
+                "text": "+1 — keep text for humans, structured status for machines"
+              },
+              {
+                "speaker": "Marco Reyes",
+                "text": "on it — api-gateway #482"
+              }
+            ]
+          },
+          {
+            "kind": "pr",
+            "label": "api-gateway #482",
+            "when": "today, 10:41",
+            "lines": [
+              {
+                "speaker": "PR #482",
+                "text": "Add structured `status` field to the error envelope; deprecate text parsing. Closes the payments-worker outage from this morning.",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "status-http": {
+        "session": "claude-session · 0c11",
+        "tags": [
+          "errors",
+          "api",
+          "legacy"
+        ],
+        "sources": [
+          {
+            "kind": "pr",
+            "label": "api-gateway #12",
+            "when": "Jan 15",
+            "lines": [
+              {
+                "speaker": "PR #12",
+                "text": "callers branch on the HTTP status code only; failures are 4xx/5xx",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "status-text": {
+        "tags": [
+          "errors",
+          "legacy",
+          "api"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#platform-api",
+            "when": "Mar 3, 14:20",
+            "lines": [
+              {
+                "speaker": "Marco Reyes",
+                "text": "how should consumers distinguish success vs failure from the gateway response?"
+              },
+              {
+                "speaker": "Priya Nair",
+                "text": "the error code is locked — legacy services pinned it in the contract, we can’t change it",
+                "hl": true
+              },
+              {
+                "speaker": "Lena Fischer",
+                "text": "so read it from the message text? it has the actual reason anyway"
+              },
+              {
+                "speaker": "Priya Nair",
+                "text": "yeah — parse the text for status for now",
+                "hl": true
+              },
+              {
+                "speaker": "Marco Reyes",
+                "text": "ok, I’ll document it as the convention"
+              }
+            ]
+          }
+        ]
+      },
+      "deploy-separate": {
+        "session": "claude-session · b3c1",
+        "tags": [
+          "deploys",
+          "infra",
+          "incident"
+        ],
+        "sources": [
+          {
+            "kind": "pr",
+            "label": "infra #211",
+            "when": "Feb 20",
+            "lines": [
+              {
+                "speaker": "PR #211",
+                "text": "Separate the infra deploy pipeline from service deploys after INC-3042. Infra rollouts no longer ride along with application deploys.",
+                "hl": true
+              }
+            ]
+          },
+          {
+            "kind": "incident",
+            "label": "INC-3042",
+            "when": "Feb 18, 14:02–15:20",
+            "lines": [
+              {
+                "speaker": "14:02",
+                "text": "proxy v2 rolled out across the platform mesh"
+              },
+              {
+                "speaker": "14:09",
+                "text": "notifications-worker error rate climbing — no deploy on their side",
+                "hl": true
+              },
+              {
+                "speaker": "14:31",
+                "text": "on-call investigating; no code changes found in notifications"
+              },
+              {
+                "speaker": "15:05",
+                "text": "root cause: the proxy rollout changed default timeouts",
+                "hl": true
+              },
+              {
+                "speaker": "15:20",
+                "text": "resolved — infra rollouts decoupled from service deploys going forward"
+              }
+            ]
+          }
+        ]
+      },
+      "shared-oidc": {
+        "description": "All six services delegate authentication to **one shared local OIDC provider** instead of each implementing its own. A request is trusted only if it carries a token that provider issued and signed.\n\nThe upside is consistency: one place to reason about identity, one audit surface, and near-zero auth boilerplate when a new service joins the group.\n\n## The dependency this creates\nBecause everything trusts the same provider, it becomes a **single point of dependency**. Any change to token format, lifetime, or signing keys lands on all six services at once — there is no gradual rollout. Treat the provider as a frozen contract and **broadcast any change to the whole group before shipping it**.",
+        "session": "claude-session · c7a4",
+        "tags": [
+          "auth",
+          "dependency"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "Architecture review · Feb",
+            "when": "Feb 11",
+            "lines": [
+              {
+                "speaker": "[00:12] Lena",
+                "text": "every service rolling its own auth is what’s slowing onboarding down"
+              },
+              {
+                "speaker": "[00:31] Marco",
+                "text": "proposal — one shared local OIDC provider, every service validates against it",
+                "hl": true
+              },
+              {
+                "speaker": "[00:49] Priya",
+                "text": "that’s a single dependency though — if it changes, everything breaks"
+              },
+              {
+                "speaker": "[01:03] Lena",
+                "text": "right, so any change to it has to be broadcast to the whole group before it ships",
+                "hl": true
+              },
+              {
+                "speaker": "[01:20] Marco",
+                "text": "agreed — shared OIDC, broadcast-before-change"
+              }
+            ]
+          }
+        ]
+      },
+      "gateway-only": {
+        "session": "claude-session · d2e8",
+        "tags": [
+          "networking",
+          "gateway"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#platform-arch",
+            "when": "Feb 27",
+            "lines": [
+              {
+                "speaker": "Marco Reyes",
+                "text": "all east-west traffic goes through the gateway — no direct service-to-service calls",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "retry-backoff": {
+        "session": "claude-session · 7b21",
+        "tags": [
+          "resilience",
+          "billing"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "claude-session · 7b21",
+            "when": "yesterday",
+            "lines": [
+              {
+                "speaker": "agent",
+                "text": "use exponential backoff with full jitter, cap at 5 attempts to avoid a thundering herd",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "oidc-ttl": {
+        "session": "claude-session · e9f2",
+        "tags": [
+          "auth",
+          "tokens"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#auth",
+            "when": "Feb 14",
+            "lines": [
+              {
+                "speaker": "Lena Fischer",
+                "text": "15 min access tokens, silent refresh on the client",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "webhook-idempotent": {
+        "session": "claude-session · 2d90",
+        "tags": [
+          "webhooks",
+          "idempotency"
+        ],
+        "sources": [
+          {
+            "kind": "pr",
+            "label": "notifications #88",
+            "when": "yesterday",
+            "lines": [
+              {
+                "speaker": "PR #88",
+                "text": "dedupe inbound webhooks by event id; processing must be idempotent",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "money-minor-units": {
+        "session": "claude-session · 1a6b",
+        "tags": [
+          "billing",
+          "money"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#billing",
+            "when": "Mar 8",
+            "lines": [
+              {
+                "speaker": "Sara Okonkwo",
+                "text": "store money as integer minor units (cents), never floats",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "flags-request-time": {
+        "session": "claude-session · 3c10",
+        "tags": [
+          "flags",
+          "web"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "claude-session · 4c10",
+            "when": "5d ago",
+            "lines": [
+              {
+                "speaker": "agent",
+                "text": "evaluate flags per request so rollouts take effect without a redeploy",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "forward-only-migrations": {
+        "session": "claude-session · 5f31",
+        "tags": [
+          "database",
+          "migrations"
+        ],
+        "sources": [
+          {
+            "kind": "pr",
+            "label": "platform #150",
+            "when": "2d ago",
+            "lines": [
+              {
+                "speaker": "PR #150",
+                "text": "migrations are forward-only in prod; roll forward, never down",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "queue-fanout": {
+        "session": "claude-session · 4b77",
+        "tags": [
+          "notifications",
+          "queue"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#notifications",
+            "when": "3d ago",
+            "lines": [
+              {
+                "speaker": "Marco Reyes",
+                "text": "fan-out via the queue, never synchronous HTTP to N consumers",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "ratelimit-token": {
+        "session": "claude-session · 6c19",
+        "tags": [
+          "gateway",
+          "rate-limit"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "claude-session · 6c19",
+            "when": "3h ago",
+            "lines": [
+              {
+                "speaker": "agent",
+                "text": "rate limit by API token, not IP — shared NATs were getting throttled",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "utc-timestamps": {
+        "session": "claude-session · 5d90",
+        "tags": [
+          "time",
+          "data"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#platform-arch",
+            "when": "Feb 24",
+            "lines": [
+              {
+                "speaker": "Priya Nair",
+                "text": "store all timestamps as UTC ISO-8601; convert at the edge",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "s2s-oidc-short": {
+        "session": "claude-session · 8a02",
+        "tags": [
+          "auth",
+          "security"
+        ],
+        "sources": [
+          {
+            "kind": "pr",
+            "label": "auth-service #61",
+            "when": "4d ago",
+            "lines": [
+              {
+                "speaker": "PR #61",
+                "text": "service-to-service uses short-lived OIDC tokens, not static API keys",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "soft-delete": {
+        "session": "claude-session · 6e23",
+        "tags": [
+          "database",
+          "billing"
+        ],
+        "sources": [
+          {
+            "kind": "slack",
+            "label": "#billing",
+            "when": "Mar 6",
+            "lines": [
+              {
+                "speaker": "Sara Okonkwo",
+                "text": "soft-delete user records with deleted_at; never hard-delete",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "scratch-llm-cache": {
+        "session": "claude-session · f4d2",
+        "tags": [
+          "llm",
+          "cost"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "claude-session · f4d2",
+            "when": "30m ago",
+            "lines": [
+              {
+                "speaker": "agent",
+                "text": "cache completions keyed by a normalized prompt hash to avoid re-calling on identical prompts",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      },
+      "scratch-sse": {
+        "session": "claude-session · 9b71",
+        "tags": [
+          "llm",
+          "streaming"
+        ],
+        "sources": [
+          {
+            "kind": "transcript",
+            "label": "claude-session · 9b71",
+            "when": "2h ago",
+            "lines": [
+              {
+                "speaker": "agent",
+                "text": "use SSE for token streaming — it is one-way anyway and plays nicer with proxies",
+                "hl": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "unread": [
+      "status-field",
+      "ratelimit-token",
+      "retry-backoff",
+      "webhook-idempotent",
+      "forward-only-migrations",
+      "scratch-llm-cache",
+      "scratch-sse"
+    ],
+    "agent_context": {
+      "api-gateway": [
+        "status-field",
+        "gateway-only",
+        "ratelimit-token",
+        "shared-oidc",
+        "deploy-separate",
+        "retry-backoff",
+        "utc-timestamps"
+      ],
+      "auth-service": [
+        "shared-oidc",
+        "oidc-ttl",
+        "s2s-oidc-short",
+        "gateway-only",
+        "utc-timestamps"
+      ],
+      "billing": [
+        "money-minor-units",
+        "retry-backoff",
+        "soft-delete",
+        "status-field",
+        "shared-oidc"
+      ],
+      "notifications": [
+        "webhook-idempotent",
+        "queue-fanout",
+        "deploy-separate",
+        "shared-oidc"
+      ],
+      "web-app": [
+        "flags-request-time",
+        "shared-oidc",
+        "utc-timestamps"
+      ],
+      "platform": [
+        "deploy-separate",
+        "forward-only-migrations",
+        "utc-timestamps",
+        "gateway-only"
+      ]
+    }
+  }
+}

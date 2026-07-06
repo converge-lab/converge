@@ -8,10 +8,14 @@
 //! consumer — the web UI (wasm: reqwest rides the browser's fetch) and the
 //! future CLI (native: rustls) share this one client.
 
-use converge_storage::{
-    Agent, AgentId, Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, Group, GroupEdit,
-    GroupId, NewDecision, NewGroup, NewProject, Page, Pagination, Project, ProjectEdit,
-    ProjectFilter, ProjectId, StoreError, User, UserId,
+// The client's public API is complete on its own: every type its methods
+// mention is re-exported, so consumers (the web UI, the future CLI) depend
+// on this crate alone and never name the storage crate.
+pub use converge_storage::{
+    Agent, AgentId, AgentKind, Alternative, Author, Decision, DecisionEdit, DecisionFilter,
+    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, NewAgent, NewDecision,
+    NewGroup, NewProject, NewUser, Page, Pagination, Project, ProjectEdit, ProjectFilter,
+    ProjectId, Related, StoreError, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;

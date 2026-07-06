@@ -5,11 +5,15 @@ members = [
     "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
+    "crates/converge-ui",
+    "crates/converge-web",
     "crates/xtask",
 ]
 # xtask (dev tooling: testcontainers dev DB + sqlx offline-cache generation) is
 # a member so `cargo xtask` / `-p xtask` resolve it, but it's out of the default
 # set so a bare `cargo check`/`build`/`test` never compiles its Docker deps.
+# The wasm crates (converge-ui, converge-web) are likewise out of the default
+# set — build them with `-p` / trunk; CI checks them on wasm32.
 default-members = [
     "crates/converge-client",
     "crates/converge-server",
@@ -28,14 +32,32 @@ repository = "https://github.com/converge-lab/converge"
 converge-storage = { path = "crates/converge-storage" }
 converge-storage-postgres = { path = "crates/converge-storage-postgres" }
 converge-server = { path = "crates/converge-server" }
+converge-ui = { path = "crates/converge-ui" }
+
+# Web UI (Leptos CSR → wasm)
+leptos = { version = "0.8", features = ["csr"] }
+# Fine-grained reactive state store (`#[derive(Store)]`). Pinned to the
+# version leptos 0.8 already resolves internally so we don't pull a second
+# copy.
+reactive_stores = "0.4"
+markdown = "1"
 
 # HTTP client — compiles native (rustls) and to wasm (browser fetch; the
 # TLS feature is target-gated away there).
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 url = "2"
 
 # Async
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signal", "net"] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "signal",
+    "net",
+] }
 
 # HTTP server
 axum = "0.8"
@@ -51,7 +73,14 @@ tracing-appender = "0.2"
 # PostgreSQL — the bundled storage backend. tls-rustls keeps it pure-Rust
 # and cross-compilable.
 sqlx = { version = "0.8", default-features = false, features = [
-    "runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid", "time", "json",
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+    "uuid",
+    "time",
+    "json",
 ] }
 
 # Serialization

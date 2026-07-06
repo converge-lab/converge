@@ -1,0 +1,8 @@
+[package]
+name = "converge-ui"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+leptos = { workspace = true }
+markdown = { workspace = true }

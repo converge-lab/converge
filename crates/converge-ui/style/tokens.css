@@ -1,0 +1,123 @@
+/* converge-ui design tokens — semantic names over the prototype's palette.
+   Dark is the default; [data-theme="light"] overrides. CSS vars cascade, so
+   wrapping any subtree in [data-theme] themes it. */
+
+:root,
+[data-theme="dark"] {
+  --cv-bg: #0a0c0f;
+  --cv-sidebar: #0c0e12;
+  --cv-topbar: rgba(10, 12, 15, 0.85);
+  --cv-transcript: #0e1217;
+  --cv-panel: #14181e;
+  --cv-raised: #161b22;
+  --cv-inset: #101319;
+  --cv-chip: rgba(120, 128, 138, 0.13);
+  --cv-border: rgba(255, 255, 255, 0.08);
+  --cv-border-strong: rgba(255, 255, 255, 0.16);
+
+  --cv-text: #e7eaee;
+  --cv-text-secondary: #c4cad2;
+  --cv-text-muted: #8b929c;
+  --cv-text-faint: #5f6772;
+
+  --cv-primary: #3ecf8e; /* green  — verified / accepted / brand */
+  --cv-expert: #a78bfa;  /* purple — expert model / agent        */
+  --cv-signal: #e0a458;  /* amber  — cross-project signal / draft */
+  --cv-danger: #e5736b;  /* red    — will-break / destructive     */
+
+  --cv-font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --cv-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Global UI scale. Everything sized is in rem, and the root font-size below
+     is `16px * --cv-scale`, so bumping this one number grows the whole UI
+     proportionally. Unlike `zoom` it doesn't touch the viewport, so media
+     breakpoints and fixed/`vh` layout keep working. */
+  --cv-scale: 1.15;
+
+  /* Type scale — the finite set of font sizes the UI draws from (px at scale 1
+     in comments). Applied via `.cv-fs-*` utilities; sizes off this ladder were
+     snapped to the nearest step. */
+  --cv-text-2xs: 0.625rem;   /* 10 */
+  --cv-text-xs:  0.6875rem;  /* 11 */
+  --cv-text-sm:  0.75rem;    /* 12 */
+  --cv-text-md:  0.8125rem;  /* 13 */
+  --cv-text-lg:  0.875rem;   /* 14 — body base */
+  --cv-text-xl:  1rem;       /* 16 */
+  --cv-text-2xl: 1.125rem;   /* 18 */
+  --cv-text-3xl: 1.25rem;    /* 20 */
+  --cv-text-4xl: 1.5rem;     /* 24 */
+  --cv-text-5xl: 1.875rem;   /* 30 */
+
+  /* Spacing scale (px at scale 1). Fine-grained by design: the layout uses a
+     ~1px vertical rhythm, so steps run close together in the dense zone. */
+  --cv-space-2:  0.125rem;
+  --cv-space-4:  0.25rem;
+  --cv-space-6:  0.375rem;
+  --cv-space-7:  0.4375rem;
+  --cv-space-8:  0.5rem;
+  --cv-space-9:  0.5625rem;
+  --cv-space-10: 0.625rem;
+  --cv-space-11: 0.6875rem;
+  --cv-space-12: 0.75rem;
+  --cv-space-13: 0.8125rem;
+  --cv-space-14: 0.875rem;
+  --cv-space-16: 1rem;
+  --cv-space-18: 1.125rem;
+  --cv-space-20: 1.25rem;
+  --cv-space-22: 1.375rem;
+  --cv-space-24: 1.5rem;
+  --cv-space-28: 1.75rem;
+  --cv-space-32: 2rem;
+}
+
+/* rem base for the whole app. 1rem = 16px at scale 1; scaling multiplies it. */
+html {
+  font-size: calc(16px * var(--cv-scale));
+}
+
+[data-theme="light"] {
+  --cv-bg: #f6f7f9;
+  --cv-sidebar: #f1f3f6;
+  --cv-topbar: rgba(246, 247, 249, 0.82);
+  --cv-transcript: #eef1f5;
+  --cv-panel: #ffffff;
+  --cv-raised: #e9edf3;
+  --cv-inset: #ffffff;
+  --cv-chip: rgba(120, 128, 138, 0.13);
+  --cv-border: rgba(0, 0, 0, 0.08);
+  --cv-border-strong: rgba(0, 0, 0, 0.16);
+
+  --cv-text: #1a1e25;
+  --cv-text-secondary: #2b3039;
+  --cv-text-muted: #697079;
+  --cv-text-faint: #79818c;
+
+  --cv-primary: #1f7a4d;
+  --cv-expert: #5a40a0;
+  --cv-signal: #a25a12;
+  --cv-danger: #c0392b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+body {
+  background: var(--cv-bg);
+  /* Match the mockup's base typography so nothing ever falls back to a serif. */
+  font-family: var(--cv-font-sans);
+  color: var(--cv-text);
+}
+
+/* Headings and paragraphs carry no default margin — screens add spacing
+   explicitly via `.cv-mb-*` / `.cv-heading`. Markdown sets its own margins
+   through `.cv-md-*` classes, which outrank these element selectors. */
+h1, h2, h3, h4, h5, h6, p {
+  margin: 0;
+}

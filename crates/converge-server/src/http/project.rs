@@ -5,13 +5,12 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    GroupId, NewProject, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Storage,
+    GroupId, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Storage,
     StoreError,
 };
 use serde_json::{Value, json};
 
 use super::error::Result;
-use super::page::Page;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()

@@ -57,6 +57,19 @@ jobs:
         env:
           SQLX_OFFLINE: "false"
 
+  wasm:
+    # The client must keep compiling for the browser (the web UI consumes
+    # it); UI crates join this check as they land.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check client on wasm
+        run: cargo check -p converge-client --target wasm32-unknown-unknown
+
   clippy:
     runs-on: ubuntu-latest
     steps:

@@ -4,11 +4,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use converge_storage::{Group, GroupEdit, GroupId, NewGroup, Pagination, Storage, StoreError};
+use converge_storage::{
+    Group, GroupEdit, GroupId, NewGroup, Page, Pagination, Storage, StoreError,
+};
 use serde_json::{Value, json};
 
 use super::error::Result;
-use super::page::Page;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()

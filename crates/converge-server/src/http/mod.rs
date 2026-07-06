@@ -1,13 +1,13 @@
 //! The HTTP surface: the versioned web API under `/api/v1`.
 //!
 //! One module per resource, mirroring the storage crate; the `error` module
-//! carries the `StoreError` → status mapping and `page` the pagination
-//! envelope they all share.
+//! carries the `StoreError` → status mapping they all share; the pagination
+//! envelope (`Page`) comes from the storage crate — it's part of the wire
+//! contract shared with `converge-client`.
 
 mod decision;
 mod error;
 mod group;
-mod page;
 mod project;
 mod user;
 

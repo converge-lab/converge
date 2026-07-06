@@ -44,7 +44,11 @@ pub async fn send(
     let request = Request::builder()
         .method(method)
         .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json");
+        .header(header::CONTENT_TYPE, "application/json")
+        // rmcp's streamable-HTTP transport insists on the Accept pair and
+        // a Host header (DNS-rebinding protection); harmless for REST.
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header(header::HOST, "127.0.0.1");
     let request = match body {
         Some(v) => request.body(Body::from(v.to_string())).unwrap(),
         None => request.body(Body::empty()).unwrap(),
@@ -55,7 +59,12 @@ pub async fn send(
     let value = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            panic!(
+                "non-JSON response ({e}): {:?}",
+                String::from_utf8_lossy(&bytes)
+            )
+        })
     };
     (status, value)
 }

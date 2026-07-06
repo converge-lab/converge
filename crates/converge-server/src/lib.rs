@@ -6,5 +6,6 @@
 //! binary picks the backend (PostgreSQL) at the edge.
 
 pub mod http;
+pub mod mcp;
 
 pub use http::app;

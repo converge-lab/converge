@@ -7,7 +7,7 @@ mod telemetry;
 use anyhow::Context;
 use config::ConfigService;
 use converge_server::app;
-use converge_storage::NewUser;
+use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -24,7 +24,11 @@ async fn main() -> anyhow::Result<()> {
     let store = PgStorage::connect(&config.database_url).await?;
     store.migrate().await?;
 
-    let me = NewUser {
+    // The deployment's single-user identity: provider `local`, keyed by
+    // the configured handle. Real providers (GitHub OIDC) land beside it.
+    let me = Identity {
+        provider: "local".into(),
+        subject: config.user.handle.clone(),
         handle: config.user.handle.clone(),
         name: config.user.name.clone(),
     };

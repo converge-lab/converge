@@ -6,7 +6,7 @@ mod common;
 use common::store;
 use converge_storage::{
     AgentId, AgentKind, Agents, Author, DecisionFilter, DecisionStatus, Decisions, GroupKind,
-    Groups, NewAgent, NewDecision, NewGroup, NewProject, NewUser, Pagination, ProjectId, Projects,
+    Groups, Identity, NewAgent, NewDecision, NewGroup, NewProject, Pagination, ProjectId, Projects,
     StoreError, UserId, Users,
 };
 use converge_storage_postgres::PgStorage;
@@ -44,35 +44,55 @@ fn decision(project_id: ProjectId, authors: Vec<Author>) -> NewDecision {
     }
 }
 
+fn github(subject: &str, handle: &str, name: &str) -> Identity {
+    Identity {
+        provider: "github".into(),
+        subject: subject.into(),
+        handle: handle.into(),
+        name: name.into(),
+    }
+}
+
 #[tokio::test]
 async fn ensure_by_natural_key() {
     let (_pg, store) = store().await;
 
-    let user = NewUser {
-        handle: "singulared".into(),
-        name: "Maksim".into(),
-    };
-    let first = store.user_ensure(user.clone()).await.unwrap();
+    // `(provider, subject)` decides who; handle and name refresh on every
+    // login, so a provider-side rename propagates.
+    let first = store
+        .user_login(github("42", "singulared", "Maksim"))
+        .await
+        .unwrap();
     let again = store
-        .user_ensure(NewUser {
-            name: "Someone Else".into(),
-            ..user
-        })
+        .user_login(github("42", "renamed", "Maksim B."))
         .await
         .unwrap();
     assert_eq!(first, again);
-    // The existing row wins: display name stays as first created.
     let got = store.user_get(first).await.unwrap().unwrap();
-    assert_eq!(got.handle, "singulared");
-    assert_eq!(got.name, "Maksim");
+    assert_eq!(got.handle, "renamed");
+    assert_eq!(got.name, "Maksim B.");
+    assert_eq!(got.provider, "github");
+    assert_eq!(got.subject, "42");
+
+    // A different subject is a different person — even with the same
+    // handle (handles are not identity).
     let other = store
-        .user_ensure(NewUser {
-            handle: "other".into(),
-            name: "Other".into(),
-        })
+        .user_login(github("77", "renamed", "Impostor"))
         .await
         .unwrap();
     assert_ne!(first, other);
+
+    // Same subject under a different provider is also a different person.
+    let local = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "42".into(),
+            handle: "admin".into(),
+            name: "Admin".into(),
+        })
+        .await
+        .unwrap();
+    assert_ne!(first, local);
 
     let claude = NewAgent {
         kind: AgentKind::Model,
@@ -97,12 +117,14 @@ async fn ensure_by_natural_key() {
     assert!(store.user_get(UserId::new()).await.unwrap().is_none());
     assert!(store.agent_get(AgentId::new()).await.unwrap().is_none());
 
-    // Lists: newest first, paged like every other resource.
+    // Lists all three (same-millisecond ULIDs order by their random tails,
+    // so no order assertion between near-simultaneous creations).
     let users = store.user_list(Pagination::default()).await.unwrap();
-    assert_eq!(
-        users.iter().map(|u| u.id).collect::<Vec<_>>(),
-        vec![other, first]
-    );
+    let ids: Vec<_> = users.iter().map(|u| u.id).collect();
+    assert_eq!(ids.len(), 3);
+    for expected in [first, other, local] {
+        assert!(ids.contains(&expected));
+    }
     let agents = store
         .agent_list(Pagination {
             limit: Some(1),
@@ -119,10 +141,7 @@ async fn authorship_round_trip() {
     let (_pg, store) = store().await;
     let project_id = project(&store).await;
     let user = store
-        .user_ensure(NewUser {
-            handle: "singulared".into(),
-            name: "Maksim".into(),
-        })
+        .user_login(github("42", "singulared", "Maksim"))
         .await
         .unwrap();
     let agent = store

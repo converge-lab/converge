@@ -1,4 +1,11 @@
 //! The user — a person; one of the two author kinds.
+//!
+//! Identity is `(provider, subject)` — the immutable pair an auth provider
+//! asserts (e.g. `("github", "<numeric id>")`, or `("local", <handle>)` for
+//! the deployment's bootstrap user). `handle` is a login/username and
+//! **mutable**: providers let people rename, so every login refreshes it.
+//! Never key on a handle; key on identity. (Contrast with agents, where
+//! `(kind, name)` *is* the identity and the first write wins.)
 
 use std::future::Future;
 
@@ -7,29 +14,40 @@ use serde::{Deserialize, Serialize};
 use crate::ids::UserId;
 use crate::{Pagination, StoreError};
 
-/// A person. `handle` is the natural key — how callers name the same person
-/// across calls (a login, a username); `name` is display only. Provider
-/// identity (OAuth uid etc.) is the auth layer's concern, layered on later.
+/// A person, as stored and served.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: UserId,
+    /// The asserting auth provider (`github`, `local`, …).
+    pub provider: String,
+    /// The provider's immutable id for this person.
+    pub subject: String,
+    /// Login/username — display and mention material, refreshed on login.
     pub handle: String,
+    /// Display name, refreshed on login.
     pub name: String,
 }
 
-/// The fields required to ensure a user.
+/// A login assertion from an auth provider (or the deployment config, as
+/// provider `local`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NewUser {
+pub struct Identity {
+    pub provider: String,
+    pub subject: String,
     pub handle: String,
     pub name: String,
 }
 
 /// Storage operations on users.
 pub trait Users {
-    /// Create-if-absent by `handle` — deterministic and race-safe (a single
-    /// upsert, never scan-then-create). An existing user wins: `name` is
-    /// stored only on first creation.
-    fn user_ensure(&self, new: NewUser) -> impl Future<Output = Result<UserId, StoreError>> + Send;
+    /// Create-or-refresh by identity — deterministic and race-safe (a
+    /// single upsert). The `(provider, subject)` pair decides *who*; the
+    /// mutable fields (`handle`, `name`) are refreshed on every login, so
+    /// renames on the provider side propagate.
+    fn user_login(
+        &self,
+        identity: Identity,
+    ) -> impl Future<Output = Result<UserId, StoreError>> + Send;
 
     fn user_get(&self, id: UserId)
     -> impl Future<Output = Result<Option<User>, StoreError>> + Send;

@@ -4,8 +4,8 @@
 use converge_client::Client;
 use converge_server::app;
 use converge_storage::{
-    DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupKind, NewDecision, NewGroup,
-    NewProject, NewUser, Pagination, StoreError,
+    DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupKind, Identity, NewDecision,
+    NewGroup, NewProject, Pagination, StoreError,
 };
 use converge_storage_postgres::PgStorage;
 use testcontainers_modules::postgres::Postgres;
@@ -25,7 +25,9 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
 
-    let me = NewUser {
+    let me = Identity {
+        provider: "local".into(),
+        subject: "admin".into(),
         handle: "admin".into(),
         name: "Admin".into(),
     };

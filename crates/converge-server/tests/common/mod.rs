@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use converge_server::app;
-use converge_storage::NewUser;
+use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -27,7 +27,9 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
-    let me = NewUser {
+    let me = Identity {
+        provider: "local".into(),
+        subject: "admin".into(),
         handle: "admin".into(),
         name: "Admin".into(),
     };

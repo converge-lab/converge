@@ -6,7 +6,7 @@ mod common;
 use axum::Router;
 use axum::http::StatusCode;
 use common::{send, server};
-use converge_storage::{AgentKind, Agents, NewAgent, NewUser, Users};
+use converge_storage::{AgentKind, Agents, Identity, NewAgent, Users};
 use serde_json::{Value, json};
 
 /// Group + project over the API; returns their ids.
@@ -58,7 +58,9 @@ async fn decision_crud() {
     // Authors and alternatives pass through. Users/agents have no REST
     // surface yet (that's the auth slice) — seed them via the store.
     let user = store
-        .user_ensure(NewUser {
+        .user_login(Identity {
+            provider: "github".into(),
+            subject: "42".into(),
             handle: "singulared".into(),
             name: "Maksim".into(),
         })

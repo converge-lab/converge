@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users (id, provider, subject, handle, name)\n               values ($1, $2, $3, $4, $5)\n               on conflict (provider, subject)\n               do update set handle = excluded.handle, name = excluded.name\n               returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e5adb5bbd49737081d9a4d32dc386e6cca324cfd6cb064e6df7a175719f28740"
+}

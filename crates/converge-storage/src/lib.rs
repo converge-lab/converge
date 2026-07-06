@@ -37,7 +37,7 @@ pub use decision::{
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
-pub use user::{NewUser, User, Users};
+pub use user::{Identity, User, Users};
 
 /// Cursor pagination for list reads, generic over the listed resource's id.
 /// Lists are newest-first; `cursor` is the last id of the previous page and

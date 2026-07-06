@@ -110,6 +110,8 @@ impl From<AgentKind> for converge_storage::AgentKind {
 /// One `users` row, as fetched.
 pub(crate) struct UserRow {
     pub id: Uuid,
+    pub provider: String,
+    pub subject: String,
     pub handle: String,
     pub name: String,
 }
@@ -118,6 +120,8 @@ impl From<UserRow> for User {
     fn from(r: UserRow) -> Self {
         User {
             id: id(r.id),
+            provider: r.provider,
+            subject: r.subject,
             handle: r.handle,
             name: r.name,
         }

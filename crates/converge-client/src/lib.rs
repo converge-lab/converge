@@ -13,8 +13,8 @@
 // on this crate alone and never name the storage crate.
 pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, Author, Decision, DecisionEdit, DecisionFilter,
-    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, NewAgent, NewDecision,
-    NewGroup, NewProject, NewUser, Page, Pagination, Project, ProjectEdit, ProjectFilter,
+    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, Identity, NewAgent,
+    NewDecision, NewGroup, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter,
     ProjectId, Related, StoreError, User, UserId,
 };
 use reqwest::{Response, StatusCode};

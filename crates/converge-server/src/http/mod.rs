@@ -16,7 +16,7 @@ use std::path::Path;
 
 use axum::Router;
 use axum::routing::get;
-use converge_storage::{NewUser, Storage};
+use converge_storage::{Identity, Storage};
 use tower_http::services::{ServeDir, ServeFile};
 
 /// The application router over any storage backend: the versioned web API
@@ -26,7 +26,7 @@ use tower_http::services::{ServeDir, ServeFile};
 /// assets are served same-origin as the fallback — the single-binary
 /// deployment (the app is hash-routed, so `/` → `index.html` suffices;
 /// no history-API rewrites needed).
-pub fn app<S: Storage + 'static>(store: S, me: NewUser, web: Option<&Path>) -> Router {
+pub fn app<S: Storage + 'static>(store: S, me: Identity, web: Option<&Path>) -> Router {
     let router = Router::new()
         .route("/api/v1/healthz", get(healthz))
         .merge(group::routes().with_state(store.clone()))

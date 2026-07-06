@@ -33,9 +33,12 @@ create index on projects (group_id);
 -- deterministic create-if-absent (insert … on conflict), never
 -- scan-then-create.
 create table users (
-    id     uuid primary key,
-    handle text not null unique,                                    -- natural key
-    name   text not null                                            -- display only
+    id       uuid primary key,
+    provider text not null,                                         -- asserting auth provider
+    subject  text not null,                                         -- provider's immutable id
+    handle   text not null,                                         -- login; refreshed on login
+    name     text not null,                                         -- display; refreshed on login
+    unique (provider, subject)                                      -- identity
 );
 create table agents (
     id   uuid primary key,

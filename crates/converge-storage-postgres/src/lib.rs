@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
-    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, NewAgent, NewDecision,
-    NewGroup, NewProject, NewUser, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
+    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, NewAgent,
+    NewDecision, NewGroup, NewProject, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
     Projects, Related, StoreError, User, UserId, Users,
 };
 use sqlx::PgPool;
@@ -87,17 +87,22 @@ impl PgStorage {
 }
 
 impl Users for PgStorage {
-    async fn user_ensure(&self, new: NewUser) -> Result<UserId, StoreError> {
-        // The no-op update makes `returning` yield the existing row on
-        // conflict (the freshly minted id is discarded); name stays as
-        // first created.
+    async fn user_login(&self, identity: Identity) -> Result<UserId, StoreError> {
+        // `(provider, subject)` decides who; the mutable fields refresh on
+        // every login so provider-side renames propagate. On conflict the
+        // freshly minted id is discarded and `returning` yields the
+        // existing row.
         let row = sqlx::query!(
-            r#"insert into users (id, handle, name) values ($1, $2, $3)
-               on conflict (handle) do update set handle = excluded.handle
+            r#"insert into users (id, provider, subject, handle, name)
+               values ($1, $2, $3, $4, $5)
+               on conflict (provider, subject)
+               do update set handle = excluded.handle, name = excluded.name
                returning id"#,
             Uuid::from(UserId::new().ulid()),
-            new.handle,
-            new.name,
+            identity.provider,
+            identity.subject,
+            identity.handle,
+            identity.name,
         )
         .fetch_one(&self.pool)
         .await
@@ -108,7 +113,7 @@ impl Users for PgStorage {
     async fn user_get(&self, id: UserId) -> Result<Option<User>, StoreError> {
         Ok(sqlx::query_as!(
             wire::UserRow,
-            "select id, handle, name from users where id = $1",
+            "select id, provider, subject, handle, name from users where id = $1",
             Uuid::from(id.ulid()),
         )
         .fetch_optional(&self.pool)
@@ -120,7 +125,7 @@ impl Users for PgStorage {
     async fn user_list(&self, page: Pagination<UserId>) -> Result<Vec<User>, StoreError> {
         Ok(sqlx::query_as!(
             wire::UserRow,
-            r#"select id, handle, name from users
+            r#"select id, provider, subject, handle, name from users
                where ($1::uuid is null or id < $1)
                order by id desc
                limit $2"#,

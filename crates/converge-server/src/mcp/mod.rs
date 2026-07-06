@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use converge_storage::{
-    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, NewAgent, NewDecision,
-    NewUser, Pagination, ProjectId, Storage, StoreError,
+    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, NewAgent,
+    NewDecision, Pagination, ProjectId, Storage, StoreError,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 /// The `/mcp` tower service, ready to nest into the app router.
 pub fn service<S: Storage + 'static>(
     store: S,
-    me: NewUser,
+    me: Identity,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
     let memory = Memory::new(store, me);
     // Stateless + plain-JSON POST responses: nothing to orphan on
@@ -60,7 +60,7 @@ pub struct Memory<S> {
     #[allow(dead_code)] // read by the macro-generated tool dispatcher
     tool_router: ToolRouter<Self>,
     store: S,
-    me: NewUser,
+    me: Identity,
 }
 
 // ---- tool wire types (ids as strings; instants never accepted) -----------
@@ -124,7 +124,7 @@ pub struct ProjectList {}
 
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
-    pub fn new(store: S, me: NewUser) -> Self {
+    pub fn new(store: S, me: Identity) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store,
@@ -195,7 +195,7 @@ impl<S: Storage + 'static> Memory<S> {
         // agent stands in.
         let user = self
             .store
-            .user_ensure(self.me.clone())
+            .user_login(self.me.clone())
             .await
             .map_err(map_err)?;
         let client = context

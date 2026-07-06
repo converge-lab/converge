@@ -4,7 +4,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use converge_server::app;
-use converge_storage::NewUser;
+use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use testcontainers_modules::postgres::Postgres;
@@ -24,7 +24,9 @@ async fn healthz() {
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
 
-    let me = NewUser {
+    let me = Identity {
+        provider: "local".into(),
+        subject: "admin".into(),
         handle: "admin".into(),
         name: "Admin".into(),
     };

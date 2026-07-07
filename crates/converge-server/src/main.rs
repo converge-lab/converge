@@ -100,11 +100,19 @@ async fn main() -> anyhow::Result<()> {
         info!(assets = %assets.display(), "serving web assets");
     }
     let sessions = Sessions::new(config.auth.session_secret.as_deref());
+    let oidc = config
+        .auth
+        .oidc
+        .clone()
+        .map(converge_server::oidc::Oidc::new);
+    if let Some(oidc) = &oidc {
+        info!(provider = %oidc.label(), "identity-provider sign-in enabled");
+    }
     let listener = TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "converge-server listening");
     axum::serve(
         listener,
-        app(store, me, sessions, config.web.assets.as_deref()),
+        app(store, me, sessions, oidc, config.web.assets.as_deref()),
     )
     .with_graceful_shutdown(shutdown())
     .await?;

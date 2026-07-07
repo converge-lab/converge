@@ -8,5 +8,6 @@
 pub mod auth;
 pub mod http;
 pub mod mcp;
+pub mod oidc;
 
 pub use http::app;

@@ -44,7 +44,13 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
     tokio::spawn(async move {
         axum::serve(
             listener,
-            app(store, me, Sessions::new(Some("test-session-secret")), None),
+            app(
+                store,
+                me,
+                Sessions::new(Some("test-session-secret")),
+                None,
+                None,
+            ),
         )
         .await
         .unwrap();

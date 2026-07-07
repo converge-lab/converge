@@ -45,13 +45,33 @@ your terminal (never to logs, where collectors would keep it). Then:
   and read-only relation projections (`/groups/{id}/decisions` is the
   group-wide feed).
 
-> **Security note:** every surface except the health probe, the session
-> exchange, and the static assets requires a credential — a bearer token
-> (agents, CLI) or the session cookie (browser). GitHub sign-in and the
-> MCP OAuth flow are the next milestone. The compose file publishes the
-> port on the host loopback only — a sane default until you put TLS in
-> front. Set `CONVERGE_AUTH__SESSION_SECRET` to keep browser sessions
-> across restarts.
+> **Security note:** every surface except the health probe, the sign-in
+> endpoints, and the static assets requires a credential — a bearer token
+> (agents, CLI) or the session cookie (browser). The compose file
+> publishes the port on the host loopback only — a sane default until you
+> put TLS in front. Set `CONVERGE_AUTH__SESSION_SECRET` to keep browser
+> sessions across restarts.
+
+### Identity-provider sign-in (optional)
+
+The auth core needs no egress — closed-contour installations work with
+tokens alone. For team sign-in, point `[auth.oidc]` at any OIDC issuer
+with standard discovery (Keycloak, Authentik, Dex, GitLab, Forgejo…);
+GitHub is the one built-in special case (it speaks OAuth2, not OIDC):
+
+```toml
+[auth.oidc]
+provider = "github"        # or any name for a generic issuer ("keycloak", …)
+# issuer = "https://sso.example.com/realms/main"   # generic providers only
+client_id = "…"
+client_secret = "…"
+public_url = "https://converge.example.com"  # register {public_url}/auth/callback
+allowed = ["singulared"]   # optional handle allowlist; absent = the IdP decides
+```
+
+The login screen then offers "Sign in with …" beside the token paste.
+Every authenticated user currently sees everything — multi-user today
+means a shared-trust team; per-group authorization is a later milestone.
 
 ## Development
 

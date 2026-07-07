@@ -68,9 +68,10 @@ tower-http = { version = "0.6", features = ["fs"] }
 # MCP server (the /mcp endpoint) — stateless streamable-HTTP.
 rmcp = { version = "1", features = ["server", "transport-streamable-http-server"] }
 
-# Auth: token minting + hashing, session JWTs, cookie extraction
+# Auth: token minting + hashing, session JWTs, cookie extraction.
 rand = "0.9"
 sha2 = "0.10"
+base64 = "0.22"
 jsonwebtoken = "9"
 axum-extra = { version = "0.10", features = ["cookie"] }
 

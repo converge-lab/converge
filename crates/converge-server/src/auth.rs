@@ -98,6 +98,20 @@ impl Sessions {
     }
 }
 
+/// The session cookie, ready to set: `HttpOnly` (never visible to JS),
+/// `SameSite=Strict`, whole-site path, living [`SESSION_TTL`]. Shared by
+/// the token exchange and the OIDC callback so the two entrances can't
+/// drift.
+pub fn cookie(jwt: String) -> axum_extra::extract::cookie::Cookie<'static> {
+    use axum_extra::extract::cookie::{Cookie, SameSite};
+    Cookie::build((COOKIE, jwt))
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .max_age(SESSION_TTL)
+        .build()
+}
+
 /// The stored form of a token secret.
 pub fn hash(secret: &str) -> String {
     hex(&Sha256::digest(secret.as_bytes()))

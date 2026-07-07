@@ -38,6 +38,16 @@ pub struct Identity {
     pub name: String,
 }
 
+/// Server auth capabilities (`GET /api/v1/auth`, open) — what the login
+/// screen needs before anyone is authenticated. A wire type, not a
+/// storage concern.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthInfo {
+    /// Display name of the configured identity provider ("GitHub",
+    /// "Keycloak", …) — `None` when sign-in is token-paste only.
+    pub oidc: Option<String>,
+}
+
 /// Storage operations on users.
 pub trait Users {
     /// Create-or-refresh by identity — deterministic and race-safe (a

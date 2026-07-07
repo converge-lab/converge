@@ -310,6 +310,17 @@ fn boot_loading() -> impl IntoView {
 fn login() -> impl IntoView + use<> {
     let (token, set_token) = signal(String::new());
     let (notice, set_notice) = signal(None::<String>);
+    // Does this deployment offer IdP sign-in? (Open capability read; the
+    // embedded build has no API to ask.)
+    let (idp, set_idp) = signal(None::<String>);
+    #[cfg(feature = "api")]
+    leptos::task::spawn_local(async move {
+        if let Ok(info) = crate::store::client().auth_info().await {
+            set_idp.set(info.oidc);
+        }
+    });
+    #[cfg(not(feature = "api"))]
+    let _ = set_idp;
     #[cfg(feature = "api")]
     let submit = move || {
         let secret = token.get_untracked();
@@ -359,6 +370,18 @@ fn login() -> impl IntoView + use<> {
                     />
                 </div>
                 <Button label="Sign in" on_click=Callback::new(move |()| submit()) />
+                {move || {
+                    idp.get()
+                        .map(|label| {
+                            view! {
+                                <div class="cv-mt-16">
+                                    <a class="cv-btn cv-btn--outline cv-btn--neutral" href="/auth/login">
+                                        {format!("Sign in with {label}")}
+                                    </a>
+                                </div>
+                            }
+                        })
+                }}
                 {move || {
                     notice
                         .get()

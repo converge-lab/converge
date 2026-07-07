@@ -621,6 +621,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
+ "base64",
  "clap",
  "config",
  "converge-storage",
@@ -628,6 +629,7 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "rand 0.9.4",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
@@ -641,6 +643,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ulid",
+ "url",
 ]
 
 [[package]]

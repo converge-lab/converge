@@ -13,8 +13,13 @@ axum.workspace = true
 tower-http.workspace = true
 rand.workspace = true
 sha2.workspace = true
+base64.workspace = true
 jsonwebtoken.workspace = true
 axum-extra.workspace = true
+# OIDC: discovery, code exchange, userinfo — the same rustls reqwest the
+# client crate uses.
+reqwest.workspace = true
+url.workspace = true
 rmcp.workspace = true
 anyhow.workspace = true
 clap.workspace = true

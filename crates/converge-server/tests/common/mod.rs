@@ -47,7 +47,13 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
     (
         node,
         store.clone(),
-        app(store, me, Sessions::new(Some("test-session-secret")), None),
+        app(
+            store,
+            me,
+            Sessions::new(Some("test-session-secret")),
+            None,
+            None,
+        ),
     )
 }
 

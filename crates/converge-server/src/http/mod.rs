@@ -9,12 +9,14 @@ mod agent;
 mod decision;
 mod error;
 mod group;
+mod oauth;
 mod project;
 mod session;
 mod token;
 mod user;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use axum::routing::get;
 use axum::{Router, middleware};
@@ -22,6 +24,7 @@ use converge_storage::{Identity, Storage};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::auth::Sessions;
+use crate::oidc::Oidc;
 
 /// The application router over any storage backend: the versioned web API
 /// plus the unversioned, stateless `/mcp` endpoint — both behind
@@ -36,8 +39,10 @@ pub fn app<S: Storage + 'static>(
     store: S,
     me: Identity,
     sessions: Sessions,
+    oidc: Option<Oidc>,
     web: Option<&Path>,
 ) -> Router {
+    let oidc = Arc::new(oidc);
     let protected = Router::new()
         .merge(group::routes().with_state(store.clone()))
         .merge(project::routes().with_state(store.clone()))
@@ -52,6 +57,7 @@ pub fn app<S: Storage + 'static>(
         ));
     let router = Router::new()
         .route("/api/v1/healthz", get(healthz))
+        .merge(oauth::routes().with_state((store.clone(), sessions.clone(), oidc)))
         .merge(session::routes().with_state((store, sessions)))
         .merge(protected);
     match web {

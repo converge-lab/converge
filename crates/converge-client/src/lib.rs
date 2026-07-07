@@ -12,10 +12,11 @@
 // mention is re-exported, so consumers (the web UI, the future CLI) depend
 // on this crate alone and never name the storage crate.
 pub use converge_storage::{
-    Agent, AgentId, AgentKind, Alternative, Author, Decision, DecisionEdit, DecisionFilter,
-    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, Identity, Minted,
-    NewAgent, NewDecision, NewGroup, NewProject, NewToken, Page, Pagination, Project, ProjectEdit,
-    ProjectFilter, ProjectId, Related, StoreError, Token, TokenId, User, UserId,
+    Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
+    DecisionFilter, DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind,
+    Identity, Minted, NewAgent, NewDecision, NewGroup, NewProject, NewToken, Page, Pagination,
+    Project, ProjectEdit, ProjectFilter, ProjectId, Related, StoreError, Token, TokenId, User,
+    UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -193,6 +194,21 @@ impl Client {
     /// The one-hop graph neighbourhood, both directions.
     pub async fn decision_edges(&self, id: DecisionId) -> Result<Option<Edges>, StoreError> {
         self.fetch(&format!("decisions/{id}/edges")).await
+    }
+
+    /// Auth capabilities (open — the login screen calls this before any
+    /// credential exists).
+    pub async fn auth_info(&self) -> Result<AuthInfo, StoreError> {
+        let response = self
+            .http
+            .get(self.url("auth"))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::OK => Ok(response.json().await.map_err(transport)?),
+            _ => Err(fail(response).await),
+        }
     }
 
     // Session (the browser's credential exchange)

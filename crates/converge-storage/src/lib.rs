@@ -39,7 +39,7 @@ pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, TokenId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
 pub use token::{Minted, NewToken, Token, Tokens};
-pub use user::{Identity, User, Users};
+pub use user::{AuthInfo, Identity, User, Users};
 
 /// Cursor pagination for list reads, generic over the listed resource's id.
 /// Lists are newest-first; `cursor` is the last id of the previous page and

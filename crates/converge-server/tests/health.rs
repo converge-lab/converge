@@ -36,6 +36,7 @@ async fn healthz() {
         me.clone(),
         Sessions::new(Some("test-session-secret")),
         None,
+        None,
     )
     .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
     .await
@@ -48,6 +49,7 @@ async fn healthz() {
         PgStorage::connect(&url).await.unwrap(),
         me.clone(),
         Sessions::new(Some("test-session-secret")),
+        None,
         None,
     );
     for (uri, token) in [
@@ -80,6 +82,7 @@ async fn healthz() {
         store,
         me,
         Sessions::new(Some("test-session-secret")),
+        None,
         Some(&dist),
     );
     for uri in ["/", "/anything-else"] {

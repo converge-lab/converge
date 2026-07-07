@@ -11,13 +11,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use converge_storage::Storage;
 use serde::Deserialize;
 use serde_json::json;
 
 use super::error::Error;
-use crate::auth::{self, COOKIE, SESSION_TTL, Sessions};
+use crate::auth::{self, COOKIE, Sessions};
 
 pub fn routes<S: Storage + 'static>() -> Router<(S, Sessions)> {
     Router::new().route("/api/v1/session", post(login::<S>).delete(logout))
@@ -46,13 +46,11 @@ async fn login<S: Storage>(
         }
         Err(e) => return Error::from(e).into_response(),
     };
-    let cookie = Cookie::build((COOKIE, sessions.issue(user)))
-        .http_only(true)
-        .same_site(SameSite::Strict)
-        .path("/")
-        .max_age(SESSION_TTL)
-        .build();
-    (jar.add(cookie), StatusCode::NO_CONTENT).into_response()
+    (
+        jar.add(auth::cookie(sessions.issue(user))),
+        StatusCode::NO_CONTENT,
+    )
+        .into_response()
 }
 
 async fn logout(jar: CookieJar) -> (CookieJar, StatusCode) {

@@ -118,6 +118,11 @@ pub struct Auth {
     /// to keep sessions across restarts.
     #[serde(default)]
     pub session_secret: Option<String>,
+    /// Identity-provider sign-in (`[auth.oidc]`, see
+    /// [`converge_server::oidc::Settings`]). Absent → token-paste only;
+    /// the auth core never needs egress.
+    #[serde(default)]
+    pub oidc: Option<converge_server::oidc::Settings>,
 }
 
 /// Logging configuration.

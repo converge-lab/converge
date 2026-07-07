@@ -14,7 +14,7 @@ use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
     DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, NewAgent,
     NewDecision, NewGroup, NewProject, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
-    Projects, Related, StoreError, User, UserId, Users,
+    Projects, Related, StoreError, Token, TokenId, Tokens, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -137,6 +137,62 @@ impl Users for PgStorage {
         .map_err(db_err)?
         .into_iter()
         .map(User::from)
+        .collect())
+    }
+}
+
+impl Tokens for PgStorage {
+    async fn token_add(
+        &self,
+        user: UserId,
+        label: String,
+        hash: String,
+    ) -> Result<TokenId, StoreError> {
+        let id = TokenId::new();
+        sqlx::query!(
+            "insert into tokens (id, user_id, hash, label) values ($1, $2, $3, $4)",
+            Uuid::from(id.ulid()),
+            Uuid::from(user.ulid()),
+            hash,
+            label,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(id)
+    }
+
+    async fn token_user(&self, hash: &str) -> Result<Option<UserId>, StoreError> {
+        Ok(
+            sqlx::query!("select user_id from tokens where hash = $1", hash)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?
+                .map(|r| wire::id(r.user_id)),
+        )
+    }
+
+    async fn token_list(
+        &self,
+        user: UserId,
+        page: Pagination<TokenId>,
+    ) -> Result<Vec<Token>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::TokenRow,
+            r#"select id, user_id, label, created_at from tokens
+               where user_id = $1
+                 and ($2::uuid is null or id < $2)
+               order by id desc
+               limit $3"#,
+            Uuid::from(user.ulid()),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+            page.limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Token::from)
         .collect())
     }
 }

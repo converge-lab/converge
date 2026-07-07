@@ -82,6 +82,9 @@ async fn project_round_trip() {
         .await
         .unwrap();
 
+    // This test asserts newest-first ordering, and same-millisecond ULIDs
+    // order by their random tails — space the creations out one tick.
+    let tick = || std::thread::sleep(std::time::Duration::from_millis(2));
     let p1 = store
         .project_add(NewProject {
             group_id: home,
@@ -90,6 +93,7 @@ async fn project_round_trip() {
         })
         .await
         .unwrap();
+    tick();
     let p2 = store
         .project_add(NewProject {
             group_id: home,
@@ -98,6 +102,7 @@ async fn project_round_trip() {
         })
         .await
         .unwrap();
+    tick();
     let p3 = store
         .project_add(NewProject {
             group_id: other,

@@ -4,8 +4,8 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use converge_server::app;
-use converge_storage::Identity;
+use converge_server::{app, auth};
+use converge_storage::{Identity, Tokens, Users};
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -14,9 +14,14 @@ use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
 use tower::ServiceExt;
 
-/// Boot a fresh Postgres, migrate, build the app. The container lives as
-/// long as the returned handle. The store handle lets tests seed around
-/// surfaces the API deliberately doesn't expose yet (users/agents).
+/// The bearer secret every harness request presents (hashed into the
+/// store at boot, exactly like the real bootstrap flow).
+pub const TOKEN: &str = "cvg_test";
+
+/// Boot a fresh Postgres, migrate, log the admin in with a token, build
+/// the app. The container lives as long as the returned handle. The store
+/// handle lets tests seed around surfaces the API deliberately doesn't
+/// expose yet (users/agents).
 pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
     let node = Postgres::default()
         .with_tag("16-alpine")
@@ -33,6 +38,11 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
         handle: "admin".into(),
         name: "Admin".into(),
     };
+    let admin = store.user_login(me.clone()).await.unwrap();
+    store
+        .token_add(admin, "test".into(), auth::hash(TOKEN))
+        .await
+        .unwrap();
     (node, store.clone(), app(store, me, None))
 }
 
@@ -50,7 +60,8 @@ pub async fn send(
         // rmcp's streamable-HTTP transport insists on the Accept pair and
         // a Host header (DNS-rebinding protection); harmless for REST.
         .header(header::ACCEPT, "application/json, text/event-stream")
-        .header(header::HOST, "127.0.0.1");
+        .header(header::HOST, "127.0.0.1")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
     let request = match body {
         Some(v) => request.body(Body::from(v.to_string())).unwrap(),
         None => request.body(Body::empty()).unwrap(),

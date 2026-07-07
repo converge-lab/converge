@@ -3,7 +3,7 @@
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
 use converge_storage::{
-    Agent, Alternative, Author, Decision, Group, Project, ProjectId, StoreError, User,
+    Agent, Alternative, Author, Decision, Group, Project, ProjectId, StoreError, Token, User,
 };
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -124,6 +124,25 @@ impl From<UserRow> for User {
             subject: r.subject,
             handle: r.handle,
             name: r.name,
+        }
+    }
+}
+
+/// One `tokens` row, as listed (the hash never leaves the backend).
+pub(crate) struct TokenRow {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub label: String,
+    pub created_at: OffsetDateTime,
+}
+
+impl From<TokenRow> for Token {
+    fn from(r: TokenRow) -> Self {
+        Token {
+            id: id(r.id),
+            user_id: id(r.user_id),
+            label: r.label,
+            created_at: r.created_at,
         }
     }
 }

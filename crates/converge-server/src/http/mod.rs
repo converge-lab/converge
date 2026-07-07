@@ -14,27 +14,34 @@ mod user;
 
 use std::path::Path;
 
-use axum::Router;
 use axum::routing::get;
+use axum::{Router, middleware};
 use converge_storage::{Identity, Storage};
 use tower_http::services::{ServeDir, ServeFile};
 
 /// The application router over any storage backend: the versioned web API
-/// plus the unversioned, stateless `/mcp` endpoint. `me` is the identity
-/// `/api/v1/users/me` resolves to (and MCP authorship stamps) in
-/// single-user mode. When `web` names a trunk `dist/` directory, its
-/// assets are served same-origin as the fallback — the single-binary
-/// deployment (the app is hash-routed, so `/` → `index.html` suffices;
-/// no history-API rewrites needed).
+/// plus the unversioned, stateless `/mcp` endpoint — both behind bearer
+/// authentication (`crate::auth`), no fallback caller. `me` is the
+/// deployment identity MCP authorship stamps in single-user mode. Open
+/// paths: `healthz` and, when `web` names a trunk `dist/` directory, the
+/// static assets served same-origin as the fallback (the app must load to
+/// show a login screen; it is hash-routed, so `/` → `index.html`
+/// suffices).
 pub fn app<S: Storage + 'static>(store: S, me: Identity, web: Option<&Path>) -> Router {
-    let router = Router::new()
-        .route("/api/v1/healthz", get(healthz))
+    let protected = Router::new()
         .merge(group::routes().with_state(store.clone()))
         .merge(project::routes().with_state(store.clone()))
         .merge(decision::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
-        .merge(user::routes().with_state((store.clone(), me.clone())))
-        .nest_service("/mcp", crate::mcp::service(store, me));
+        .merge(user::routes().with_state(store.clone()))
+        .nest_service("/mcp", crate::mcp::service(store.clone(), me))
+        .layer(middleware::from_fn_with_state(
+            store,
+            crate::auth::require::<S>,
+        ));
+    let router = Router::new()
+        .route("/api/v1/healthz", get(healthz))
+        .merge(protected);
     match web {
         Some(dist) => router.fallback_service(
             ServeDir::new(dist).fallback(ServeFile::new(dist.join("index.html"))),

@@ -14,15 +14,18 @@ and one REST API under them both.
 
 ```sh
 docker compose up --build
+docker compose exec converge converge-server token mint   # prints your bearer token
 ```
 
-Then:
+Authentication is always on; the mint command prints a `cvg_…` secret to
+your terminal (never to logs, where collectors would keep it). Then:
 
 - **Web UI**: <http://127.0.0.1:8080>
 - **MCP** (Claude Code shown; any MCP client works):
 
   ```sh
-  claude mcp add --transport http converge http://127.0.0.1:8080/mcp
+  claude mcp add --transport http converge http://127.0.0.1:8080/mcp \
+    --header "Authorization: Bearer cvg_..."
   ```
 
   Agents get four tools: `project_list` (discover ids), `decision_add`
@@ -36,9 +39,10 @@ Then:
   and read-only relation projections (`/groups/{id}/decisions` is the
   group-wide feed).
 
-> **Security note:** there is **no authentication yet** — OAuth is the next
-> milestone. The compose file publishes the port on the host loopback only;
-> keep it there (or on a private network you trust) until auth lands.
+> **Security note:** every surface except the health probe and the static
+> assets requires a bearer token; OAuth (GitHub) and browser sessions are
+> the next milestone. The compose file publishes the port on the host
+> loopback only — a sane default until you put TLS in front.
 
 ## Development
 

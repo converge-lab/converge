@@ -47,6 +47,18 @@ create table agents (
     unique (kind, name)                                             -- natural key
 );
 
+-- Bearer tokens, hashed at rest — the secret is generated and shown once
+-- by the server, never stored. The bootstrap admin token is minted on
+-- first boot.
+create table tokens (
+    id         uuid primary key,
+    user_id    uuid not null references users(id) on delete cascade,
+    hash       text not null unique,
+    label      text not null,
+    created_at timestamptz not null default now()
+);
+create index on tokens (user_id);
+
 -- The ADR record AND the graph node.
 create table decisions (
     id           uuid primary key,

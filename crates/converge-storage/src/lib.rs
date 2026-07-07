@@ -27,6 +27,7 @@ pub mod decision;
 pub mod group;
 pub mod ids;
 pub mod project;
+pub mod token;
 pub mod user;
 
 pub use agent::{Agent, AgentKind, Agents, NewAgent};
@@ -35,8 +36,9 @@ pub use decision::{
     NewDecision, Related,
 };
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
-pub use ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
+pub use ids::{AgentId, DecisionId, GroupId, ProjectId, TokenId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
+pub use token::{Token, Tokens};
 pub use user::{Identity, User, Users};
 
 /// Cursor pagination for list reads, generic over the listed resource's id.
@@ -102,6 +104,12 @@ pub enum StoreError {
 
 /// The full storage surface — every resource trait, bundled. Implemented
 /// automatically for any type that implements them all.
-pub trait Storage: Groups + Projects + Users + Agents + Decisions + Clone + Send + Sync {}
+pub trait Storage:
+    Groups + Projects + Users + Agents + Tokens + Decisions + Clone + Send + Sync
+{
+}
 
-impl<T: Groups + Projects + Users + Agents + Decisions + Clone + Send + Sync> Storage for T {}
+impl<T: Groups + Projects + Users + Agents + Tokens + Decisions + Clone + Send + Sync> Storage
+    for T
+{
+}

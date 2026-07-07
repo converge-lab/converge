@@ -28,6 +28,7 @@ use url::Url;
 #[derive(Debug, Clone)]
 pub struct Client {
     base: Url,
+    token: Option<String>,
     http: reqwest::Client,
 }
 
@@ -51,7 +52,24 @@ impl Client {
     pub fn new(base: Url) -> Self {
         Self {
             base,
+            token: None,
             http: reqwest::Client::new(),
+        }
+    }
+
+    /// Authenticate every request with this bearer token. The server is
+    /// always-on auth; only the browser (session cookie) goes without.
+    pub fn with_token(self, token: impl Into<String>) -> Self {
+        Self {
+            token: Some(token.into()),
+            ..self
+        }
+    }
+
+    fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => builder.bearer_auth(token),
+            None => builder,
         }
     }
 
@@ -196,8 +214,7 @@ impl Client {
         body: &(impl Serialize + ?Sized),
     ) -> Result<Id, StoreError> {
         let response = self
-            .http
-            .post(self.url(path))
+            .authed(self.http.post(self.url(path)))
             .json(body)
             .send()
             .await
@@ -211,8 +228,7 @@ impl Client {
     /// GET one resource; `404` is `None`, matching the storage seam.
     async fn fetch<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, StoreError> {
         let response = self
-            .http
-            .get(self.url(path))
+            .authed(self.http.get(self.url(path)))
             .send()
             .await
             .map_err(transport)?;
@@ -231,8 +247,7 @@ impl Client {
         page: &(impl Serialize + ?Sized),
     ) -> Result<Page<T>, StoreError> {
         let response = self
-            .http
-            .get(self.url(path))
+            .authed(self.http.get(self.url(path)))
             .query(filter)
             .query(page)
             .send()
@@ -247,8 +262,7 @@ impl Client {
     /// PATCH an edit batch; the server answers `204`.
     async fn apply(&self, path: &str, edits: &(impl Serialize + ?Sized)) -> Result<(), StoreError> {
         let response = self
-            .http
-            .patch(self.url(path))
+            .authed(self.http.patch(self.url(path)))
             .json(edits)
             .send()
             .await

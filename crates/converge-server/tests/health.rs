@@ -36,11 +36,29 @@ async fn healthz() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let missing = app(PgStorage::connect(&url).await.unwrap(), me.clone(), None)
-        .oneshot(Request::get("/api/v1/nope").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    // Auth is always on: no token and bad tokens are 401 everywhere but
+    // healthz; unknown paths under the gate answer 401 before 404.
+    let gate = app(PgStorage::connect(&url).await.unwrap(), me.clone(), None);
+    for (uri, token) in [
+        ("/api/v1/groups", None),
+        ("/api/v1/groups", Some("Bearer cvg_wrong")),
+        ("/api/v1/nope", None),
+    ] {
+        let mut request = Request::get(uri);
+        if let Some(t) = token {
+            request = request.header("authorization", t);
+        }
+        let response = gate
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} {token:?}"
+        );
+    }
 
     // With a dist directory configured, assets serve same-origin and the
     // hash-routed app falls back to index.html; the API keeps priority.

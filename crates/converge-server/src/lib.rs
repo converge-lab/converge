@@ -5,6 +5,7 @@
 //! against the `converge_storage` traits, never a concrete backend — the
 //! binary picks the backend (PostgreSQL) at the edge.
 
+pub mod auth;
 pub mod http;
 pub mod mcp;
 

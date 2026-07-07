@@ -3,10 +3,12 @@
 
 use converge_client::Client;
 use converge_server::app;
+use converge_server::auth;
 use converge_storage::{
     DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupKind, Identity, NewDecision,
     NewGroup, NewProject, Pagination, StoreError,
 };
+use converge_storage::{Tokens, Users};
 use converge_storage_postgres::PgStorage;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -31,12 +33,18 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
         handle: "admin".into(),
         name: "Admin".into(),
     };
+    let admin = store.user_login(me.clone()).await.unwrap();
+    store
+        .token_add(admin, "test".into(), auth::hash("cvg_test"))
+        .await
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app(store, me, None)).await.unwrap();
     });
-    (node, Client::new(format!("http://{addr}").parse().unwrap()))
+    let client = Client::new(format!("http://{addr}").parse().unwrap()).with_token("cvg_test");
+    (node, client)
 }
 
 fn decision(project_id: converge_storage::ProjectId, title: &str) -> NewDecision {

@@ -27,8 +27,9 @@ pub struct AppState {
     /// gates on this: nothing that queries the dataset renders until it's
     /// `Some`, so query functions can assume a loaded dataset.
     pub dataset: Option<Rc<Dataset>>,
-    /// Set if loading failed. When present, the app shows an error screen.
-    pub error: Option<String>,
+    /// Set if loading failed. When present, the app shows an error screen
+    /// (or the login screen, when the failure is a missing credential).
+    pub error: Option<LoadError>,
     /// Index of the active group within `dataset.groups`.
     pub group: usize,
 }
@@ -38,10 +39,15 @@ pub struct AppState {
 /// spares us needless `Send + Sync` bounds.
 pub type AppStore = Store<AppState, LocalStorage>;
 
-/// Why a load failed. Carries a human-readable message; the embedded source
-/// never produces one, but an HTTP `ApiSource` will.
+/// Why a load failed. The embedded source never fails; an HTTP `ApiSource`
+/// distinguishes "you need to log in" from everything else.
 #[derive(Debug, Clone)]
-pub struct LoadError(pub String);
+pub enum LoadError {
+    /// The API wants a credential the browser doesn't hold — show login.
+    Unauthorized,
+    /// Anything else, human-readable.
+    Failed(String),
+}
 
 /// A pending dataset load. The future is intentionally *not* `Send`: it runs on
 /// the single WASM thread (via `spawn_local`) and an HTTP source's `fetch`
@@ -85,7 +91,7 @@ pub fn provide_store<S: DataSource + 'static>(source: S) -> AppStore {
     spawn_local(async move {
         match source.load().await {
             Ok(dataset) => store.dataset().set(Some(dataset)),
-            Err(err) => store.error().set(Some(err.0)),
+            Err(err) => store.error().set(Some(err)),
         }
     });
     store
@@ -110,6 +116,9 @@ pub fn provide_default_store() -> AppStore {
 /// context — M4 territory) still comes from the embedded seed, so mocked
 /// features are visibly seed-scoped in exactly one place.
 #[cfg(feature = "api")]
+pub use api::client;
+
+#[cfg(feature = "api")]
 mod api {
     use super::{DataSource, LoadError, Loading, build_dataset};
     use crate::seed::{self, wire};
@@ -128,16 +137,23 @@ mod api {
         /// `/api` to the local server in dev, and in production the server
         /// binary serves these assets itself. No baked-in URLs.
         pub fn same_origin() -> Self {
-            let origin = window().location().origin().expect("window has an origin");
-            let base = origin.parse().expect("origin is a valid URL");
-            Self {
-                client: Client::new(base),
-            }
+            Self { client: client() }
         }
     }
 
+    /// A same-origin client. Session-cookie auth rides the browser's fetch
+    /// ambiently — no token is ever held in the app.
+    pub fn client() -> Client {
+        let origin = window().location().origin().expect("window has an origin");
+        let base = origin.parse().expect("origin is a valid URL");
+        Client::new(base)
+    }
+
     fn oops(what: &str) -> impl Fn(StoreError) -> LoadError + '_ {
-        move |e| LoadError(format!("{what}: {e}"))
+        move |e| match e {
+            StoreError::Unauthorized => LoadError::Unauthorized,
+            e => LoadError::Failed(format!("{what}: {e}")),
+        }
     }
 
     impl DataSource for ApiSource {

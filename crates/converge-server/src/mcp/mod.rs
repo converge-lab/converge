@@ -363,6 +363,8 @@ fn map_err(e: StoreError) -> McpError {
         StoreError::NotFound => McpError::invalid_params("not found", None),
         StoreError::Invalid(m) => McpError::invalid_params(m, None),
         StoreError::Conflict(m) => McpError::invalid_params(m, None),
+        // Tools sit behind the auth gate; storage never returns this.
+        StoreError::Unauthorized => McpError::invalid_params("unauthorized", None),
         StoreError::Unavailable(_) | StoreError::Backend(_) => {
             tracing::error!(error = %e, "storage failure in mcp tool");
             McpError::internal_error("storage failure", None)

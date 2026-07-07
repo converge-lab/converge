@@ -20,7 +20,9 @@ docker compose exec converge converge-server token mint   # prints your bearer t
 Authentication is always on; the mint command prints a `cvg_…` secret to
 your terminal (never to logs, where collectors would keep it). Then:
 
-- **Web UI**: <http://127.0.0.1:8080>
+- **Web UI**: <http://127.0.0.1:8080> — paste the token at the sign-in
+  screen; it's exchanged for an `HttpOnly` session cookie (the secret is
+  never stored in the browser).
 - **MCP** (Claude Code shown; any MCP client works):
 
   ```sh
@@ -39,10 +41,13 @@ your terminal (never to logs, where collectors would keep it). Then:
   and read-only relation projections (`/groups/{id}/decisions` is the
   group-wide feed).
 
-> **Security note:** every surface except the health probe and the static
-> assets requires a bearer token; OAuth (GitHub) and browser sessions are
-> the next milestone. The compose file publishes the port on the host
-> loopback only — a sane default until you put TLS in front.
+> **Security note:** every surface except the health probe, the session
+> exchange, and the static assets requires a credential — a bearer token
+> (agents, CLI) or the session cookie (browser). GitHub sign-in and the
+> MCP OAuth flow are the next milestone. The compose file publishes the
+> port on the host loopback only — a sane default until you put TLS in
+> front. Set `CONVERGE_AUTH__SESSION_SECRET` to keep browser sessions
+> across restarts.
 
 ## Development
 

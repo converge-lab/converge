@@ -95,6 +95,11 @@ pub enum StoreError {
     Conflict(String),
     #[error("invalid argument: {0}")]
     Invalid(String),
+    /// Authentication required or refused. Produced by the HTTP layers
+    /// (server gate, client) — storage backends never return it; it lives
+    /// here because `StoreError` doubles as the wire error contract.
+    #[error("unauthorized")]
+    Unauthorized,
     /// Backend unreachable / transient — retryable, distinct from a logical failure.
     #[error("backend unavailable: {0}")]
     Unavailable(String),

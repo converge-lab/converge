@@ -11,6 +11,7 @@ mod telemetry;
 
 use anyhow::Context;
 use config::ConfigService;
+use converge_server::auth::Sessions;
 use converge_server::{app, auth};
 use converge_storage::{Identity, Storage};
 use converge_storage_postgres::PgStorage;
@@ -58,11 +59,15 @@ async fn main() -> anyhow::Result<()> {
     if let Some(assets) = &config.web.assets {
         info!(assets = %assets.display(), "serving web assets");
     }
+    let sessions = Sessions::new(config.auth.session_secret.as_deref());
     let listener = TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "converge-server listening");
-    axum::serve(listener, app(store, me, config.web.assets.as_deref()))
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    axum::serve(
+        listener,
+        app(store, me, sessions, config.web.assets.as_deref()),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
     info!("shut down cleanly");
     Ok(())
 }

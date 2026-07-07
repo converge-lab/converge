@@ -25,6 +25,12 @@ impl IntoResponse for Error {
             StoreError::NotFound => (StatusCode::NOT_FOUND, "not_found", self.0.to_string()),
             StoreError::Invalid(m) => (StatusCode::BAD_REQUEST, "invalid", m.clone()),
             StoreError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m.clone()),
+            // Handlers sit behind the auth gate and never see this; kept
+            // for completeness (the middleware and session endpoint build
+            // their 401s directly).
+            StoreError::Unauthorized => {
+                (StatusCode::UNAUTHORIZED, "unauthorized", self.0.to_string())
+            }
             // 5xx: log the detail, answer generically — backend internals
             // (connection strings, SQL) don't belong in responses.
             StoreError::Unavailable(_) => {

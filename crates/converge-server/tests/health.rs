@@ -4,6 +4,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use converge_server::app;
+use converge_server::auth::Sessions;
 use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
@@ -30,15 +31,25 @@ async fn healthz() {
         handle: "admin".into(),
         name: "Admin".into(),
     };
-    let response = app(store.clone(), me.clone(), None)
-        .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    let response = app(
+        store.clone(),
+        me.clone(),
+        Sessions::new(Some("test-session-secret")),
+        None,
+    )
+    .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
+    .await
+    .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     // Auth is always on: no token and bad tokens are 401 everywhere but
     // healthz; unknown paths under the gate answer 401 before 404.
-    let gate = app(PgStorage::connect(&url).await.unwrap(), me.clone(), None);
+    let gate = app(
+        PgStorage::connect(&url).await.unwrap(),
+        me.clone(),
+        Sessions::new(Some("test-session-secret")),
+        None,
+    );
     for (uri, token) in [
         ("/api/v1/groups", None),
         ("/api/v1/groups", Some("Bearer cvg_wrong")),
@@ -65,7 +76,12 @@ async fn healthz() {
     let dist = std::env::temp_dir().join(format!("converge-dist-{}", std::process::id()));
     std::fs::create_dir_all(&dist).unwrap();
     std::fs::write(dist.join("index.html"), "<title>Converge</title>").unwrap();
-    let web = app(store, me, Some(&dist));
+    let web = app(
+        store,
+        me,
+        Sessions::new(Some("test-session-secret")),
+        Some(&dist),
+    );
     for uri in ["/", "/anything-else"] {
         let response = web
             .clone()

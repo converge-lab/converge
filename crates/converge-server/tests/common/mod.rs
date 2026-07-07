@@ -4,6 +4,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use converge_server::auth::Sessions;
 use converge_server::{app, auth};
 use converge_storage::{Identity, Tokens, Users};
 use converge_storage_postgres::PgStorage;
@@ -43,10 +44,17 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
         .token_add(admin, "test".into(), auth::hash(TOKEN))
         .await
         .unwrap();
-    (node, store.clone(), app(store, me, None))
+    (
+        node,
+        store.clone(),
+        app(store, me, Sessions::new(Some("test-session-secret")), None),
+    )
 }
 
 /// Send one request; return status and parsed JSON body (`null` when empty).
+// Not every suite that pulls in the harness uses the authed helper (the
+// session suite sends raw requests on purpose).
+#[allow(dead_code)]
 pub async fn send(
     app: &Router,
     method: &str,

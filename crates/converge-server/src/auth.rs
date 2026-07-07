@@ -1,27 +1,101 @@
-//! Bearer authentication — **always on**, no fallback caller.
+//! Authentication — **always on**, no fallback caller.
 //!
-//! Tokens are `cvg_<64 hex>` secrets; storage holds only their SHA-256
-//! (high-entropy random secrets need no salt — the GitHub construction).
-//! The bootstrap admin token is minted on first boot and logged **once** —
-//! the Jupyter/Grafana pattern: one copy-paste to get in, no provider
-//! setup. Real providers (GitHub OIDC) and browser sessions layer on in
-//! the next slices; `healthz` and the static web assets are the only open
-//! paths (the app must load to show a login screen).
+//! Two credential families resolve to the same [`Caller`]:
+//!
+//! - **Opaque bearer tokens** (`cvg_<64 hex>`) for agents, the CLI, and
+//!   anything header-configured: long-lived, listable, revocable. Storage
+//!   holds only their SHA-256 (high-entropy secrets need no salt — the
+//!   GitHub construction). Minted by `converge-server token mint` on the
+//!   host — never written to logs, where collectors would keep them.
+//! - **Session JWTs** for browsers: short-lived, carried in an `HttpOnly`
+//!   cookie so the secret never touches JavaScript, signed with
+//!   [`Sessions`]' key and self-expiring — the ephemeral sibling of the
+//!   opaque tokens (expiry stands in for revocation).
+//!
+//! GitHub OIDC (the team path) and the MCP OAuth server land in the next
+//! slices; `healthz`, the session endpoint, and the static web assets are
+//! the only open paths (the app must load to show its login screen).
 
 use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum_extra::extract::CookieJar;
 use converge_storage::{Identity, Pagination, Storage, StoreError, UserId};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use time::{Duration, OffsetDateTime};
+
+/// The session cookie's name.
+pub const COOKIE: &str = "converge_session";
+
+/// How long a browser session lives. Expiry is the session's *only* end
+/// of life (no server-side revocation list) — keep it short-ish.
+pub const SESSION_TTL: Duration = Duration::days(7);
 
 /// The authenticated principal, injected request-wide by [`require`].
 #[derive(Debug, Clone, Copy)]
 pub struct Caller {
     pub user: UserId,
+}
+
+/// Signs and verifies browser-session JWTs (HS256).
+#[derive(Clone)]
+pub struct Sessions {
+    encoding: EncodingKey,
+    decoding: DecodingKey,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Claims {
+    /// The user id (ULID string).
+    sub: String,
+    /// Expiry, seconds since epoch (verified by the JWT library).
+    exp: i64,
+}
+
+impl Sessions {
+    /// A signer from the configured secret. `None` generates a random
+    /// per-boot key: everything works, but sessions reset on restart —
+    /// set `[auth] session_secret` to persist them across deploys.
+    pub fn new(secret: Option<&str>) -> Self {
+        let key = match secret {
+            Some(secret) => secret.as_bytes().to_vec(),
+            None => {
+                tracing::info!(
+                    "auth.session_secret is not set — browser sessions will reset on restart"
+                );
+                let mut bytes = vec![0u8; 32];
+                rand::rng().fill_bytes(&mut bytes);
+                bytes
+            }
+        };
+        Self {
+            encoding: EncodingKey::from_secret(&key),
+            decoding: DecodingKey::from_secret(&key),
+        }
+    }
+
+    /// Issue a session JWT for `user`, expiring in [`SESSION_TTL`].
+    pub fn issue(&self, user: UserId) -> String {
+        let claims = Claims {
+            sub: user.to_string(),
+            exp: (OffsetDateTime::now_utc() + SESSION_TTL).unix_timestamp(),
+        };
+        jsonwebtoken::encode(&Header::default(), &claims, &self.encoding)
+            .expect("HS256 encoding of plain claims cannot fail")
+    }
+
+    /// Verify a session JWT (signature + expiry) down to its user.
+    pub fn verify(&self, jwt: &str) -> Option<UserId> {
+        let data =
+            jsonwebtoken::decode::<Claims>(jwt, &self.decoding, &Validation::default()).ok()?;
+        data.claims.sub.parse::<ulid::Ulid>().ok().map(UserId::from)
+    }
 }
 
 /// The stored form of a token secret.
@@ -66,46 +140,51 @@ pub async fn hint<S: Storage>(store: &S, me: Identity) -> Result<(), StoreError>
     Ok(())
 }
 
-/// Middleware: everything behind it requires `Authorization: Bearer` with
-/// a known token; the resolved [`Caller`] rides the request extensions.
+/// Middleware: everything behind it requires a credential — a bearer
+/// token (agents, CLI) or the session cookie (browsers); the resolved
+/// [`Caller`] rides the request extensions. Bearer wins when both are
+/// present (it's the more explicit assertion).
 pub async fn require<S: Storage>(
-    State(store): State<S>,
+    State((store, sessions)): State<(S, Sessions)>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let presented = request
+    let bearer = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    let Some(secret) = presented else {
-        return unauthorized("missing bearer token");
+    let user = match bearer {
+        Some(secret) => match store.token_user(&hash(secret)).await {
+            Ok(user) => user,
+            Err(e) => {
+                tracing::error!(error = %e, "authentication lookup failed");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({
+                        "error": { "code": "unavailable", "message": "storage unavailable" }
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => CookieJar::from_headers(request.headers())
+            .get(COOKIE)
+            .and_then(|cookie| sessions.verify(cookie.value())),
     };
-    match store.token_user(&hash(secret)).await {
-        Ok(Some(user)) => {
+    match user {
+        Some(user) => {
             request.extensions_mut().insert(Caller { user });
             next.run(request).await
         }
-        Ok(None) => unauthorized("unknown token"),
-        Err(e) => {
-            tracing::error!(error = %e, "authentication lookup failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(
-                    json!({ "error": { "code": "unavailable", "message": "storage unavailable" } }),
-                ),
-            )
-                .into_response()
-        }
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": { "code": "unauthorized", "message": "authentication required" }
+            })),
+        )
+            .into_response(),
     }
-}
-
-fn unauthorized(message: &str) -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": { "code": "unauthorized", "message": message } })),
-    )
-        .into_response()
 }
 
 #[cfg(test)]
@@ -120,5 +199,17 @@ mod tests {
         assert_ne!(secret, mint());
         assert_eq!(hash("cvg_x"), hash("cvg_x"));
         assert_ne!(hash("cvg_x"), hash("cvg_y"));
+    }
+
+    #[test]
+    fn sessions_round_trip_and_reject_foreign_signatures() {
+        let user = UserId::new();
+        let sessions = Sessions::new(Some("secret"));
+        assert_eq!(sessions.verify(&sessions.issue(user)), Some(user));
+        // A different key (or a random per-boot key) verifies nothing.
+        let other = Sessions::new(Some("other"));
+        assert_eq!(other.verify(&sessions.issue(user)), None);
+        assert_eq!(Sessions::new(None).verify(&sessions.issue(user)), None);
+        assert_eq!(sessions.verify("not-a-jwt"), None);
     }
 }

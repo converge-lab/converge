@@ -48,6 +48,11 @@ struct Created<Id> {
     id: Id,
 }
 
+#[derive(Serialize)]
+struct Login<'a> {
+    token: &'a str,
+}
+
 impl Client {
     pub fn new(base: Url) -> Self {
         Self {
@@ -185,10 +190,43 @@ impl Client {
         self.fetch(&format!("decisions/{id}/edges")).await
     }
 
+    // Session (the browser's credential exchange)
+
+    /// Exchange a bearer token for the `HttpOnly` session cookie. Browser
+    /// use: under wasm the cookie rides fetch ambiently from then on; a
+    /// native caller would need a cookie store to retain it (native
+    /// callers hold the token itself instead — [`Client::with_token`]).
+    pub async fn session_login(&self, token: &str) -> Result<(), StoreError> {
+        let response = self
+            .http
+            .post(self.url("session"))
+            .json(&Login { token })
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// Clear the session cookie (logout).
+    pub async fn session_logout(&self) -> Result<(), StoreError> {
+        let response = self
+            .http
+            .delete(self.url("session"))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
     // Users + agents
 
-    /// The caller's identity (`/users/me` — the configured deployment user
-    /// until real auth lands).
+    /// The authenticated caller's identity (`/users/me`).
     pub async fn me(&self) -> Result<User, StoreError> {
         self.fetch("users/me").await?.ok_or(StoreError::NotFound)
     }
@@ -282,6 +320,7 @@ async fn fail(response: Response) -> StoreError {
             "not_found" => StoreError::NotFound,
             "invalid" => StoreError::Invalid(e.error.message),
             "conflict" => StoreError::Conflict(e.error.message),
+            "unauthorized" => StoreError::Unauthorized,
             "unavailable" => StoreError::Unavailable(e.error.message),
             _ => StoreError::Backend(e.error.message),
         },

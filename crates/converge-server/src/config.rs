@@ -68,6 +68,9 @@ pub struct Config {
     /// the server serves the app same-origin.
     #[serde(default)]
     pub web: Web,
+    /// Authentication (`[auth]` table).
+    #[serde(default)]
+    pub auth: Auth,
     /// The config files that existed and merged, weakest first — provenance
     /// for the startup log, not a setting.
     #[serde(skip)]
@@ -105,6 +108,16 @@ fn display() -> String {
 pub struct Web {
     #[serde(default)]
     pub assets: Option<std::path::PathBuf>,
+}
+
+/// Authentication.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Auth {
+    /// Key for signing browser-session JWTs. Unset → random per boot
+    /// (sessions reset on restart). Set it (e.g. `openssl rand -hex 32`)
+    /// to keep sessions across restarts.
+    #[serde(default)]
+    pub session_secret: Option<String>,
 }
 
 /// Logging configuration.

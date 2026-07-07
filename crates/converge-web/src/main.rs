@@ -15,7 +15,7 @@ mod source_viewer;
 mod store;
 mod when;
 
-use converge_ui::atoms::{Avatar, Glyph, Input};
+use converge_ui::atoms::{Avatar, Button, Glyph, Input};
 use converge_ui::domain::{GroupKind, Tone};
 use converge_ui::layout::AppShell;
 use converge_ui::molecules::{NavItem, ProjectNavItem};
@@ -31,7 +31,7 @@ use route::{Route, current_route, navigate};
 use search::Search;
 use signals::{SignalDetail, Signals};
 use source_viewer::SourceViewer;
-use store::{AppStateStoreFields, AppStore, provide_default_store};
+use store::{AppStateStoreFields, AppStore, LoadError, provide_default_store};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
@@ -233,10 +233,18 @@ fn App() -> impl IntoView {
     // dataset, so none of it can render until the store is populated.
     move || {
         if let Some(err) = store.error().get() {
-            return boot_error(err).into_any();
+            return match err {
+                LoadError::Unauthorized => login().into_any(),
+                LoadError::Failed(msg) => boot_error(msg).into_any(),
+            };
         }
-        if store.dataset().get().is_none() {
+        let Some(dataset) = store.dataset().get() else {
             return boot_loading().into_any();
+        };
+        // A fresh deployment has no groups yet; every accessor below
+        // assumes at least one, so gate with an honest empty state.
+        if dataset.groups.is_empty() {
+            return boot_empty().into_any();
         }
         view! {
             <AppShell
@@ -295,6 +303,94 @@ fn boot_loading() -> impl IntoView {
     }
 }
 
+/// Full-screen login: exchange a pasted bearer token for the session
+/// cookie, then reload — the boot load then succeeds with the cookie
+/// riding fetch ambiently. The pasted secret is sent once and never
+/// stored by the app.
+fn login() -> impl IntoView + use<> {
+    let (token, set_token) = signal(String::new());
+    let (notice, set_notice) = signal(None::<String>);
+    #[cfg(feature = "api")]
+    let submit = move || {
+        let secret = token.get_untracked();
+        if secret.trim().is_empty() {
+            return;
+        }
+        leptos::task::spawn_local(async move {
+            use converge_client::StoreError;
+            match crate::store::client().session_login(secret.trim()).await {
+                Ok(()) => {
+                    let _ = window().location().reload();
+                }
+                Err(StoreError::Unauthorized) => {
+                    set_notice.set(Some("That token isn't recognized.".into()));
+                }
+                Err(e) => set_notice.set(Some(format!("Sign-in failed: {e}"))),
+            }
+        });
+    };
+    // The embedded fixture never asks for login; the arm exists so the
+    // screen compiles (and stays previewable) in both builds.
+    #[cfg(not(feature = "api"))]
+    let submit = move || {
+        let _ = token.get_untracked();
+        set_notice.set(Some("This build has no API to sign in to.".into()));
+    };
+    view! {
+        <div class="cv-boot">
+            <div class="cv-boot__msg cv-text-center">
+                <div class="cv-fs-xl cv-fw-semibold cv-mb-8">"Sign in to Converge"</div>
+                <div class="cv-fs-md cv-fg-muted cv-lh-normal cv-mb-16">
+                    "Paste a bearer token — your operator mints one with "
+                    <span class="cv-mono">"converge-server token mint"</span> "."
+                </div>
+                <div class="cv-input cv-mb-8">
+                    <input
+                        class="cv-input__field"
+                        type="password"
+                        placeholder="cvg_…"
+                        prop:value=token
+                        on:input=move |ev| set_token.set(event_target_value(&ev))
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" {
+                                submit();
+                            }
+                        }
+                    />
+                </div>
+                <Button label="Sign in" on_click=Callback::new(move |()| submit()) />
+                {move || {
+                    notice
+                        .get()
+                        .map(|msg| {
+                            view! {
+                                <div class="cv-fs-sm cv-fg-danger cv-mt-8">{msg}</div>
+                            }
+                        })
+                }}
+            </div>
+        </div>
+    }
+}
+
+/// Fresh deployment, nothing recorded yet. Creating groups lives on the
+/// API/MCP surfaces for now — say so instead of rendering a shell that
+/// assumes data.
+fn boot_empty() -> impl IntoView {
+    view! {
+        <div class="cv-boot">
+            <div class="cv-boot__msg cv-text-center">
+                <div class="cv-fs-xl cv-fw-semibold cv-mb-8">"Nothing here yet"</div>
+                <div class="cv-fs-md cv-fg-muted cv-lh-normal">
+                    "Decision memory is empty. Create a group and project over the API, "
+                    "or connect an agent to " <span class="cv-mono">"/mcp"</span>
+                    " and record the first decision."
+                </div>
+            </div>
+        </div>
+    }
+}
+
 /// Full-screen error state shown when the load fails.
 fn boot_error(msg: String) -> impl IntoView {
     view! {
@@ -332,6 +428,17 @@ fn Sidebar(
         };
         apply_theme(next);
         set_theme.set(next.to_string());
+    };
+
+    // Clear the session cookie, then reload into the login screen. Against
+    // the embedded fixture there is no session — just close the menu.
+    let logout = move |_| {
+        set_acct_open.set(false);
+        #[cfg(feature = "api")]
+        leptos::task::spawn_local(async {
+            let _ = crate::store::client().session_logout().await;
+            let _ = window().location().reload();
+        });
     };
 
     view! {
@@ -508,7 +615,7 @@ fn Sidebar(
                                     </span>
                                 </div>
                                 <div class="cv-acctmenu__sep"></div>
-                                <div class="cv-acctmenu__item cv-acctmenu__item--danger" on:click=move |_| set_acct_open.set(false)>
+                                <div class="cv-acctmenu__item cv-acctmenu__item--danger" on:click=logout>
                                     <span class="cv-iconcell">{Glyph::Power.glyph()}</span>
                                     " Log out"
                                 </div>

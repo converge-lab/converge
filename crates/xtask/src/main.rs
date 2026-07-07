@@ -3,9 +3,8 @@
 //! Owns the local Postgres lifecycle via testcontainers, so there's no
 //! committed compose file and no standing database to manage. Run via the
 //! `cargo xtask` alias (see `.cargo/config.toml`); `cargo xtask --help` for
-//! the commands. Both need only Docker; `prepare` additionally shells
-//! `cargo sqlx` (`cargo install sqlx-cli`). A `dev` command (boot + run the
-//! app) arrives once there's an app to run.
+//! the commands. All need only Docker; `prepare` additionally shells
+//! `cargo sqlx` (`cargo install sqlx-cli`), `dev --web` shells `trunk`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -31,6 +30,14 @@ struct Cli {
 enum Cmd {
     /// Boot Postgres, apply migrations, print DATABASE_URL, hold until Ctrl-C.
     Db,
+    /// The full stack: boot Postgres, migrate, mint a dev token, run the
+    /// server until Ctrl-C. The database is ephemeral — it dies with the
+    /// command.
+    Dev {
+        /// Also `trunk build` the web app and serve it same-origin.
+        #[arg(long)]
+        web: bool,
+    },
     /// Boot an ephemeral Postgres, migrate, and regenerate the sqlx cache.
     Prepare {
         /// Verify the committed .sqlx/ cache is current instead of writing it (CI).
@@ -43,6 +50,7 @@ enum Cmd {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Cmd::Db => db().await,
+        Cmd::Dev { web } => dev(web).await,
         Cmd::Prepare { check } => prepare(check).await,
     }
 }
@@ -54,6 +62,94 @@ async fn db() -> Result<()> {
     println!("ready — Ctrl-C to stop");
     tokio::signal::ctrl_c().await?;
     drop(node); // remove the container
+    Ok(())
+}
+
+/// The full dev stack: Postgres + migrations, a freshly minted bearer
+/// token (printed below — the terminal, not the log, is where secrets
+/// belong), and the server in the foreground. A fixed dev session secret
+/// keeps browser logins across server restarts within one `dev` run.
+async fn dev(web: bool) -> Result<()> {
+    let (node, url) = start_pg().await?;
+
+    let assets = if web {
+        let status = Command::new("trunk")
+            .args(["build", "--features", "api"])
+            .current_dir(workspace_root().join("crates/converge-web"))
+            .status()
+            .context("running `trunk build` (is trunk installed?)")?;
+        if !status.success() {
+            bail!("`trunk build` failed with {status}");
+        }
+        Some(workspace_root().join("crates/converge-web/dist"))
+    } else {
+        None
+    };
+
+    // Mint through the server binary so the hashing convention has exactly
+    // one home; `cargo run` also pre-builds the binary the stack is about
+    // to run.
+    let minted = Command::new("cargo")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "converge-server",
+            "--",
+            "token",
+            "mint",
+            "dev",
+        ])
+        .env("CONVERGE_DATABASE_URL", &url)
+        .current_dir(workspace_root())
+        .output()
+        .context("minting the dev token")?;
+    if !minted.status.success() {
+        bail!(
+            "`converge-server token mint` failed:\n{}",
+            String::from_utf8_lossy(&minted.stderr)
+        );
+    }
+    let token = String::from_utf8(minted.stdout)?.trim().to_string();
+
+    println!("DATABASE_URL={url}");
+    println!("token: {token}");
+    println!(
+        "web:   http://127.0.0.1:8080/ ({})",
+        match &assets {
+            Some(_) => "serving crates/converge-web/dist",
+            None => "no assets; use `--web`, or `trunk serve` for live reload",
+        }
+    );
+    println!("mcp:   http://127.0.0.1:8080/mcp (Authorization: Bearer <token>)");
+    println!("ready — Ctrl-C to stop");
+
+    // Ctrl-C reaches the whole foreground group; registering a handler
+    // keeps xtask alive to wait out the server's graceful shutdown and
+    // then remove the container.
+    tokio::spawn(async {
+        loop {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    });
+    let mut server = tokio::process::Command::new("cargo");
+    server
+        .args(["run", "-q", "-p", "converge-server"])
+        .env("CONVERGE_DATABASE_URL", &url)
+        .env("CONVERGE_AUTH__SESSION_SECRET", "converge-dev")
+        .current_dir(workspace_root());
+    if let Some(dist) = &assets {
+        server.env("CONVERGE_WEB__ASSETS", dist);
+    }
+    let status = server
+        .spawn()
+        .context("starting converge-server")?
+        .wait()
+        .await?;
+    drop(node); // remove the container
+    if !status.success() {
+        bail!("converge-server exited with {status}");
+    }
     Ok(())
 }
 

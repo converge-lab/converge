@@ -58,7 +58,9 @@ never for building (queries compile against the committed `.sqlx/` cache).
 cargo check                 # no database needed — queries check against .sqlx/
 cargo test                  # integration tests boot throwaway Postgres containers
 
-cargo xtask db              # dev Postgres: boots, migrates, prints DATABASE_URL
+cargo xtask dev             # the full stack: Postgres + server, dev token printed
+cargo xtask dev --web       # …plus the web app, served same-origin
+cargo xtask db              # just the dev Postgres: boots, migrates, prints DATABASE_URL
 cargo xtask prepare         # regenerate .sqlx/ after changing queries or schema
 cargo xtask prepare --check # verify .sqlx/ is current (CI)
 

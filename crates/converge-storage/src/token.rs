@@ -25,6 +25,22 @@ pub struct Token {
     pub created_at: OffsetDateTime,
 }
 
+/// A token creation request (`POST /tokens`): the caller names it, the
+/// server mints the secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewToken {
+    pub label: String,
+}
+
+/// A token creation response — the **only** place a secret ever appears,
+/// shown once and never stored (wire envelope, not a storage type).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Minted {
+    pub id: TokenId,
+    /// The bearer secret (`cvg_…`). Save it now; it is not shown again.
+    pub token: String,
+}
+
 /// Storage operations on tokens.
 pub trait Tokens {
     /// Store a new token's hash for `user`.
@@ -48,4 +64,13 @@ pub trait Tokens {
         user: UserId,
         page: Pagination<TokenId>,
     ) -> impl Future<Output = Result<Vec<Token>, StoreError>> + Send;
+
+    /// Revoke one of `user`'s tokens — deletion is the revocation (the
+    /// credential dies with the row). Scoped to the owner: someone else's
+    /// token id is `NotFound`, indistinguishable from absent.
+    fn token_revoke(
+        &self,
+        user: UserId,
+        id: TokenId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }

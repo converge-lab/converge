@@ -621,6 +621,7 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
+ "clap",
  "config",
  "converge-storage",
  "converge-storage-postgres",

@@ -13,9 +13,9 @@
 // on this crate alone and never name the storage crate.
 pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, Author, Decision, DecisionEdit, DecisionFilter,
-    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, Identity, NewAgent,
-    NewDecision, NewGroup, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter,
-    ProjectId, Related, StoreError, User, UserId,
+    DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind, Identity, Minted,
+    NewAgent, NewDecision, NewGroup, NewProject, NewToken, Page, Pagination, Project, ProjectEdit,
+    ProjectFilter, ProjectId, Related, StoreError, Token, TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -69,6 +69,11 @@ impl Client {
             token: Some(token.into()),
             ..self
         }
+    }
+
+    /// The origin this client is addressed at.
+    pub fn base(&self) -> &Url {
+        &self.base
     }
 
     fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -215,6 +220,40 @@ impl Client {
         let response = self
             .http
             .delete(self.url("session"))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    // Tokens (always the caller's own)
+
+    /// Mint a bearer token; the response carries the secret — the only
+    /// time it is ever shown.
+    pub async fn token_add(&self, new: &NewToken) -> Result<Minted, StoreError> {
+        let response = self
+            .authed(self.http.post(self.url("tokens")))
+            .json(new)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::CREATED => Ok(response.json().await.map_err(transport)?),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    pub async fn token_list(&self, page: &Pagination<TokenId>) -> Result<Page<Token>, StoreError> {
+        self.list("tokens", &(), page).await
+    }
+
+    /// Revoke one of the caller's tokens — the credential dies with it.
+    pub async fn token_revoke(&self, id: TokenId) -> Result<(), StoreError> {
+        let response = self
+            .authed(self.http.delete(self.url(&format!("tokens/{id}"))))
             .send()
             .await
             .map_err(transport)?;

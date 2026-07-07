@@ -172,6 +172,22 @@ impl Tokens for PgStorage {
         )
     }
 
+    async fn token_revoke(&self, user: UserId, id: TokenId) -> Result<(), StoreError> {
+        let result = sqlx::query!(
+            "delete from tokens where id = $1 and user_id = $2",
+            Uuid::from(id.ulid()),
+            Uuid::from(user.ulid()),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        // Owner-scoped: someone else's token reads as absent.
+        match result.rows_affected() {
+            0 => Err(StoreError::NotFound),
+            _ => Ok(()),
+        }
+    }
+
     async fn token_list(
         &self,
         user: UserId,

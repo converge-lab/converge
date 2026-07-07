@@ -76,6 +76,7 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 
 # Binary plumbing
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", default-features = false, features = ["toml"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -17,6 +17,10 @@ docker compose up --build
 docker compose exec converge converge-server token mint   # prints your bearer token
 ```
 
+(`token list` / `token revoke <id>` manage tokens from the host; `--user
+<handle>` provisions teammates without an identity provider — each then
+manages their own via `/api/v1/tokens`.)
+
 Authentication is always on; the mint command prints a `cvg_…` secret to
 your terminal (never to logs, where collectors would keep it). Then:
 

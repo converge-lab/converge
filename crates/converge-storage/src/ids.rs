@@ -30,6 +30,13 @@ macro_rules! id {
             }
         }
 
+        impl std::str::FromStr for $name {
+            type Err = ulid::DecodeError;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                s.parse::<Ulid>().map(Self)
+            }
+        }
+
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self.0)

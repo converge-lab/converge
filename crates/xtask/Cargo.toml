@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
 tokio = { workspace = true, features = ["signal", "process"] }
 sqlx = { workspace = true }
 testcontainers-modules.workspace = true

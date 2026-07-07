@@ -1,32 +1,81 @@
 //! Binary entry — the composition root: load config → init telemetry →
 //! connect + migrate PostgreSQL → serve until SIGINT/SIGTERM.
 //!
-//! One subcommand: `converge-server token mint [label]` prints a fresh
-//! bearer secret for the deployment user to **stdout** and exits. Host
-//! access is the trust boundary (the same model as running the server) —
-//! secrets never enter the service log, where collectors would keep them.
+//! The `token` subcommands (`mint`/`list`/`revoke`) administer bearer
+//! tokens from the host and exit; secrets print to **stdout**, never the
+//! service log, where collectors would keep them. Host access is the
+//! trust boundary (the same model as running the server), so `--user` may
+//! target any local-provider user — that's how a closed-contour operator
+//! provisions teammates without an identity provider. Users manage their
+//! own tokens over `/api/v1/tokens`.
 
 mod config;
 mod telemetry;
 
 use anyhow::Context;
+use clap::{Parser, Subcommand};
 use config::ConfigService;
 use converge_server::auth::Sessions;
 use converge_server::{app, auth};
-use converge_storage::{Identity, Storage};
+use converge_storage::{Identity, Pagination, Storage, TokenId};
 use converge_storage_postgres::PgStorage;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::info;
 
+#[derive(Parser)]
+#[command(about = "The Converge server", long_about = None)]
+struct Cli {
+    /// With no command: serve.
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Administer bearer tokens (host trust; secrets print to stdout).
+    #[command(subcommand)]
+    Token(TokenCmd),
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Mint a token and print the secret — once.
+    Mint {
+        /// What the token is for ("laptop", "ci", …).
+        #[arg(default_value = "cli")]
+        label: String,
+        /// Local-provider handle to mint for; creates the user if absent.
+        /// Defaults to the deployment user from `[user]` config.
+        #[arg(long)]
+        user: Option<String>,
+    },
+    /// List a user's tokens (ids, labels, creation times — no secrets).
+    List {
+        /// Local-provider handle; defaults to the deployment user.
+        #[arg(long)]
+        user: Option<String>,
+    },
+    /// Revoke a token by id — the credential dies immediately.
+    Revoke {
+        /// The token id (see `token list`).
+        id: TokenId,
+        /// Local-provider handle owning the token; defaults to the
+        /// deployment user.
+        #[arg(long)]
+        user: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     let config = ConfigService::load()
         .context("load configuration")?
         .config();
 
     // The deployment's single-user identity: provider `local`, keyed by
-    // the configured handle. Real providers (GitHub OIDC) land beside it.
+    // the configured handle. Real providers (OIDC) land beside it.
     let me = Identity {
         provider: "local".into(),
         subject: config.user.handle.clone(),
@@ -34,19 +83,10 @@ async fn main() -> anyhow::Result<()> {
         name: config.user.name.clone(),
     };
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match (
-        args.first().map(String::as_str),
-        args.get(1).map(String::as_str),
-    ) {
-        (Some("token"), Some("mint")) => {
-            let store = PgStorage::connect(&config.database_url).await?;
-            store.migrate().await?;
-            let label = args.get(2).cloned().unwrap_or_else(|| "cli".into());
-            return mint(&store, me, label).await;
-        }
-        (Some(_), _) => anyhow::bail!("unknown command (try `token mint [label]`)"),
-        (None, _) => {}
+    if let Some(Cmd::Token(cmd)) = cli.command {
+        let store = PgStorage::connect(&config.database_url).await?;
+        store.migrate().await?;
+        return token(&store, me, cmd).await;
     }
 
     let _guard = telemetry::init(&config.log)?;
@@ -72,13 +112,39 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `token mint [label]`: log the deployment user in, mint a bearer secret,
-/// print it once to stdout.
-async fn mint<S: Storage>(store: &S, me: Identity, label: String) -> anyhow::Result<()> {
-    let user = store.user_login(me).await?;
-    let secret = auth::mint();
-    store.token_add(user, label, auth::hash(&secret)).await?;
-    println!("{secret}");
+/// Run one `token` subcommand against the store and exit.
+async fn token<S: Storage>(store: &S, me: Identity, cmd: TokenCmd) -> anyhow::Result<()> {
+    // `--user` targets (or creates) a local-provider identity — the
+    // closed-contour provisioning path; the handle doubles as the display
+    // name until the person's first real login refreshes it.
+    let resolve = |user: Option<String>| match user {
+        None => me,
+        Some(handle) => Identity {
+            provider: "local".into(),
+            subject: handle.clone(),
+            name: handle.clone(),
+            handle,
+        },
+    };
+    match cmd {
+        TokenCmd::Mint { label, user } => {
+            let user = store.user_login(resolve(user)).await?;
+            let secret = auth::mint();
+            store.token_add(user, label, auth::hash(&secret)).await?;
+            println!("{secret}");
+        }
+        TokenCmd::List { user } => {
+            let user = store.user_login(resolve(user)).await?;
+            for token in store.token_list(user, Pagination::default()).await? {
+                println!("{}\t{}\t{}", token.id, token.created_at, token.label);
+            }
+        }
+        TokenCmd::Revoke { id, user } => {
+            let user = store.user_login(resolve(user)).await?;
+            store.token_revoke(user, id).await?;
+            println!("revoked {id}");
+        }
+    }
     Ok(())
 }
 

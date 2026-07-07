@@ -11,6 +11,7 @@ mod error;
 mod group;
 mod project;
 mod session;
+mod token;
 mod user;
 
 use std::path::Path;
@@ -42,6 +43,7 @@ pub fn app<S: Storage + 'static>(
         .merge(project::routes().with_state(store.clone()))
         .merge(decision::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
+        .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))
         .nest_service("/mcp", crate::mcp::service(store.clone(), me))
         .layer(middleware::from_fn_with_state(

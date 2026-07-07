@@ -94,7 +94,7 @@ impl Sessions {
     pub fn verify(&self, jwt: &str) -> Option<UserId> {
         let data =
             jsonwebtoken::decode::<Claims>(jwt, &self.decoding, &Validation::default()).ok()?;
-        data.claims.sub.parse::<ulid::Ulid>().ok().map(UserId::from)
+        data.claims.sub.parse().ok()
     }
 }
 

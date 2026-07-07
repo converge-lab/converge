@@ -75,6 +75,24 @@ async fn round_trip() {
     let me = api.me().await.unwrap();
     assert_eq!(me.handle, "admin");
     assert_eq!(api.me().await.unwrap().id, me.id);
+
+    // Token lifecycle: mint → the secret authenticates → revoke kills it.
+    let minted = api
+        .token_add(&converge_client::NewToken {
+            label: "laptop".into(),
+        })
+        .await
+        .unwrap();
+    let fresh = Client::new(api.base().clone()).with_token(minted.token.clone());
+    assert_eq!(fresh.me().await.unwrap().id, me.id);
+    let tokens = api.token_list(&Pagination::default()).await.unwrap();
+    assert!(tokens.items.iter().any(|t| t.id == minted.id));
+    api.token_revoke(minted.id).await.unwrap();
+    assert!(matches!(fresh.me().await, Err(StoreError::Unauthorized)));
+    assert!(matches!(
+        api.token_revoke(minted.id).await,
+        Err(StoreError::NotFound)
+    ));
     let users = api.user_list(&Pagination::default()).await.unwrap();
     assert!(users.items.iter().any(|u| u.id == me.id));
     assert!(

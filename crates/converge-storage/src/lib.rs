@@ -38,7 +38,7 @@ pub use decision::{
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{AgentId, DecisionId, GroupId, ProjectId, TokenId, UserId};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
-pub use token::{Token, Tokens};
+pub use token::{Minted, NewToken, Token, Tokens};
 pub use user::{Identity, User, Users};
 
 /// Cursor pagination for list reads, generic over the listed resource's id.

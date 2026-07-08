@@ -94,6 +94,9 @@ async fn main() -> anyhow::Result<()> {
 
     let store = PgStorage::connect(&config.database_url).await?;
     store.migrate().await?;
+    if store.ensure_default_workspace().await? {
+        info!("created the default personal workspace (My workspace)");
+    }
     auth::hint(&store, me.clone()).await?;
 
     if let Some(assets) = &config.web.assets {

@@ -12,7 +12,7 @@
 //! without a reactive context.
 
 use crate::seed::{Assembled, wire};
-use crate::store::{AppStateStoreFields, use_store};
+use crate::store::{AppStateStoreFields, AppStore, use_store};
 use crate::when::when;
 use converge_ui::domain::{
     self, Author, ConvLine, Decision, DecisionRef, GroupKind, Signal, SignalDetail, Source,
@@ -106,6 +106,7 @@ pub struct GroupDef {
 }
 
 /// A project row, as the app needs it.
+#[derive(Clone)]
 pub struct ProjectInfo {
     pub id: String,
     #[allow(dead_code)] // owning group; not displayed yet
@@ -126,6 +127,7 @@ pub struct Account {
 }
 
 /// Everything the app renders.
+#[derive(Clone)]
 pub struct Dataset {
     pub groups: Vec<GroupDef>,
     pub projects: Vec<ProjectInfo>,
@@ -468,6 +470,68 @@ pub fn group_tagline() -> String {
         ),
         GroupKind::Shared => format!("Shared decision memory across {n} services."),
     }
+}
+
+// ---- local mutations (apply a confirmed create/edit without a full reload) ---
+
+/// Reflect a just-created group in the in-memory dataset and return its index.
+/// The create is already confirmed — a server-assigned id on the API path, a
+/// local slug in the embedded build — so this avoids a full reload; setting a
+/// fresh dataset re-renders the shell (the App gate subscribes to `dataset`).
+pub fn add_group_local(store: AppStore, id: String, name: String, kind: GroupKind) -> usize {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    ds.groups.push(GroupDef {
+        id,
+        name,
+        kind,
+        project_ids: Vec::new(),
+    });
+    let idx = ds.groups.len() - 1;
+    store.dataset().set(Some(Rc::new(ds)));
+    idx
+}
+
+/// Reflect a just-created project: add the row and list it under its group.
+pub fn add_project_local(
+    store: AppStore,
+    group_id: &str,
+    id: String,
+    name: String,
+    description: Option<String>,
+) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    ds.projects.push(ProjectInfo {
+        id: id.clone(),
+        group_id: group_id.to_string(),
+        name,
+        description,
+    });
+    if let Some(g) = ds.groups.iter_mut().find(|g| g.id == group_id) {
+        g.project_ids.push(id);
+    }
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
+/// Reflect an edited project's name/description in place (the id is immutable).
+pub fn edit_project_local(store: AppStore, id: &str, name: String, description: Option<String>) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    if let Some(p) = ds.projects.iter_mut().find(|p| p.id == id) {
+        p.name = name;
+        p.description = description;
+    }
+    store.dataset().set(Some(Rc::new(ds)));
 }
 
 // ---- account + lookups -------------------------------------------------------

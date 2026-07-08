@@ -2,10 +2,14 @@
 //! driven by a hash router; the sidebar, breadcrumb, and content all react to
 //! the current route and the active group.
 
+mod command_snippet;
 mod dashboard;
 mod data;
 mod decision_detail;
 mod expert;
+mod modals;
+mod mutate;
+mod onboard;
 mod project_log;
 mod route;
 mod search;
@@ -19,7 +23,7 @@ mod when;
 use converge_ui::atoms::{Avatar, Button, Glyph, Input};
 use converge_ui::domain::{GroupKind, Tone};
 use converge_ui::layout::AppShell;
-use converge_ui::molecules::{NavItem, ProjectNavItem};
+use converge_ui::molecules::{AddRow, NavItem, ProjectNavItem};
 use dashboard::Dashboard;
 use decision_detail::DecisionDetail;
 use expert::Expert;
@@ -27,6 +31,8 @@ use leptos::ev;
 use leptos::html;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
+use modals::{ModalHost, ModalKind};
+use onboard::Onboarding;
 use project_log::ProjectLog;
 use route::{Route, current_route, navigate};
 use search::Search;
@@ -160,6 +166,10 @@ fn App() -> impl IntoView {
     // here for the router and the group switcher. The dataset loads
     // asynchronously; until it resolves the UI shows a loading screen.
     let store = provide_default_store();
+    // The open-modal controller, shared with every trigger (onboarding cards,
+    // sidebar "＋" row, switcher footer, project "⋯" menu) and rendered once by
+    // `ModalHost` below.
+    modals::provide_modal_ctl();
     let (route, set_route) = signal(current_route());
     // Drawer state for narrow viewports: the sidebar is off-canvas there,
     // opened by the top-bar hamburger. Harmless on desktop, where the CSS keeps
@@ -277,6 +287,11 @@ fn App() -> impl IntoView {
                 {move || {
                     let _ = store.group().get();
                     match route.get() {
+                        // Onboarding is a *state* of the dashboard: an empty
+                        // group shows it instead of the (empty) feed.
+                        Route::Dashboard if data::cur_group_projects().is_empty() => {
+                            view! { <Onboarding /> }.into_any()
+                        }
                         Route::Dashboard => view! { <Dashboard go=go /> }.into_any(),
                         Route::Decision(id) => view! { <DecisionDetail go=go id=id /> }.into_any(),
                         Route::Signals => view! { <Signals go=go /> }.into_any(),
@@ -289,6 +304,7 @@ fn App() -> impl IntoView {
                     }
                 }}
             </AppShell>
+            <ModalHost />
         }
         .into_any()
     }
@@ -564,75 +580,110 @@ fn Sidebar(
                                 {shared.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
                                 <div class="cv-groupmenu__label cv-groupmenu__label--div">"Personal"</div>
                                 {personal.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
+                                <div class="cv-groupmenu__foot">
+                                    <div
+                                        class="cv-groupmenu__row"
+                                        on:click=move |_| {
+                                            set_group_open.set(false);
+                                            modals::open(ModalKind::NewGroup);
+                                        }
+                                    >
+                                        <span class="cv-groupmenu__icon">{Glyph::Plus.glyph()}</span>
+                                        <span class="cv-grow">"New group…"</span>
+                                    </div>
+                                </div>
                             </div>
                         }
                     })
                 }}
             </div>
 
-            <div>
-                <div class="cv-sidebar__section">"Views"</div>
-                <nav class="cv-col cv-gap-2">
-                    {move || {
-                        let r = route.get();
-                        let _ = store.group().get();
-                        let sig_count = data::group_signals().len() as u32;
+            // Views + Projects are hidden until the group has a project — the
+            // trimmed onboarding sidebar is just logo, switcher, spacer, account.
+            {move || {
+                let _ = store.group().get();
+                (!data::cur_group_projects().is_empty())
+                    .then(|| {
                         view! {
-                            <NavItem
-                                icon=Glyph::Dashboard
-                                label="Dashboard"
-                                active=r == Route::Dashboard
-                                on_click=Callback::new(move |_| go.run(Route::Dashboard))
-                            />
-                            <NavItem
-                                icon=Glyph::Search
-                                label="Search"
-                                active=r == Route::Search
-                                on_click=Callback::new(move |_| go.run(Route::Search))
-                            />
-                            <NavItem
-                                icon=Glyph::Signal
-                                label="Signals"
-                                count=sig_count
-                                accent=Tone::Signal
-                                active=r == Route::Signals
-                                on_click=Callback::new(move |_| go.run(Route::Signals))
-                            />
-                            <NavItem
-                                icon=Glyph::Expert
-                                label="Expert model"
-                                accent=Tone::Expert
-                                active=r == Route::Expert
-                                on_click=Callback::new(move |_| go.run(Route::Expert))
-                            />
+                            <div>
+                                <div class="cv-sidebar__section">"Views"</div>
+                                <nav class="cv-col cv-gap-2">
+                                    {move || {
+                                        let r = route.get();
+                                        let _ = store.group().get();
+                                        let sig_count = data::group_signals().len() as u32;
+                                        view! {
+                                            <NavItem
+                                                icon=Glyph::Dashboard
+                                                label="Dashboard"
+                                                active=r == Route::Dashboard
+                                                on_click=Callback::new(move |_| go.run(Route::Dashboard))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Search
+                                                label="Search"
+                                                active=r == Route::Search
+                                                on_click=Callback::new(move |_| go.run(Route::Search))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Signal
+                                                label="Signals"
+                                                count=sig_count
+                                                accent=Tone::Signal
+                                                active=r == Route::Signals
+                                                on_click=Callback::new(move |_| go.run(Route::Signals))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Expert
+                                                label="Expert model"
+                                                accent=Tone::Expert
+                                                active=r == Route::Expert
+                                                on_click=Callback::new(move |_| go.run(Route::Expert))
+                                            />
+                                        }
+                                    }}
+                                </nav>
+                            </div>
                         }
-                    }}
-                </nav>
-            </div>
+                    })
+            }}
 
-            <div class="cv-col cv-fill">
-                <div class="cv-sidebar__section">"Projects"</div>
-                <div class="cv-sidebar__projects">
-                    {move || {
-                        store.group().get();
-                        data::cur_group_projects()
-                            .iter()
-                            .map(move |p| {
-                                let name = data::proj_name(p);
-                                let pn = p.to_string();
-                                let unread = data::unread_count(p);
-                                view! {
-                                    <ProjectNavItem
-                                        name=name
-                                        unread=unread
-                                        on_click=Callback::new(move |_| go.run(Route::Project(pn.clone())))
-                                    />
-                                }
-                            })
-                            .collect_view()
-                    }}
-                </div>
-            </div>
+            {move || {
+                let _ = store.group().get();
+                let projects = data::cur_group_projects();
+                if projects.is_empty() {
+                    // Onboarding sidebar: a spacer keeps the account row pinned.
+                    view! { <div class="cv-fill"></div> }.into_any()
+                } else {
+                    view! {
+                        <div class="cv-col cv-fill">
+                            <div class="cv-sidebar__section">"Projects"</div>
+                            <div class="cv-sidebar__projects">
+                                {projects
+                                    .iter()
+                                    .map(move |p| {
+                                        let name = data::proj_name(p);
+                                        let pn = p.to_string();
+                                        let unread = data::unread_count(p);
+                                        view! {
+                                            <ProjectNavItem
+                                                name=name
+                                                unread=unread
+                                                on_click=Callback::new(move |_| go.run(Route::Project(pn.clone())))
+                                            />
+                                        }
+                                    })
+                                    .collect_view()}
+                                <AddRow
+                                    label="New project"
+                                    on_click=Callback::new(|_| modals::open(ModalKind::NewProject))
+                                />
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                }
+            }}
 
             // account + menu
             <div class="cv-relative">
@@ -778,11 +829,31 @@ fn TopBar(
                 {move || { store.group().get(); data::group_name() }}
             </span>
             <span class="cv-topbar__sep">"/"</span>
-            <span class="cv-topbar__cur">{move || route.get().crumb()}</span>
+            <span class="cv-topbar__cur">
+            {move || match route.get() {
+                // Resolve the project id to its display name (the route only
+                // carries the id); every other crumb is static.
+                Route::Project(id) => data::proj_name(&id),
+                r => r.crumb(),
+            }}
+        </span>
         </div>
         <div class="cv-topbar__spacer"></div>
-        <div class="cv-topbar__search" on:click=move |_| go.run(Route::Search)>
-            <Input placeholder="Search decisions across the group…" lead=Glyph::Search trail="/" />
-        </div>
+        // Search is hidden in the empty-group (onboarding) state.
+        {move || {
+            let _ = store.group().get();
+            (!data::cur_group_projects().is_empty())
+                .then(|| {
+                    view! {
+                        <div class="cv-topbar__search" on:click=move |_| go.run(Route::Search)>
+                            <Input
+                                placeholder="Search decisions across the group…"
+                                lead=Glyph::Search
+                                trail="/"
+                            />
+                        </div>
+                    }
+                })
+        }}
     }
 }

@@ -104,7 +104,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
     let captured = crate::when::when(&d.captured_at);
     let provenance = data::provenance_from(&d);
     let in_expert_context = data::in_agent_context(&d.id, &d.project_id);
-    let proj_for_expert = d.project_id.clone();
+    let proj_for_expert = data::proj_name(&d.project_id);
     let id_for_source = id.clone();
 
     view! {

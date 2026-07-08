@@ -100,7 +100,7 @@ pub fn Expert() -> impl IntoView {
                                                 });
                                         }
                                     >
-                                        {p.clone()}
+                                        {crate::data::proj_name(p)}
                                     </span>
                                 }
                             })

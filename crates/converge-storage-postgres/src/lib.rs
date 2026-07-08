@@ -55,6 +55,27 @@ impl PgStorage {
             .map_err(|e| StoreError::Backend(e.to_string()))
     }
 
+    /// Ensure the bootstrap personal workspace exists — a single well-known
+    /// "My workspace" the deployment lands in, so the first-run (empty-group)
+    /// experience always has a home and the "new project" path always has a
+    /// target group. Idempotent: keyed on a fixed sentinel id (the nil UUID),
+    /// so re-running on every boot is a no-op — an `ensure`, never a
+    /// scan-then-create. Today's shared-trust deployment has exactly one;
+    /// per-user personal workspaces arrive with the ownership model.
+    /// Returns whether the row was created (for a one-time boot log).
+    pub async fn ensure_default_workspace(&self) -> Result<bool, StoreError> {
+        let result = sqlx::query!(
+            r#"insert into groups (id, name, kind)
+               values ($1, 'My workspace', 'personal'::group_kind)
+               on conflict (id) do nothing"#,
+            Uuid::nil(),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// The underlying pool, for embedding and tests.
     pub fn pool(&self) -> &PgPool {
         &self.pool

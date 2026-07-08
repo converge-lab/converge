@@ -2,10 +2,12 @@
 //! reactive status / author / tag filters above it.
 
 use crate::data;
+use crate::modals::{ModalKind, open};
 use crate::route::Route;
-use converge_ui::atoms::Select;
+use converge_ui::atoms::{Glyph, Select};
 use converge_ui::domain::{DecisionRef, Status};
-use converge_ui::molecules::{DecisionLogRow, TagFilterMenu};
+use converge_ui::molecules::{DecisionLogRow, MenuItem, OverflowMenu, TagFilterMenu};
+use leptos::ev;
 use leptos::prelude::*;
 
 /// Everything a log row needs to render *and* be filtered — precomputed from the
@@ -47,6 +49,16 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
     let (fstatus, set_fstatus) = signal(String::from("all"));
     let (fauthor, set_fauthor) = signal(String::from("all"));
     let (ftags, set_ftags) = signal::<Vec<String>>(Vec::new());
+
+    // The header "⋯" overflow menu (Edit only this iteration). Escape closes it;
+    // outside clicks are caught by a transparent scrim below.
+    let (menu_open, set_menu_open) = signal(false);
+    let menu_pid = pid.clone();
+    window_event_listener(ev::keydown, move |evt| {
+        if evt.key() == "Escape" {
+            set_menu_open.set(false);
+        }
+    });
 
     let heading = data::proj_name(&pid);
     let desc = data::proj_desc(&pid);
@@ -111,11 +123,64 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
 
     view! {
         <div class="cv-page">
-            <div class="cv-mb-22">
-                <h1 class="cv-mono cv-fs-3xl cv-fw-medium cv-mb-4">
-                    {heading}
-                </h1>
-                <p class="cv-fg-muted cv-fs-lg">{desc}</p>
+            <div class="cv-row cv-mb-22">
+                <div class="cv-grow">
+                    <h1 class="cv-mono cv-fs-3xl cv-fw-medium cv-mb-4">
+                        {heading}
+                    </h1>
+                    <p class="cv-fg-muted cv-fs-lg">{desc}</p>
+                </div>
+                <div class="cv-relative">
+                    <div
+                        class=move || {
+                            if menu_open.get() {
+                                "cv-iconbtn cv-iconbtn--open"
+                            } else {
+                                "cv-iconbtn"
+                            }
+                        }
+                        role="button"
+                        tabindex="0"
+                        on:click=move |_| set_menu_open.update(|o| *o = !*o)
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" || ev.key() == " " {
+                                ev.prevent_default();
+                                set_menu_open.update(|o| *o = !*o);
+                            }
+                        }
+                    >
+                        {Glyph::More.glyph()}
+                    </div>
+                    {move || {
+                        menu_open
+                            .get()
+                            .then(|| {
+                                let pid = menu_pid.clone();
+                                view! {
+                                    // Transparent full-screen catcher: an outside click closes the menu.
+                                    <div
+                                        class="cv-acctmenu__scrim"
+                                        on:click=move |_| set_menu_open.set(false)
+                                    ></div>
+                                    // Anchored top-right below the button; z above the scrim. No
+                                    // utility covers this float, so the position is inline (as in the
+                                    // prototype).
+                                    <div style="position:absolute;right:0;top:2.25rem;z-index:61">
+                                        <OverflowMenu>
+                                            <MenuItem
+                                                icon=Glyph::Edit
+                                                label="Edit project…"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    open(ModalKind::EditProject(pid.clone()));
+                                                })
+                                            />
+                                        </OverflowMenu>
+                                    </div>
+                                }
+                            })
+                    }}
+                </div>
             </div>
 
             <div class="cv-row cv-wrap cv-gap-18 cv-mb-18">

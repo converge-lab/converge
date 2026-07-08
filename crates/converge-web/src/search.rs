@@ -54,7 +54,7 @@ pub fn Search(go: Callback<Route>) -> impl IntoView {
                         let id = d.id.to_string();
                         let authors = d.authors.clone();
                         let title = d.title.to_string();
-                        let proj = d.project_id.clone();
+                        let proj = data::proj_name(&d.project_id);
                         view! {
                             <div
                                 class="cv-browse"

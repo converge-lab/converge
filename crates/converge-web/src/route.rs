@@ -14,6 +14,7 @@ pub enum Route {
     Project(String),
     Search,
     Expert,
+    Settings,
 }
 
 impl Route {
@@ -32,6 +33,7 @@ impl Route {
             "project" => Route::Project(parts.next().unwrap_or("").to_string()),
             "search" => Route::Search,
             "expert" => Route::Expert,
+            "settings" => Route::Settings,
             _ => Route::Dashboard,
         }
     }
@@ -46,6 +48,7 @@ impl Route {
             Route::Project(id) => format!("#/project/{id}"),
             Route::Search => "#/search".into(),
             Route::Expert => "#/expert".into(),
+            Route::Settings => "#/settings".into(),
         }
     }
 
@@ -59,6 +62,7 @@ impl Route {
             Route::Project(id) => id.clone(),
             Route::Search => "Search".into(),
             Route::Expert => "Expert model".into(),
+            Route::Settings => "Settings".into(),
         }
     }
 }

@@ -10,6 +10,7 @@ mod project_log;
 mod route;
 mod search;
 mod seed;
+mod settings;
 mod signals;
 mod source_viewer;
 mod store;
@@ -29,6 +30,7 @@ use leptos::prelude::*;
 use project_log::ProjectLog;
 use route::{Route, current_route, navigate};
 use search::Search;
+use settings::Settings;
 use signals::{SignalDetail, Signals};
 use source_viewer::SourceViewer;
 use store::{AppStateStoreFields, AppStore, LoadError, provide_default_store};
@@ -283,6 +285,7 @@ fn App() -> impl IntoView {
                         Route::Project(id) => view! { <ProjectLog go=go pid=id /> }.into_any(),
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
+                        Route::Settings => view! { <Settings /> }.into_any(),
                     }
                 }}
             </AppShell>
@@ -621,7 +624,13 @@ fn Sidebar(
                                     </div>
                                 </div>
                                 <div class="cv-acctmenu__sep"></div>
-                                <div class="cv-acctmenu__item" on:click=move |_| set_acct_open.set(false)>
+                                <div
+                                    class="cv-acctmenu__item"
+                                    on:click=move |_| {
+                                        set_acct_open.set(false);
+                                        go.run(Route::Settings);
+                                    }
+                                >
                                     <span class="cv-iconcell cv-fg-muted">
                                         {Glyph::Settings.glyph()}
                                     </span>

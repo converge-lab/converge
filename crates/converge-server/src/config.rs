@@ -123,6 +123,11 @@ pub struct Auth {
     /// the auth core never needs egress.
     #[serde(default)]
     pub oidc: Option<converge_server::oidc::Settings>,
+    /// This deployment's external origin, used as the OAuth issuer for
+    /// MCP connectors. Absent → derived per-request from the `Host`
+    /// header (fine for dev; set it behind a proxy).
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// Logging configuration.

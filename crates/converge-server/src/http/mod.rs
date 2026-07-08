@@ -12,6 +12,7 @@ mod group;
 mod oauth;
 mod project;
 mod session;
+mod signin;
 mod token;
 mod user;
 
@@ -40,8 +41,16 @@ pub fn app<S: Storage + 'static>(
     me: Identity,
     sessions: Sessions,
     oidc: Option<Oidc>,
+    public: Option<String>,
     web: Option<&Path>,
 ) -> Router {
+    let issuer = oauth::Issuer {
+        store: store.clone(),
+        sessions: sessions.clone(),
+        oauth: crate::oauth::Oauth::new(sessions.clone()),
+        public,
+        signin: oidc.is_some(),
+    };
     let oidc = Arc::new(oidc);
     let protected = Router::new()
         .merge(group::routes().with_state(store.clone()))
@@ -57,7 +66,8 @@ pub fn app<S: Storage + 'static>(
         ));
     let router = Router::new()
         .route("/api/v1/healthz", get(healthz))
-        .merge(oauth::routes().with_state((store.clone(), sessions.clone(), oidc)))
+        .merge(oauth::routes().with_state(issuer))
+        .merge(signin::routes().with_state((store.clone(), sessions.clone(), oidc)))
         .merge(session::routes().with_state((store, sessions)))
         .merge(protected);
     match web {

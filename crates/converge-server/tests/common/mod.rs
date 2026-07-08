@@ -53,6 +53,7 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
             Sessions::new(Some("test-session-secret")),
             None,
             None,
+            None,
         ),
     )
 }

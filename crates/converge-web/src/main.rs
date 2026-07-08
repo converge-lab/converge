@@ -306,6 +306,29 @@ fn boot_loading() -> impl IntoView {
     }
 }
 
+/// An interrupted flow to resume after sign-in (`?next=`, e.g. an MCP
+/// connector's authorize URL) — same-origin paths only. Browser-only:
+/// it reads the query string through `web-sys`. Only the `api` build's
+/// submit path calls it (the embedded fixture never signs in).
+#[cfg_attr(not(feature = "api"), allow(dead_code))]
+#[cfg(target_arch = "wasm32")]
+fn resume() -> Option<String> {
+    window()
+        .location()
+        .search()
+        .ok()
+        .and_then(|s| web_sys::UrlSearchParams::new_with_str(&s).ok())
+        .and_then(|q| q.get("next"))
+        .filter(|n| n.starts_with('/') && !n.starts_with("//"))
+}
+
+/// No-op stand-in for non-wasm builds (see the wasm version above).
+#[cfg_attr(not(feature = "api"), allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
+fn resume() -> Option<String> {
+    None
+}
+
 /// Full-screen login: exchange a pasted bearer token for the session
 /// cookie, then reload — the boot load then succeeds with the cookie
 /// riding fetch ambiently. The pasted secret is sent once and never
@@ -334,7 +357,10 @@ fn login() -> impl IntoView + use<> {
             use converge_client::StoreError;
             match crate::store::client().session_login(secret.trim()).await {
                 Ok(()) => {
-                    let _ = window().location().reload();
+                    let _ = match resume() {
+                        Some(next) => window().location().assign(&next),
+                        None => window().location().reload(),
+                    };
                 }
                 Err(StoreError::Unauthorized) => {
                     set_notice.set(Some("That token isn't recognized.".into()));

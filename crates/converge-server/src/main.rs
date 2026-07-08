@@ -112,7 +112,14 @@ async fn main() -> anyhow::Result<()> {
     info!(listen = %config.listen, "converge-server listening");
     axum::serve(
         listener,
-        app(store, me, sessions, oidc, config.web.assets.as_deref()),
+        app(
+            store,
+            me,
+            sessions,
+            oidc,
+            config.auth.public_url.clone(),
+            config.web.assets.as_deref(),
+        ),
     )
     .with_graceful_shutdown(shutdown())
     .await?;

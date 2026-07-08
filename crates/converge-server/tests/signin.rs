@@ -114,6 +114,7 @@ async fn server(
         Sessions::new(Some("test-session-secret")),
         Some(oidc),
         None,
+        None,
     );
     (node, app)
 }

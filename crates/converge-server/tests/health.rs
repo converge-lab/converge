@@ -37,6 +37,7 @@ async fn healthz() {
         Sessions::new(Some("test-session-secret")),
         None,
         None,
+        None,
     )
     .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
     .await
@@ -49,6 +50,7 @@ async fn healthz() {
         PgStorage::connect(&url).await.unwrap(),
         me.clone(),
         Sessions::new(Some("test-session-secret")),
+        None,
         None,
         None,
     );
@@ -82,6 +84,7 @@ async fn healthz() {
         store,
         me,
         Sessions::new(Some("test-session-secret")),
+        None,
         None,
         Some(&dist),
     );

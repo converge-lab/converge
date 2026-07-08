@@ -34,6 +34,14 @@ your terminal (never to logs, where collectors would keep it). Then:
     --header "Authorization: Bearer cvg_..."
   ```
 
+  OAuth-capable MCP clients (claude.ai connectors) need no header: the
+  server is a full OAuth authorization server (discovery, dynamic client
+  registration, PKCE) — add the URL, sign in when the browser opens, done.
+  Connector grants appear in the settings UI as `connector:…` tokens;
+  revoking one cuts that connector off. Set `[auth] session_secret` (and
+  `public_url` behind a proxy) — registered clients are signed by that
+  key, so an unset (per-boot random) key orphans them on restart.
+
   Agents get four tools: `project_list` (discover ids), `decision_add`
   (record an ADR, with creation-time supersession), `decision_get` (the
   full record plus graph edges), and `decision_list` (filter by

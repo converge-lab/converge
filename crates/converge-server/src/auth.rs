@@ -6,15 +6,18 @@
 //!   anything header-configured: long-lived, listable, revocable. Storage
 //!   holds only their SHA-256 (high-entropy secrets need no salt — the
 //!   GitHub construction). Minted by `converge-server token mint` on the
-//!   host — never written to logs, where collectors would keep them.
-//! - **Session JWTs** for browsers: short-lived, carried in an `HttpOnly`
-//!   cookie so the secret never touches JavaScript, signed with
-//!   [`Sessions`]' key and self-expiring — the ephemeral sibling of the
-//!   opaque tokens (expiry stands in for revocation).
+//!   host (never written to logs, where collectors would keep them) or by
+//!   the caller over `/api/v1/tokens`. OAuth *refresh* tokens are this
+//!   family too — revocable rows labeled `connector:…`.
+//! - **User-credential JWTs**: browser sessions (`HttpOnly` cookie, so
+//!   the secret never touches JavaScript) and connector access tokens
+//!   (1-hour bearers from `crate::oauth`), both signed with [`Sessions`]'
+//!   key and self-expiring — the ephemeral sibling of the opaque tokens.
 //!
-//! GitHub OIDC (the team path) and the MCP OAuth server land in the next
-//! slices; `healthz`, the session endpoint, and the static web assets are
-//! the only open paths (the app must load to show its login screen).
+//! Identity arrives by token paste, OIDC sign-in (`crate::oidc`), or the
+//! connectors' OAuth flow (`crate::oauth`); the open paths are exactly
+//! those entrances, `healthz`, and the static web assets (the app must
+//! load to show its login screen).
 
 use axum::Json;
 use axum::extract::{Request, State};
@@ -50,12 +53,21 @@ pub struct Sessions {
     decoding: DecodingKey,
 }
 
+/// How long a connector's access token lives (the OAuth `expires_in`);
+/// the opaque refresh token is what persists — revocably.
+pub const ACCESS_TTL: Duration = Duration::hours(1);
+
 #[derive(Serialize, Deserialize)]
 struct Claims {
     /// The user id (ULID string).
     sub: String,
     /// Expiry, seconds since epoch (verified by the JWT library).
     exp: i64,
+    /// Claim-type discriminator: `s` = user credential (session cookie or
+    /// OAuth access token). Other JWT shapes (`crate::oauth`'s clients and
+    /// codes) carry their own `typ`, so none of them pass [`Sessions::verify`].
+    #[serde(default)]
+    typ: String,
 }
 
 impl Sessions {
@@ -82,19 +94,42 @@ impl Sessions {
 
     /// Issue a session JWT for `user`, expiring in [`SESSION_TTL`].
     pub fn issue(&self, user: UserId) -> String {
-        let claims = Claims {
+        self.credential(user, SESSION_TTL)
+    }
+
+    /// Issue an OAuth access token for `user` — the same user-credential
+    /// claim shape as a session, just shorter-lived ([`ACCESS_TTL`]), so
+    /// the middleware verifies both through one path.
+    pub fn access(&self, user: UserId) -> String {
+        self.credential(user, ACCESS_TTL)
+    }
+
+    fn credential(&self, user: UserId, ttl: Duration) -> String {
+        self.sign(&Claims {
             sub: user.to_string(),
-            exp: (OffsetDateTime::now_utc() + SESSION_TTL).unix_timestamp(),
-        };
-        jsonwebtoken::encode(&Header::default(), &claims, &self.encoding)
+            exp: (OffsetDateTime::now_utc() + ttl).unix_timestamp(),
+            typ: "s".into(),
+        })
+    }
+
+    /// Verify a user credential (session cookie or access token) down to
+    /// its user: signature, expiry, and the `s` claim type.
+    pub fn verify(&self, jwt: &str) -> Option<UserId> {
+        let claims: Claims = self.open(jwt)?;
+        (claims.typ == "s").then(|| claims.sub.parse().ok())?
+    }
+
+    /// Sign an arbitrary claim set (must carry `exp`) with this key.
+    pub fn sign<T: Serialize>(&self, claims: &T) -> String {
+        jsonwebtoken::encode(&Header::default(), claims, &self.encoding)
             .expect("HS256 encoding of plain claims cannot fail")
     }
 
-    /// Verify a session JWT (signature + expiry) down to its user.
-    pub fn verify(&self, jwt: &str) -> Option<UserId> {
-        let data =
-            jsonwebtoken::decode::<Claims>(jwt, &self.decoding, &Validation::default()).ok()?;
-        data.claims.sub.parse().ok()
+    /// Decode + validate (signature, expiry) an arbitrary claim set.
+    pub fn open<T: serde::de::DeserializeOwned>(&self, jwt: &str) -> Option<T> {
+        jsonwebtoken::decode::<T>(jwt, &self.decoding, &Validation::default())
+            .ok()
+            .map(|data| data.claims)
     }
 }
 
@@ -155,9 +190,10 @@ pub async fn hint<S: Storage>(store: &S, me: Identity) -> Result<(), StoreError>
 }
 
 /// Middleware: everything behind it requires a credential — a bearer
-/// token (agents, CLI) or the session cookie (browsers); the resolved
-/// [`Caller`] rides the request extensions. Bearer wins when both are
-/// present (it's the more explicit assertion).
+/// (an opaque `cvg_` token from agents/CLI, or an OAuth access JWT from a
+/// connector) or the session cookie (browsers); the resolved [`Caller`]
+/// rides the request extensions. Bearer wins when both are present (it's
+/// the more explicit assertion).
 pub async fn require<S: Storage>(
     State((store, sessions)): State<(S, Sessions)>,
     mut request: Request,
@@ -169,7 +205,9 @@ pub async fn require<S: Storage>(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     let user = match bearer {
-        Some(secret) => match store.token_user(&hash(secret)).await {
+        // The prefix says which family: opaque tokens hit storage, JWTs
+        // verify against the session key.
+        Some(secret) if secret.starts_with("cvg_") => match store.token_user(&hash(secret)).await {
             Ok(user) => user,
             Err(e) => {
                 tracing::error!(error = %e, "authentication lookup failed");
@@ -182,6 +220,7 @@ pub async fn require<S: Storage>(
                     .into_response();
             }
         },
+        Some(jwt) => sessions.verify(jwt),
         None => CookieJar::from_headers(request.headers())
             .get(COOKIE)
             .and_then(|cookie| sessions.verify(cookie.value())),

@@ -1,35 +1,72 @@
-//! The MCP connect command with a one-tap Copy button — shown on the
-//! onboarding screen and the dashboard's empty-feed hint.
+//! Copy-to-clipboard pieces: the shared [`CopyButton`] and the MCP connect
+//! [`CommandSnippet`] built on it (the onboarding screen, the dashboard's
+//! empty-feed hint, and the token reveal on Settings all copy something).
 
 use leptos::prelude::*;
 
-/// A mono command line plus a ghost "Copy" button that flips to "Copied ✓"
-/// for 1.5s. Owns its own `copied` state; writes to the clipboard on the
-/// browser, a no-op on native (compile-only) targets.
+/// A ghost "Copy" button that writes `text` to the clipboard and flips its
+/// label to "Copied ✓" for 1.5s. Uses `navigator.clipboard` where available
+/// and falls back to a hidden textarea + `execCommand("copy")` on insecure
+/// origins (plain http beyond localhost), where the clipboard API is absent.
 #[component]
-pub fn CommandSnippet(#[prop(into)] command: String) -> impl IntoView {
+pub fn CopyButton(#[prop(into)] text: String) -> impl IntoView {
     let (copied, set_copied) = signal(false);
-    let to_copy = command.clone();
     let on_copy = move |_| {
-        copy_to_clipboard(&to_copy);
+        copy_to_clipboard(&text);
         set_copied.set(true);
         reset_copied(set_copied);
     };
     view! {
+        <button type="button" class="cv-btn cv-btn--ghost cv-btn--neutral" on:click=on_copy>
+            <span>{move || if copied.get() { "Copied ✓" } else { "Copy" }}</span>
+        </button>
+    }
+}
+
+/// A mono command line plus a [`CopyButton`].
+#[component]
+pub fn CommandSnippet(#[prop(into)] command: String) -> impl IntoView {
+    view! {
         <div class="cv-onboard__snippet">
-            <span class="cv-onboard__cmd">{command}</span>
-            <button type="button" class="cv-btn cv-btn--ghost cv-btn--neutral" on:click=on_copy>
-                <span>{move || if copied.get() { "Copied ✓" } else { "Copy" }}</span>
-            </button>
+            <span class="cv-onboard__cmd">{command.clone()}</span>
+            <CopyButton text=command />
         </div>
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn copy_to_clipboard(text: &str) {
+    use wasm_bindgen::JsCast;
     // Fire-and-forget: the async write resolves off-thread; the label flip is
-    // optimistic. `navigator.clipboard` is present in every browser we target.
-    let _ = window().navigator().clipboard().write_text(text);
+    // optimistic.
+    let navigator = window().navigator();
+    let has_clipboard = js_sys::Reflect::get(navigator.as_ref(), &"clipboard".into())
+        .map(|v| !v.is_undefined())
+        .unwrap_or(false);
+    if has_clipboard {
+        let _ = navigator.clipboard().write_text(text);
+        return;
+    }
+    // Insecure-origin fallback: `navigator.clipboard` only exists in secure
+    // contexts, so select-and-copy through an off-screen textarea instead.
+    let doc = document();
+    let Ok(el) = doc.create_element("textarea") else {
+        return;
+    };
+    let _ = el.set_attribute("style", "position:fixed;top:0;left:0;opacity:0");
+    let Ok(ta) = el.dyn_into::<web_sys::HtmlTextAreaElement>() else {
+        return;
+    };
+    ta.set_value(text);
+    if let Some(body) = doc.body() {
+        let _ = body.append_child(&ta);
+        ta.select();
+        // `execCommand` lives on HtmlDocument in the web-sys bindings.
+        if let Some(html_doc) = doc.dyn_ref::<web_sys::HtmlDocument>() {
+            let _ = html_doc.exec_command("copy");
+        }
+        let _ = body.remove_child(&ta);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

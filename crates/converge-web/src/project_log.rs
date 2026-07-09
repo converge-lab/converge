@@ -51,14 +51,18 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
     let (ftags, set_ftags) = signal::<Vec<String>>(Vec::new());
 
     // The header "⋯" overflow menu (Edit only this iteration). Escape closes it;
-    // outside clicks are caught by a transparent scrim below.
+    // outside clicks are caught by a transparent scrim below. The listener
+    // handle must be removed by hand — leptos never detaches window listeners
+    // on owner disposal, and ProjectLog is rebuilt on every navigation, so a
+    // dropped handle would leak one global listener per visit.
     let (menu_open, set_menu_open) = signal(false);
     let menu_pid = pid.clone();
-    window_event_listener(ev::keydown, move |evt| {
+    let escape = window_event_listener(ev::keydown, move |evt| {
         if evt.key() == "Escape" {
             set_menu_open.set(false);
         }
     });
+    on_cleanup(move || escape.remove());
 
     let heading = data::proj_name(&pid);
     let desc = data::proj_desc(&pid);

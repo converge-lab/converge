@@ -32,6 +32,11 @@ pub struct AppState {
     pub error: Option<LoadError>,
     /// Index of the active group within `dataset.groups`.
     pub group: usize,
+    /// A dismissible failure notice from a write. Mutations close their modal
+    /// optimistically, so a rejected create/edit reports back through this —
+    /// the shell renders it as a toast (`main.rs`); cleared on dismiss or on
+    /// the next mutation attempt.
+    pub notice: Option<String>,
 }
 
 /// `Rc` inside the state makes it `!Send`, so the store is pinned to the single

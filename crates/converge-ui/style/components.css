@@ -1345,3 +1345,8 @@
 
 /* === Sidebar: empty projects placeholder === */
 .cv-proj-empty { font-size: 0.71875rem; color: var(--cv-text-faint); padding: 0.375rem 0.625rem; }
+
+/* === Mutation-failure toast (bottom-center, above the modal scrim) === */
+.cv-toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 95; display: flex; align-items: center; gap: 0.625rem; max-width: 28rem; background: var(--cv-raised); border: 1px solid color-mix(in srgb, var(--cv-danger) 45%, transparent); border-radius: 0.5625rem; box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5); padding: 0.625rem 0.75rem; font-size: 0.8125rem; line-height: 1.45; color: var(--cv-text-secondary); }
+.cv-toast__close { width: 1.25rem; height: 1.25rem; border: 0; background: transparent; color: var(--cv-text-faint); cursor: pointer; font-size: 0.8125rem; line-height: 1; flex: none; padding: 0; }
+.cv-toast__close:hover { color: var(--cv-text); }

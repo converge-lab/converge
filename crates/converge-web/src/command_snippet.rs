@@ -47,24 +47,25 @@ fn reset_copied(set_copied: WriteSignal<bool>) {
 fn reset_copied(_set_copied: WriteSignal<bool>) {}
 
 /// The MCP connect command, pointed at this deployment's own origin — in
-/// production the server serves the app and `/mcp` same-origin, so the current
-/// host is the right one.
+/// production the server serves the app and `/mcp` same-origin, so the page's
+/// scheme *and* host are exactly the ones an agent must connect to (an http
+/// deployment must not be told to speak TLS).
 pub fn mcp_command() -> String {
     format!(
-        "claude mcp add --transport http converge https://{}/mcp",
-        mcp_host()
+        "claude mcp add --transport http converge {}/mcp",
+        mcp_origin()
     )
 }
 
 #[cfg(target_arch = "wasm32")]
-fn mcp_host() -> String {
+fn mcp_origin() -> String {
     window()
         .location()
-        .host()
-        .unwrap_or_else(|_| "converge.internal".into())
+        .origin()
+        .unwrap_or_else(|_| "https://converge.internal".into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn mcp_host() -> String {
-    "converge.internal".into()
+fn mcp_origin() -> String {
+    "https://converge.internal".into()
 }

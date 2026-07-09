@@ -8,6 +8,8 @@ use converge_ui::domain::ChatRole;
 use converge_ui::molecules::{ChatBubble, ChatComposer, ChatListItem};
 use leptos::prelude::*;
 
+use crate::store::AppStateStoreFields;
+
 const SUGGESTIONS: [&str; 3] = [
     "What must the local agent know before changing the api-gateway error format?",
     "Is it safe to change the OIDC token TTL?",
@@ -17,31 +19,61 @@ const SUGGESTIONS: [&str; 3] = [
 // The prototype opens with a single fresh chat; more accumulate as you talk.
 const CHATS: [&str; 1] = ["New chat"];
 
+/// Expert-chat state, held in context above the router: the active screen is
+/// re-created on every route change *and* on every dataset write (a sidebar
+/// "New project" mid-chat), and an in-progress chat must survive both. It is
+/// scoped to a group and reset lazily when the active group changes — the
+/// reference design likewise kept the thread in app-level state.
+#[derive(Clone, Copy)]
+pub struct ExpertState {
+    started: RwSignal<bool>,
+    active_chat: RwSignal<usize>,
+    selected: RwSignal<Vec<String>>,
+    /// The group index the state belongs to; `None` until the first visit.
+    for_group: RwSignal<Option<usize>>,
+}
+
+/// Provide the chat state at the app root (once, above every screen).
+pub fn provide_expert_state() {
+    provide_context(ExpertState {
+        started: RwSignal::new(false),
+        active_chat: RwSignal::new(0),
+        selected: RwSignal::new(Vec::new()),
+        for_group: RwSignal::new(None),
+    });
+}
+
 #[component]
 pub fn Expert() -> impl IntoView {
-    let (started, set_started) = signal(false);
-    // Which mock chat is selected, and which group projects are in scope.
-    let (active_chat, set_active_chat) = signal(0usize);
-    // Default the in-scope project to api-gateway when the active group has it,
-    // otherwise the group's first project (so personal groups select correctly).
-    let (selected, set_selected) = signal::<Vec<String>>({
+    let state = expect_context::<ExpertState>();
+    // (Re)scope the chat to the active group: the first visit — or a group
+    // switch — resets the thread and derives the default project scope
+    // (api-gateway when the group has it, else its first project).
+    let group = crate::store::use_store().group().get_untracked();
+    if state.for_group.get_untracked() != Some(group) {
+        state.for_group.set(Some(group));
+        state.started.set(false);
+        state.active_chat.set(0);
         let projs = crate::data::cur_group_projects();
         let first = if projs.iter().any(|p| p.as_str() == "api-gateway") {
             "api-gateway"
         } else {
             projs.first().map(|s| s.as_str()).unwrap_or("")
         };
-        if first.is_empty() {
+        state.selected.set(if first.is_empty() {
             vec![]
         } else {
             vec![first.to_string()]
-        }
-    });
+        });
+    }
+    let started = state.started;
+    let active_chat = state.active_chat;
+    let selected = state.selected;
 
     view! {
         <div class="cv-expert">
             <div class="cv-expert__chats">
-                <div class="cv-expert__newchat" on:click=move |_| set_started.set(false)>
+                <div class="cv-expert__newchat" on:click=move |_| started.set(false)>
                     <span class="cv-fg-expert">"＋"</span>
                     " New chat"
                 </div>
@@ -56,7 +88,7 @@ pub fn Expert() -> impl IntoView {
                                 <ChatListItem
                                     title=*t
                                     active=i == cur
-                                    on_click=Callback::new(move |_| set_active_chat.set(i))
+                                    on_click=Callback::new(move |_| active_chat.set(i))
                                 />
                             }
                         })
@@ -89,7 +121,7 @@ pub fn Expert() -> impl IntoView {
                                         class=cls
                                         on:click=move |_| {
                                             let pid = pid.clone();
-                                            set_selected
+                                            selected
                                                 .update(|s| {
                                                     if let Some(idx) = s.iter().position(|x| x == &pid) {
                                                         // keep at least one project selected
@@ -112,7 +144,7 @@ pub fn Expert() -> impl IntoView {
                     if started.get() {
                         started_thread().into_any()
                     } else {
-                        empty_state(set_started).into_any()
+                        empty_state(started).into_any()
                     }
                 }}
             </div>
@@ -122,7 +154,7 @@ pub fn Expert() -> impl IntoView {
 
 /// Empty state — hero, composer, and three suggestion chips. Any of them starts
 /// the (mock) conversation.
-fn empty_state(set_started: WriteSignal<bool>) -> impl IntoView {
+fn empty_state(started: RwSignal<bool>) -> impl IntoView {
     view! {
         <div class="cv-expert__empty">
             <div class="cv-text-center cv-expert__lead">
@@ -147,7 +179,7 @@ fn empty_state(set_started: WriteSignal<bool>) -> impl IntoView {
             <div class="cv-w-full cv-measure">
                 <ChatComposer
                     placeholder="Ask the expert…"
-                    on_send=Callback::new(move |_: String| set_started.set(true))
+                    on_send=Callback::new(move |_: String| started.set(true))
                 />
             </div>
             <div class="cv-w-full cv-measure cv-col cv-gap-7">
@@ -155,7 +187,7 @@ fn empty_state(set_started: WriteSignal<bool>) -> impl IntoView {
                     .iter()
                     .map(|s| {
                         view! {
-                            <div class="cv-suggest" on:click=move |_| set_started.set(true)>
+                            <div class="cv-suggest" on:click=move |_| started.set(true)>
                                 {*s}
                             </div>
                         }

@@ -4,8 +4,10 @@
 //! then reflects the confirmed result in the store — an optimistic-feeling
 //! update with no full reload (see `data::*_local`). The embedded build has no
 //! server, so it applies locally with a generated slug id, enough for the
-//! offline demo. Failures are logged; the store is only touched on success, so
-//! the UI never shows a create the server rejected.
+//! offline demo. The dataset is only touched on success, so the UI never
+//! shows a create the server rejected; a failure reports back through the
+//! store's `notice` slot (the modal has already closed optimistically), which
+//! the shell renders as a dismissible toast.
 
 use converge_ui::domain::GroupKind;
 use leptos::prelude::*;
@@ -14,9 +16,18 @@ use crate::data;
 use crate::route::{Route, navigate};
 use crate::store::{AppStateStoreFields, use_store};
 
+/// Report a failed mutation: log it and surface it as the shell's toast.
+#[cfg(feature = "api")]
+fn fail(store: crate::store::AppStore, message: String) {
+    leptos::logging::error!("{message}");
+    store.notice().set(Some(message));
+}
+
 /// Create a group, switch to it, and land on its (empty) dashboard.
 pub fn create_group(name: String, kind: GroupKind) {
     let store = use_store();
+    // A fresh attempt supersedes any lingering failure notice.
+    store.notice().set(None);
     #[cfg(feature = "api")]
     {
         use converge_client::{GroupKind as Ck, NewGroup};
@@ -36,7 +47,7 @@ pub fn create_group(name: String, kind: GroupKind) {
                     store.group().set(idx);
                     navigate(&Route::Dashboard);
                 }
-                Err(e) => leptos::logging::error!("create group failed: {e}"),
+                Err(e) => fail(store, format!("Couldn't create group “{name}” — {e}")),
             }
         });
     }
@@ -52,6 +63,7 @@ pub fn create_group(name: String, kind: GroupKind) {
 /// its full layout once the group is no longer empty).
 pub fn create_project(name: String) {
     let store = use_store();
+    store.notice().set(None);
     let group_id = data::cur_group().id;
     #[cfg(feature = "api")]
     {
@@ -68,7 +80,7 @@ pub fn create_project(name: String) {
             };
             match crate::store::client().project_add(&new).await {
                 Ok(id) => data::add_project_local(store, &group_id, id.to_string(), name, None),
-                Err(e) => leptos::logging::error!("create project failed: {e}"),
+                Err(e) => fail(store, format!("Couldn't create project “{name}” — {e}")),
             }
         });
     }
@@ -83,6 +95,7 @@ pub fn create_project(name: String) {
 /// reference and decision link is untouched.
 pub fn edit_project(id: String, name: String, desc: String) {
     let store = use_store();
+    store.notice().set(None);
     let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
@@ -98,7 +111,7 @@ pub fn edit_project(id: String, name: String, desc: String) {
         leptos::task::spawn_local(async move {
             match crate::store::client().project_edit(pid, &edits).await {
                 Ok(()) => data::edit_project_local(store, &id, name, description),
-                Err(e) => leptos::logging::error!("edit project failed: {e}"),
+                Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
             }
         });
     }

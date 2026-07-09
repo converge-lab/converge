@@ -431,14 +431,11 @@
   padding: 1.125rem 0.875rem;
 }
 .cv-sidebar__logo { display: flex; align-items: center; gap: 0.625rem; padding: 0.375rem 0.5rem; }
-.cv-sidebar__brand {
-  width: 1.375rem;
-  height: 1.375rem;
-  background: var(--cv-primary);
-  border-radius: 0.375rem;
-  transform: rotate(45deg);
-  box-shadow: 0 0 1rem color-mix(in srgb, var(--cv-primary) 45%, transparent);
-}
+.cv-sidebar__logo svg { height: 2.4rem; display: block; }
+/* Logo (inline SVG): the wordmark follows the text color, the mark stays
+   brand green — both themes work through the token cascade. */
+.cv-logo__word { fill: var(--cv-text); }
+.cv-logo__mark { fill: var(--cv-primary); }
 .cv-sidebar__group {
   display: flex;
   align-items: center;
@@ -1290,3 +1287,88 @@
   .cv-logrow__summary { display: none; }
   .cv-logrow__date { width: auto; }
 }
+
+/* css-additions.css — NEW classes for the onboarding + project-management design.
+   Append to crates/converge-ui/style/components.css (values reuse existing tokens
+   from tokens.css; raw rems mirror the approved prototype exactly).
+   Scope: onboarding empty state, create/edit modals, overflow menu,
+   sidebar "New project" row, group-switcher footer. NO archive/delete yet. */
+
+/* === Onboarding — empty group state (dashboard body) === */
+.cv-onboard-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+.cv-onboard { width: 100%; max-width: 35rem; display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center; }
+.cv-onboard__mark { height: 2.75rem; margin-bottom: 0.375rem; }
+.cv-onboard__sub { color: var(--cv-text-muted); font-size: 0.875rem; line-height: 1.55; max-width: 26rem; margin: 0; }
+.cv-onboard__cards { display: grid; grid-template-columns: 1fr 1fr; gap: 0.625rem; width: 100%; margin-top: 0.5rem; }
+.cv-onboard__card { background: var(--cv-panel); border: 1px solid var(--cv-border); border-radius: 0.625rem; padding: 1rem; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 0.375rem; }
+.cv-onboard__card:hover { border-color: var(--cv-border-strong); }
+.cv-onboard__glyph { width: 2rem; height: 2rem; border-radius: 0.5rem; background: var(--cv-chip); display: flex; align-items: center; justify-content: center; font-size: 0.9375rem; color: var(--cv-text-secondary); margin-bottom: 0.25rem; }
+.cv-onboard__title { font-weight: 600; font-size: 0.9375rem; }
+.cv-onboard__desc { font-size: 0.8125rem; color: var(--cv-text-muted); line-height: 1.5; }
+.cv-onboard__or { display: flex; align-items: center; gap: 0.75rem; width: 100%; color: var(--cv-text-faint); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.375rem; }
+.cv-onboard__or::before, .cv-onboard__or::after { content: ""; flex: 1; height: 1px; background: var(--cv-border); }
+/* Agent block — also reused on the dashboard as the empty-feed hint */
+.cv-onboard__agent { width: 100%; background: var(--cv-inset); border: 1px solid var(--cv-border); border-radius: 0.625rem; padding: 0.875rem 1rem; text-align: left; display: flex; flex-direction: column; gap: 0.625rem; box-sizing: border-box; }
+.cv-onboard__snippet { display: flex; align-items: center; gap: 0.625rem; background: var(--cv-transcript); border: 1px solid var(--cv-border); border-radius: 0.5rem; padding: 0.5rem 0.625rem; }
+.cv-onboard__cmd { font-family: var(--cv-font-mono); font-size: 0.71875rem; color: var(--cv-text-secondary); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cv-onboard__ask { font-size: 0.78125rem; color: var(--cv-text-faint); line-height: 1.5; }
+.cv-onboard__ask em { color: var(--cv-text-muted); }
+
+/* === Modal (create group / create project / edit project) === */
+.cv-modal-scrim { position: fixed; inset: 0; background: rgba(4, 5, 7, 0.62); display: flex; align-items: center; justify-content: center; z-index: 90; }
+.cv-modal { width: 25rem; background: var(--cv-raised); border: 1px solid var(--cv-border-strong); border-radius: 0.75rem; padding: 1.25rem; box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 0.875rem; box-sizing: border-box; }
+.cv-modal__foot { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.25rem; }
+.cv-modal__label { font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cv-text-faint); font-weight: 600; }
+/* Disabled state for the primary submit while the name field is empty */
+.cv-btn:disabled { opacity: 0.45; pointer-events: none; }
+
+/* === Overflow menu ("⋯" on the project page) === */
+.cv-iconbtn { width: 1.75rem; height: 1.75rem; border-radius: 0.5rem; border: 1px solid var(--cv-border); display: flex; align-items: center; justify-content: center; color: var(--cv-text-muted); cursor: pointer; font-size: 1rem; flex: none; background: transparent; }
+.cv-iconbtn:hover, .cv-iconbtn--open { background: var(--cv-chip); color: var(--cv-text); border-color: var(--cv-border-strong); }
+.cv-menu { background: var(--cv-raised); border: 1px solid var(--cv-border-strong); border-radius: 0.5625rem; box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5); padding: 0.375rem; width: 15rem; display: flex; flex-direction: column; gap: 0.125rem; }
+.cv-menu__item { display: flex; align-items: center; gap: 0.625rem; padding: 0.4375rem 0.625rem; border-radius: 0.375rem; font-size: 0.8125rem; color: var(--cv-text-secondary); cursor: pointer; }
+.cv-menu__item:hover { background: var(--cv-chip); color: var(--cv-text); }
+.cv-menu__icon { width: 1rem; text-align: center; flex: none; font-size: 0.8125rem; }
+.cv-menu__sep { height: 1px; background: var(--cv-border); margin: 0.25rem 0.375rem; }
+.cv-menu__note { font-size: 0.6875rem; color: var(--cv-text-faint); padding: 0.125rem 0.625rem 0.375rem; line-height: 1.45; }
+
+/* === Sidebar: "＋ New project" row under the project list === */
+.cv-addrow { display: flex; align-items: center; gap: 0.5rem; padding: 0.4375rem 0.625rem; border-radius: 0.4375rem; font-size: 0.8125rem; color: var(--cv-text-faint); cursor: pointer; margin-top: 0.125rem; }
+.cv-addrow:hover { background: var(--cv-chip); color: var(--cv-text-secondary); }
+.cv-addrow__plus { font-size: 0.875rem; line-height: 1; }
+
+/* === Group-switcher menu: footer with "New group…" === */
+.cv-groupmenu__foot { display: flex; flex-direction: column; gap: 0.125rem; border-top: 1px solid var(--cv-border); margin-top: 0.375rem; padding-top: 0.375rem; }
+
+/* === Sidebar: empty projects placeholder === */
+.cv-proj-empty { font-size: 0.71875rem; color: var(--cv-text-faint); padding: 0.375rem 0.625rem; }
+
+/* === Mutation-failure toast (bottom-center, above the modal scrim) === */
+.cv-toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 95; display: flex; align-items: center; gap: 0.625rem; max-width: 28rem; background: var(--cv-raised); border: 1px solid color-mix(in srgb, var(--cv-danger) 45%, transparent); border-radius: 0.5625rem; box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5); padding: 0.625rem 0.75rem; font-size: 0.8125rem; line-height: 1.45; color: var(--cv-text-secondary); }
+.cv-toast__close { width: 1.25rem; height: 1.25rem; border: 0; background: transparent; color: var(--cv-text-faint); cursor: pointer; font-size: 0.8125rem; line-height: 1; flex: none; padding: 0; }
+.cv-toast__close:hover { color: var(--cv-text); }
+
+/* === Settings: API tokens === */
+.cv-settings { max-width: 44rem; }
+.cv-settings__desc { font-size: 0.875rem; color: var(--cv-text-muted); line-height: 1.6; max-width: 38rem; margin: 0 0 1.125rem; }
+.cv-settings__desc b { color: var(--cv-text-secondary); font-weight: 500; }
+.cv-tokenform { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; max-width: 30rem; }
+.cv-tokenform .cv-input { flex: 1; }
+.cv-tokennew { background: color-mix(in srgb, var(--cv-primary) 7%, transparent); border: 1px solid color-mix(in srgb, var(--cv-primary) 30%, transparent); border-radius: 0.625rem; padding: 0.875rem 1rem; display: flex; flex-direction: column; gap: 0.625rem; margin-bottom: 1.5rem; max-width: 30rem; }
+.cv-tokennew__head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; font-weight: 600; color: var(--cv-primary); }
+.cv-tokennew__snippet { display: flex; align-items: center; gap: 0.625rem; background: var(--cv-transcript); border: 1px solid var(--cv-border); border-radius: 0.5rem; padding: 0.5rem 0.625rem; }
+.cv-tokennew__cmd { font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cv-tokennew__note { font-size: 0.78125rem; color: var(--cv-text-muted); line-height: 1.5; }
+.cv-tokens { border: 1px solid var(--cv-border); border-radius: 0.6875rem; background: var(--cv-panel); overflow: hidden; }
+.cv-tokens__row { display: flex; align-items: center; gap: 1rem; padding: 0.8125rem 1rem; border-bottom: 1px solid var(--cv-border); }
+.cv-tokens__row:last-child { border-bottom: 0; }
+.cv-tokens__row:hover { background: var(--cv-inset); }
+.cv-tokens__meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1875rem; }
+.cv-tokens__name { font-size: 0.875rem; font-weight: 500; }
+.cv-tokens__id { font-family: var(--cv-font-mono); font-size: 0.71875rem; color: var(--cv-text-faint); }
+.cv-tokens__when { font-size: 0.71875rem; color: var(--cv-text-faint); white-space: nowrap; text-align: right; line-height: 1.5; }
+.cv-tokens__revoke { font-size: 0.78125rem; color: var(--cv-text-muted); border: 1px solid var(--cv-border); border-radius: 0.4375rem; padding: 0.3125rem 0.625rem; cursor: pointer; background: transparent; font-family: var(--cv-font-sans); flex: none; }
+.cv-tokens__revoke:hover { color: var(--cv-danger); border-color: color-mix(in srgb, var(--cv-danger) 40%, transparent); background: color-mix(in srgb, var(--cv-danger) 8%, transparent); }
+.cv-tokens__confirm { display: flex; align-items: center; gap: 0.625rem; flex: none; }
+.cv-tokens__warn { font-size: 0.78125rem; color: var(--cv-danger); }
+.cv-tokens__empty { font-size: 0.8125rem; color: var(--cv-text-faint); padding: 1rem; text-align: center; }

@@ -29,10 +29,17 @@ pub fn Button(
     #[prop(optional)] variant: ButtonVariant,
     #[prop(optional)] tone: Tone,
     #[prop(optional, into)] icon: Option<Glyph>,
+    /// Reactive disabled state — dims the button and blocks clicks
+    /// (`.cv-btn:disabled`). Used by modal submits gated on a valid field.
+    #[prop(optional, into)]
+    disabled: Signal<bool>,
     #[prop(optional, into)] on_click: Option<Callback<()>>,
 ) -> impl IntoView {
     let class = format!("cv-btn cv-btn--{} cv-btn--{}", variant.slug(), tone.slug());
     let click = move |_ev: MouseEvent| {
+        if disabled.get() {
+            return;
+        }
         if let Some(cb) = on_click {
             cb.run(());
         }
@@ -40,7 +47,7 @@ pub fn Button(
     view! {
         // Explicit `type="button"` so the component never accidentally submits a
         // surrounding form (the HTML default is `submit`).
-        <button type="button" class=class on:click=click>
+        <button type="button" class=class disabled=disabled on:click=click>
             {icon.map(|g| view! { <span class="cv-btn__icon">{g.glyph()}</span> })}
             <span>{label}</span>
         </button>

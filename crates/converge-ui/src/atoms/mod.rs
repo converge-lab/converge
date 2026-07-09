@@ -8,6 +8,8 @@ mod callout;
 mod count_badge;
 mod icon;
 mod input;
+mod logo;
+mod modal;
 mod section_label;
 mod select;
 
@@ -18,5 +20,7 @@ pub use callout::Callout;
 pub use count_badge::CountBadge;
 pub use icon::{Glyph, Icon};
 pub use input::Input;
+pub use logo::{Logo, LogoVariant};
+pub use modal::Modal;
 pub use section_label::SectionLabel;
 pub use select::Select;

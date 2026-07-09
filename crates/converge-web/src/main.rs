@@ -2,10 +2,14 @@
 //! driven by a hash router; the sidebar, breadcrumb, and content all react to
 //! the current route and the active group.
 
+mod command_snippet;
 mod dashboard;
 mod data;
 mod decision_detail;
 mod expert;
+mod modals;
+mod mutate;
+mod onboard;
 mod project_log;
 mod route;
 mod search;
@@ -16,10 +20,10 @@ mod source_viewer;
 mod store;
 mod when;
 
-use converge_ui::atoms::{Avatar, Button, Glyph, Input};
+use converge_ui::atoms::{Avatar, Button, Glyph, Input, Logo};
 use converge_ui::domain::{GroupKind, Tone};
 use converge_ui::layout::AppShell;
-use converge_ui::molecules::{NavItem, ProjectNavItem};
+use converge_ui::molecules::{AddRow, NavItem, ProjectNavItem};
 use dashboard::Dashboard;
 use decision_detail::DecisionDetail;
 use expert::Expert;
@@ -27,6 +31,8 @@ use leptos::ev;
 use leptos::html;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
+use modals::{ModalHost, ModalKind};
+use onboard::Onboarding;
 use project_log::ProjectLog;
 use route::{Route, current_route, navigate};
 use search::Search;
@@ -153,6 +159,17 @@ fn apply_theme(t: &str) {
     }
 }
 
+/// Subscribe the calling closure to what the `data::` queries read: the
+/// active group and the dataset itself. The queries read untracked (data.rs),
+/// so every closure that *displays* mutable data opts in through this — a
+/// create/edit publishes a fresh `Rc<Dataset>` and exactly these closures
+/// refresh, while the shell (gated on the load phase, not the identity)
+/// stays mounted.
+fn track_data(store: AppStore) {
+    let _ = store.group().get();
+    let _ = store.dataset().get();
+}
+
 #[component]
 fn App() -> impl IntoView {
     // The store owns the whole dataset + active-group state, and is published to
@@ -160,6 +177,13 @@ fn App() -> impl IntoView {
     // here for the router and the group switcher. The dataset loads
     // asynchronously; until it resolves the UI shows a loading screen.
     let store = provide_default_store();
+    // The open-modal controller, shared with every trigger (onboarding cards,
+    // sidebar "＋" row, switcher footer, project "⋯" menu) and rendered once by
+    // `ModalHost` below.
+    modals::provide_modal_ctl();
+    // Expert-chat state lives above the router so an in-progress chat
+    // survives screen re-creation (route changes and dataset writes).
+    expert::provide_expert_state();
     let (route, set_route) = signal(current_route());
     // Drawer state for narrow viewports: the sidebar is off-canvas there,
     // opened by the top-bar hamburger. Harmless on desktop, where the CSS keeps
@@ -231,22 +255,35 @@ fn App() -> impl IntoView {
         }
     });
 
-    // Gate the whole shell on the load: the sidebar and every screen query the
-    // dataset, so none of it can render until the store is populated.
-    move || {
+    // Gate the whole shell on the load *phase*, not the dataset identity: the
+    // memo re-derives on every store write but notifies only when the phase
+    // actually changes, so post-load mutations (create/edit publish a fresh
+    // `Rc<Dataset>`) refresh the dataset-tracked closures below without
+    // tearing down the shell — component state (open menus, the Expert chat)
+    // survives a write.
+    let phase = Memo::new(move |_| {
         if let Some(err) = store.error().get() {
             return match err {
-                LoadError::Unauthorized => login().into_any(),
-                LoadError::Failed(msg) => boot_error(msg).into_any(),
+                LoadError::Unauthorized => Phase::Unauthorized,
+                LoadError::Failed(msg) => Phase::Failed(msg),
             };
         }
-        let Some(dataset) = store.dataset().get() else {
-            return boot_loading().into_any();
-        };
-        // A fresh deployment has no groups yet; every accessor below
-        // assumes at least one, so gate with an honest empty state.
-        if dataset.groups.is_empty() {
-            return boot_empty().into_any();
+        match store.dataset().get() {
+            None => Phase::Loading,
+            // A fresh load with no groups: every accessor below assumes at
+            // least one, so gate with an honest empty state. Mutations only
+            // ever add groups, so Ready never regresses to Empty.
+            Some(dataset) if dataset.groups.is_empty() => Phase::Empty,
+            Some(_) => Phase::Ready,
+        }
+    });
+    move || {
+        match phase.get() {
+            Phase::Unauthorized => return login().into_any(),
+            Phase::Failed(msg) => return boot_error(msg).into_any(),
+            Phase::Loading => return boot_loading().into_any(),
+            Phase::Empty => return boot_empty().into_any(),
+            Phase::Ready => {}
         }
         view! {
             <AppShell
@@ -275,8 +312,17 @@ fn App() -> impl IntoView {
                     .into_any()
             >
                 {move || {
-                    let _ = store.group().get();
+                    // Tracked on group AND dataset: a mutation re-creates the
+                    // active screen (the onboarding↔dashboard flip, a renamed
+                    // project's header). Screens with cross-write state keep
+                    // it outside the component (see `expert::ExpertState`).
+                    track_data(store);
                     match route.get() {
+                        // Onboarding is a *state* of the dashboard: an empty
+                        // group shows it instead of the (empty) feed.
+                        Route::Dashboard if data::cur_group_projects().is_empty() => {
+                            view! { <Onboarding /> }.into_any()
+                        }
                         Route::Dashboard => view! { <Dashboard go=go /> }.into_any(),
                         Route::Decision(id) => view! { <DecisionDetail go=go id=id /> }.into_any(),
                         Route::Signals => view! { <Signals go=go /> }.into_any(),
@@ -289,9 +335,40 @@ fn App() -> impl IntoView {
                     }
                 }}
             </AppShell>
+            <ModalHost />
+            // Mutation-failure toast: creates/edits close their modal before
+            // the request resolves, so a rejected write reports back here.
+            {move || {
+                store.notice().get().map(|msg| {
+                    view! {
+                        <div class="cv-toast" role="alert">
+                            <span>{msg}</span>
+                            <button
+                                type="button"
+                                class="cv-toast__close"
+                                aria-label="Dismiss"
+                                on:click=move |_| store.notice().set(None)
+                            >
+                                {Glyph::Close.glyph()}
+                            </button>
+                        </div>
+                    }
+                })
+            }}
         }
         .into_any()
     }
+}
+
+/// The app's boot phase, derived from the store by `App`'s gate memo.
+/// `PartialEq` is what lets the memo swallow same-phase writes.
+#[derive(Clone, PartialEq)]
+enum Phase {
+    Loading,
+    Unauthorized,
+    Failed(String),
+    Empty,
+    Ready,
 }
 
 /// Full-screen loading state shown while the dataset resolves.
@@ -511,11 +588,7 @@ fn Sidebar(
             aria-label="Main navigation"
         >
             <div class="cv-sidebar__logo">
-                <div class="cv-sidebar__brand"></div>
-                <div class="cv-col cv-lh-1">
-                    <span class="cv-fw-semibold cv-fs-xl">"Converge"</span>
-                    <span class="cv-fs-xs cv-fg-faint">"decision memory"</span>
-                </div>
+                <Logo />
             </div>
 
             // group selector + switcher dropdown
@@ -534,7 +607,7 @@ fn Sidebar(
                 >
                     <div class="cv-groupicon">
                         {move || {
-                            store.group().get();
+                            track_data(store);
                             match data::cur_group().kind {
                                 GroupKind::Personal => Glyph::Personal.glyph(),
                                 GroupKind::Shared => Glyph::Shared.glyph(),
@@ -543,16 +616,16 @@ fn Sidebar(
                     </div>
                     <div class="cv-grow">
                         <div class="cv-fw-medium cv-fs-md">
-                            {move || { store.group().get(); data::group_name() }}
+                            {move || { track_data(store); data::group_name() }}
                         </div>
                         <div class="cv-fs-2xs cv-fg-faint">
-                            {move || { store.group().get(); data::group_meta() }}
+                            {move || { track_data(store); data::group_meta() }}
                         </div>
                     </div>
                     <span class="cv-fg-muted">{Glyph::CaretDown.glyph()}</span>
                 </div>
                 {move || {
-                    store.group().get();
+                    track_data(store);
                     group_open.get().then(|| {
                         let (shared, personal): (Vec<_>, Vec<_>) = data::groups()
                             .into_iter()
@@ -564,75 +637,110 @@ fn Sidebar(
                                 {shared.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
                                 <div class="cv-groupmenu__label cv-groupmenu__label--div">"Personal"</div>
                                 {personal.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
+                                <div class="cv-groupmenu__foot">
+                                    <div
+                                        class="cv-groupmenu__row"
+                                        on:click=move |_| {
+                                            set_group_open.set(false);
+                                            modals::open(ModalKind::NewGroup);
+                                        }
+                                    >
+                                        <span class="cv-groupmenu__icon">{Glyph::Plus.glyph()}</span>
+                                        <span class="cv-grow">"New group…"</span>
+                                    </div>
+                                </div>
                             </div>
                         }
                     })
                 }}
             </div>
 
-            <div>
-                <div class="cv-sidebar__section">"Views"</div>
-                <nav class="cv-col cv-gap-2">
-                    {move || {
-                        let r = route.get();
-                        let _ = store.group().get();
-                        let sig_count = data::group_signals().len() as u32;
+            // Views + Projects are hidden until the group has a project — the
+            // trimmed onboarding sidebar is just logo, switcher, spacer, account.
+            {move || {
+                track_data(store);
+                (!data::cur_group_projects().is_empty())
+                    .then(|| {
                         view! {
-                            <NavItem
-                                icon=Glyph::Dashboard
-                                label="Dashboard"
-                                active=r == Route::Dashboard
-                                on_click=Callback::new(move |_| go.run(Route::Dashboard))
-                            />
-                            <NavItem
-                                icon=Glyph::Search
-                                label="Search"
-                                active=r == Route::Search
-                                on_click=Callback::new(move |_| go.run(Route::Search))
-                            />
-                            <NavItem
-                                icon=Glyph::Signal
-                                label="Signals"
-                                count=sig_count
-                                accent=Tone::Signal
-                                active=r == Route::Signals
-                                on_click=Callback::new(move |_| go.run(Route::Signals))
-                            />
-                            <NavItem
-                                icon=Glyph::Expert
-                                label="Expert model"
-                                accent=Tone::Expert
-                                active=r == Route::Expert
-                                on_click=Callback::new(move |_| go.run(Route::Expert))
-                            />
+                            <div>
+                                <div class="cv-sidebar__section">"Views"</div>
+                                <nav class="cv-col cv-gap-2">
+                                    {move || {
+                                        let r = route.get();
+                                        let _ = store.group().get();
+                                        let sig_count = data::group_signals().len() as u32;
+                                        view! {
+                                            <NavItem
+                                                icon=Glyph::Dashboard
+                                                label="Dashboard"
+                                                active=r == Route::Dashboard
+                                                on_click=Callback::new(move |_| go.run(Route::Dashboard))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Search
+                                                label="Search"
+                                                active=r == Route::Search
+                                                on_click=Callback::new(move |_| go.run(Route::Search))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Signal
+                                                label="Signals"
+                                                count=sig_count
+                                                accent=Tone::Signal
+                                                active=r == Route::Signals
+                                                on_click=Callback::new(move |_| go.run(Route::Signals))
+                                            />
+                                            <NavItem
+                                                icon=Glyph::Expert
+                                                label="Expert model"
+                                                accent=Tone::Expert
+                                                active=r == Route::Expert
+                                                on_click=Callback::new(move |_| go.run(Route::Expert))
+                                            />
+                                        }
+                                    }}
+                                </nav>
+                            </div>
                         }
-                    }}
-                </nav>
-            </div>
+                    })
+            }}
 
-            <div class="cv-col cv-fill">
-                <div class="cv-sidebar__section">"Projects"</div>
-                <div class="cv-sidebar__projects">
-                    {move || {
-                        store.group().get();
-                        data::cur_group_projects()
-                            .iter()
-                            .map(move |p| {
-                                let name = data::proj_name(p);
-                                let pn = p.to_string();
-                                let unread = data::unread_count(p);
-                                view! {
-                                    <ProjectNavItem
-                                        name=name
-                                        unread=unread
-                                        on_click=Callback::new(move |_| go.run(Route::Project(pn.clone())))
-                                    />
-                                }
-                            })
-                            .collect_view()
-                    }}
-                </div>
-            </div>
+            {move || {
+                track_data(store);
+                let projects = data::cur_group_projects();
+                if projects.is_empty() {
+                    // Onboarding sidebar: a spacer keeps the account row pinned.
+                    view! { <div class="cv-fill"></div> }.into_any()
+                } else {
+                    view! {
+                        <div class="cv-col cv-fill">
+                            <div class="cv-sidebar__section">"Projects"</div>
+                            <div class="cv-sidebar__projects">
+                                {projects
+                                    .iter()
+                                    .map(move |p| {
+                                        let name = data::proj_name(p);
+                                        let pn = p.to_string();
+                                        let unread = data::unread_count(p);
+                                        view! {
+                                            <ProjectNavItem
+                                                name=name
+                                                unread=unread
+                                                on_click=Callback::new(move |_| go.run(Route::Project(pn.clone())))
+                                            />
+                                        }
+                                    })
+                                    .collect_view()}
+                                <AddRow
+                                    label="New project"
+                                    on_click=Callback::new(|_| modals::open(ModalKind::NewProject))
+                                />
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                }
+            }}
 
             // account + menu
             <div class="cv-relative">
@@ -775,14 +883,37 @@ fn TopBar(
         </button>
         <div class="cv-topbar__crumb">
             <span class="cv-pointer" on:click=move |_| go.run(Route::Dashboard)>
-                {move || { store.group().get(); data::group_name() }}
+                {move || { track_data(store); data::group_name() }}
             </span>
             <span class="cv-topbar__sep">"/"</span>
-            <span class="cv-topbar__cur">{move || route.get().crumb()}</span>
+            <span class="cv-topbar__cur">
+            {move || {
+                track_data(store);
+                match route.get() {
+                    // Resolve the project id to its display name (the route
+                    // only carries the id); every other crumb is static.
+                    Route::Project(id) => data::proj_name(&id),
+                    r => r.crumb(),
+                }
+            }}
+        </span>
         </div>
         <div class="cv-topbar__spacer"></div>
-        <div class="cv-topbar__search" on:click=move |_| go.run(Route::Search)>
-            <Input placeholder="Search decisions across the group…" lead=Glyph::Search trail="/" />
-        </div>
+        // Search is hidden in the empty-group (onboarding) state.
+        {move || {
+            track_data(store);
+            (!data::cur_group_projects().is_empty())
+                .then(|| {
+                    view! {
+                        <div class="cv-topbar__search" on:click=move |_| go.run(Route::Search)>
+                            <Input
+                                placeholder="Search decisions across the group…"
+                                lead=Glyph::Search
+                                trail="/"
+                            />
+                        </div>
+                    }
+                })
+        }}
     }
 }

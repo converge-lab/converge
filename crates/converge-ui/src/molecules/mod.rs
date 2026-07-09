@@ -1,5 +1,6 @@
 //! Molecules — atoms composed into recognisable units.
 
+mod add_row;
 mod alternative_card;
 mod avatar_stack;
 mod chat_bubble;
@@ -12,12 +13,15 @@ mod decision_log_row;
 mod decision_mini_row;
 mod legend_item;
 mod nav_item;
+mod onboard_card;
+mod overflow_menu;
 mod project_nav_item;
 mod signal_card;
 mod source_row;
 mod tag_filter_menu;
 mod timeline_item;
 
+pub use add_row::AddRow;
 pub use alternative_card::AlternativeCard;
 pub use avatar_stack::AvatarStack;
 pub use chat_bubble::ChatBubble;
@@ -30,6 +34,8 @@ pub use decision_log_row::DecisionLogRow;
 pub use decision_mini_row::DecisionMiniRow;
 pub use legend_item::LegendItem;
 pub use nav_item::NavItem;
+pub use onboard_card::OnboardCard;
+pub use overflow_menu::{MenuItem, OverflowMenu};
 pub use project_nav_item::ProjectNavItem;
 pub use signal_card::{SignalCard, SignalView};
 pub use source_row::SourceRow;

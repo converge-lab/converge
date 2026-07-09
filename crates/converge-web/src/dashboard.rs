@@ -2,6 +2,7 @@
 //! cross-project signals panel. Composed entirely from converge-ui, driven by
 //! the shared dataset.
 
+use crate::command_snippet::{CommandSnippet, mcp_command};
 use crate::data;
 use crate::route::Route;
 use converge_ui::atoms::SectionLabel;
@@ -29,45 +30,70 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                         <span class="cv-livedot"></span>
                     </div>
                     <div class="cv-feed">
-                        {data::feed()
-                            .into_iter()
-                            .map(move |d| {
-                                let id = d.id.to_string();
+                        {
+                            let feed = data::feed();
+                            if feed.is_empty() {
+                                // Projects exist but nothing recorded yet — nudge toward the agent.
                                 view! {
-                                    <DecisionCard
-                                        decision=data::to_card(&d)
-                                        on_open=Callback::new(move |_| {
-                                            go.run(Route::Decision(id.clone()))
-                                        })
-                                    />
+                                    <div class="cv-onboard__agent">
+                                        <div class="cv-fs-md cv-fg-muted">
+                                            "No decisions yet. Connect your agent and record the first one — it lands here, anchored to its source."
+                                        </div>
+                                        <CommandSnippet command=mcp_command() />
+                                    </div>
                                 }
-                            })
-                            .collect_view()}
+                                    .into_any()
+                            } else {
+                                feed.into_iter()
+                                    .map(move |d| {
+                                        let id = d.id.to_string();
+                                        view! {
+                                            <DecisionCard
+                                                decision=data::to_card(&d)
+                                                on_open=Callback::new(move |_| {
+                                                    go.run(Route::Decision(id.clone()))
+                                                })
+                                            />
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_any()
+                            }
+                        }
                     </div>
                 </section>
 
-                <div class="cv-dash__aside">
-                    <section>
-                        <SectionLabel text="cross-project signals" />
-                        <div class="cv-stack8 cv-mt-14">
-                            {data::group_signals()
-                                .into_iter()
-                                .map(move |s| {
-                                    let id = s.id.to_string();
-                                    view! {
-                                        <SignalCard
-                                            signal=data::to_signal(&s)
-                                            view=SignalView::Compact
-                                            on_open=Callback::new(move |_| {
-                                                go.run(Route::SignalDetail(id.clone()))
-                                            })
-                                        />
-                                    }
-                                })
-                                .collect_view()}
-                        </div>
-                    </section>
-                </div>
+                {
+                    let signals = data::group_signals();
+                    // The signals panel is hidden entirely when there are none.
+                    (!signals.is_empty())
+                        .then(|| {
+                            view! {
+                                <div class="cv-dash__aside">
+                                    <section>
+                                        <SectionLabel text="cross-project signals" />
+                                        <div class="cv-stack8 cv-mt-14">
+                                            {signals
+                                                .into_iter()
+                                                .map(move |s| {
+                                                    let id = s.id.to_string();
+                                                    view! {
+                                                        <SignalCard
+                                                            signal=data::to_signal(&s)
+                                                            view=SignalView::Compact
+                                                            on_open=Callback::new(move |_| {
+                                                                go.run(Route::SignalDetail(id.clone()))
+                                                            })
+                                                        />
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        </div>
+                                    </section>
+                                </div>
+                            }
+                        })
+                }
             </div>
         </div>
     }

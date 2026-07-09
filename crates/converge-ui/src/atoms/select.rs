@@ -12,14 +12,19 @@ pub fn Select(
             cb.run(event_target_value(&ev));
         }
     };
-    // Bind `value` only when one is given; otherwise let the browser default to
-    // the first <option> instead of showing a blank box.
+    // Selection is expressed on the matching <option> rather than as a
+    // `prop:value` on the <select>: the value property applies before the
+    // options exist (and even `None` writes it), leaving selectedIndex -1 —
+    // a blank box. With no `value` the browser defaults to the first option.
     let bound = (!value.is_empty()).then_some(value);
     view! {
-        <select class="cv-select" prop:value=bound on:change=onchange>
+        <select class="cv-select" on:change=onchange>
             {options
                 .into_iter()
-                .map(|(v, l)| view! { <option value=v>{l}</option> })
+                .map(|(v, l)| {
+                    let selected = bound.as_deref() == Some(v.as_str());
+                    view! { <option value=v selected=selected>{l}</option> }
+                })
                 .collect_view()}
         </select>
     }

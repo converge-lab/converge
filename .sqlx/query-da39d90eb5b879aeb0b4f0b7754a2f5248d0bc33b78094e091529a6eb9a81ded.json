@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups (id, name, kind)\n               values ($1, 'My workspace', 'personal'::group_kind)\n               on conflict (id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da39d90eb5b879aeb0b4f0b7754a2f5248d0bc33b78094e091529a6eb9a81ded"
+}

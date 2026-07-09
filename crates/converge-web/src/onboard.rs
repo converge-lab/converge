@@ -2,7 +2,7 @@
 //! the current group has no projects yet. Offers three ways forward: a new
 //! group, a new project, or connecting an agent over MCP.
 
-use converge_ui::atoms::Glyph;
+use converge_ui::atoms::{Glyph, Logo, LogoVariant};
 use converge_ui::molecules::OnboardCard;
 use leptos::prelude::*;
 
@@ -16,7 +16,7 @@ pub fn Onboarding() -> impl IntoView {
     view! {
         <div class="cv-onboard-wrap">
             <div class="cv-onboard">
-                <div class="cv-onboard__mark"></div>
+                <Logo variant=LogoVariant::Mark class="cv-onboard__mark" />
                 <h1 class="cv-heading cv-fs-3xl">"Nothing here yet"</h1>
                 <p class="cv-onboard__sub">
                     {format!(

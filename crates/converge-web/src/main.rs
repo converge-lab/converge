@@ -20,7 +20,7 @@ mod source_viewer;
 mod store;
 mod when;
 
-use converge_ui::atoms::{Avatar, Button, Glyph, Input};
+use converge_ui::atoms::{Avatar, Button, Glyph, Input, Logo};
 use converge_ui::domain::{GroupKind, Tone};
 use converge_ui::layout::AppShell;
 use converge_ui::molecules::{AddRow, NavItem, ProjectNavItem};
@@ -588,11 +588,7 @@ fn Sidebar(
             aria-label="Main navigation"
         >
             <div class="cv-sidebar__logo">
-                <div class="cv-sidebar__brand"></div>
-                <div class="cv-col cv-lh-1">
-                    <span class="cv-fw-semibold cv-fs-xl">"Converge"</span>
-                    <span class="cv-fs-xs cv-fg-faint">"decision memory"</span>
-                </div>
+                <Logo />
             </div>
 
             // group selector + switcher dropdown

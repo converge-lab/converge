@@ -5,7 +5,9 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::{AgentId, DecisionId, GroupId, ProjectId, UserId};
+use crate::ids::{AgentId, DecisionId, GroupId, MessageId, ProjectId, UserId};
+use crate::message::Message;
+use crate::session::Session;
 use crate::{Pagination, StoreError};
 
 /// Lifecycle of a decision.
@@ -60,6 +62,10 @@ pub struct Decision {
     /// Authorship is a set (duplicates collapse on write); reads return a
     /// stable but unspecified order.
     pub authors: Vec<Author>,
+    /// Evidence anchors — messages this decision is grounded in (a set,
+    /// like authorship). The excerpt a UI renders around them is a read
+    /// projection, not stored state.
+    pub evidence: Vec<MessageId>,
     #[serde(with = "time::serde::rfc3339")]
     pub captured_at: OffsetDateTime,
 }
@@ -81,6 +87,9 @@ pub struct NewDecision {
     /// Decisions this one replaces — creation-time supersession edges.
     #[serde(default)]
     pub supersedes: Vec<DecisionId>,
+    /// Evidence anchors known at capture time (messages must exist).
+    #[serde(default)]
+    pub evidence: Vec<MessageId>,
 }
 
 /// A single edit operation. Applied as a batch (`Vec<DecisionEdit>`)
@@ -106,6 +115,10 @@ pub enum DecisionEdit {
     },
     /// Remove a cross-reference (no-op when absent).
     RemoveRelated(DecisionId),
+    /// Anchor a message as evidence (set semantics; the message must exist).
+    AddEvidence(MessageId),
+    /// Drop an evidence anchor (no-op when absent).
+    RemoveEvidence(MessageId),
 }
 
 /// One end of a cross-reference edge.
@@ -137,6 +150,20 @@ pub struct DecisionFilter {
     pub status: Option<DecisionStatus>,
 }
 
+/// One cited conversation in a decision's evidence — the read projection
+/// behind `/decisions/{id}/sources`: the session, the anchored messages
+/// **plus a fixed window of surrounding context**, in conversation order,
+/// and which of them are the anchors. The excerpt is derived at read
+/// time; only the anchors are stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Source {
+    pub session: Session,
+    /// The window: anchors ± context, ordered by `seq`, deduplicated.
+    pub messages: Vec<Message>,
+    /// Which of `messages` are the stored anchors.
+    pub anchors: Vec<MessageId>,
+}
+
 /// Storage operations on decisions and their graph edges.
 pub trait Decisions {
     fn decision_add(
@@ -166,4 +193,12 @@ pub trait Decisions {
         &self,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Edges>, StoreError>> + Send;
+
+    /// The evidence read projection: cited sessions with their anchored
+    /// messages and surrounding context, grouped and ordered. `None` when
+    /// the decision doesn't exist; empty when it has no evidence.
+    fn decision_sources(
+        &self,
+        id: DecisionId,
+    ) -> impl Future<Output = Result<Option<Vec<Source>>, StoreError>> + Send;
 }

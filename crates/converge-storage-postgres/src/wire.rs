@@ -3,7 +3,8 @@
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
 use converge_storage::{
-    Agent, Alternative, Author, Decision, Group, Project, ProjectId, StoreError, Token, User,
+    Agent, Alternative, Author, Decision, Group, Message, Project, ProjectId, Session, StoreError,
+    Token, User,
 };
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -147,6 +148,88 @@ impl From<TokenRow> for Token {
     }
 }
 
+/// The `session_kind` Postgres enum.
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "session_kind", rename_all = "lowercase")]
+pub(crate) enum SessionKind {
+    Transcript,
+    Slack,
+    Pr,
+    Incident,
+}
+
+impl From<converge_storage::SessionKind> for SessionKind {
+    fn from(k: converge_storage::SessionKind) -> Self {
+        use converge_storage::SessionKind as D;
+        match k {
+            D::Transcript => Self::Transcript,
+            D::Slack => Self::Slack,
+            D::Pr => Self::Pr,
+            D::Incident => Self::Incident,
+        }
+    }
+}
+
+impl From<SessionKind> for converge_storage::SessionKind {
+    fn from(k: SessionKind) -> Self {
+        use SessionKind as P;
+        match k {
+            P::Transcript => Self::Transcript,
+            P::Slack => Self::Slack,
+            P::Pr => Self::Pr,
+            P::Incident => Self::Incident,
+        }
+    }
+}
+
+/// One `sessions` row, as fetched.
+pub(crate) struct SessionRow {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub kind: SessionKind,
+    pub external: String,
+    pub title: String,
+    pub captured_at: OffsetDateTime,
+}
+
+impl From<SessionRow> for Session {
+    fn from(r: SessionRow) -> Self {
+        Session {
+            id: id(r.id),
+            project_id: id(r.project_id),
+            kind: r.kind.into(),
+            external: r.external,
+            title: r.title,
+            captured_at: r.captured_at,
+        }
+    }
+}
+
+/// One `messages` row, as fetched.
+pub(crate) struct MessageRow {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub seq: i32,
+    pub speaker: String,
+    pub body: String,
+    pub sent_at: Option<OffsetDateTime>,
+    pub captured_at: OffsetDateTime,
+}
+
+impl From<MessageRow> for Message {
+    fn from(r: MessageRow) -> Self {
+        Message {
+            id: id(r.id),
+            session_id: id(r.session_id),
+            seq: r.seq,
+            speaker: r.speaker,
+            body: r.body,
+            sent_at: r.sent_at,
+            captured_at: r.captured_at,
+        }
+    }
+}
+
 /// One `agents` row, as fetched.
 pub(crate) struct AgentRow {
     pub id: Uuid,
@@ -263,8 +346,10 @@ impl TryFrom<DecisionRow> for Decision {
             context: r.context,
             consequences: r.consequences,
             alternatives,
-            // Attached by the caller — a separate decision_author read.
+            // Attached by the caller — separate decision_author /
+            // evidence reads.
             authors: Vec::new(),
+            evidence: Vec::new(),
             captured_at: r.captured_at,
         })
     }

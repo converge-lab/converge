@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where exists (\n                   select 1\n                   from evidence e\n                   join messages a on a.id = e.message_id\n                   where e.decision_id = $1\n                     and a.session_id = m.session_id\n                     and m.seq between a.seq - $2 and a.seq + $2\n               )\n               order by m.session_id, m.seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "session_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "seq",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "speaker",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "sent_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "63b00411d2212b2365c5e9fabf77e39983efef061cc949310c38ed429166a150"
+}

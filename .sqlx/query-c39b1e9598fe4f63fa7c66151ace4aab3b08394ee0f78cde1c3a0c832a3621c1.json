@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, project_id, kind as \"kind: _\", external, title, captured_at\n               from sessions\n               where ($1::uuid is null or project_id = $1)\n                 and ($2::session_kind is null or kind = $2)\n                 and ($4::uuid is null or id < $4)\n               order by id desc\n               limit $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind: _",
+        "type_info": {
+          "Custom": {
+            "name": "session_kind",
+            "kind": {
+              "Enum": [
+                "transcript",
+                "slack",
+                "pr",
+                "incident"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "external",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "session_kind",
+            "kind": {
+              "Enum": [
+                "transcript",
+                "slack",
+                "pr",
+                "incident"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c39b1e9598fe4f63fa7c66151ace4aab3b08394ee0f78cde1c3a0c832a3621c1"
+}

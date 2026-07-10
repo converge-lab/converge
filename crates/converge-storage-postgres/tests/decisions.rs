@@ -46,6 +46,7 @@ fn decision(project: ProjectId, title: &str) -> NewDecision {
         }],
         authors: Vec::new(),
         supersedes: Vec::new(),
+        evidence: Vec::new(),
     }
 }
 

@@ -14,9 +14,10 @@
 pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
     DecisionFilter, DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind,
-    Identity, Minted, NewAgent, NewDecision, NewGroup, NewProject, NewToken, Page, Pagination,
-    Project, ProjectEdit, ProjectFilter, ProjectId, Related, StoreError, Token, TokenId, User,
-    UserId,
+    Identity, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup, NewMessage, NewProject,
+    NewSession, NewToken, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
+    Related, Session, SessionFilter, SessionId, SessionKind, Source, StoreError, Token, TokenId,
+    User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -194,6 +195,68 @@ impl Client {
     /// The one-hop graph neighbourhood, both directions.
     pub async fn decision_edges(&self, id: DecisionId) -> Result<Option<Edges>, StoreError> {
         self.fetch(&format!("decisions/{id}/edges")).await
+    }
+
+    /// The cited excerpts: sessions with anchored messages + context.
+    pub async fn decision_sources(
+        &self,
+        id: DecisionId,
+    ) -> Result<Option<Vec<Source>>, StoreError> {
+        self.fetch(&format!("decisions/{id}/sources")).await
+    }
+
+    // Sessions + message streams (evidence)
+
+    /// Create-or-refresh by the `(kind, external)` natural key.
+    pub async fn session_ensure(&self, new: &NewSession) -> Result<SessionId, StoreError> {
+        self.create("sessions", new).await
+    }
+
+    pub async fn session_get(&self, id: SessionId) -> Result<Option<Session>, StoreError> {
+        self.fetch(&format!("sessions/{id}")).await
+    }
+
+    pub async fn session_list(
+        &self,
+        filter: &SessionFilter,
+        page: &Pagination<SessionId>,
+    ) -> Result<Page<Session>, StoreError> {
+        self.list("sessions", filter, page).await
+    }
+
+    /// Append a batch to the stream; answers the new ids, in order.
+    pub async fn message_add(
+        &self,
+        session: SessionId,
+        new: &[NewMessage],
+    ) -> Result<Vec<MessageId>, StoreError> {
+        #[derive(serde::Deserialize)]
+        struct Appended {
+            ids: Vec<MessageId>,
+        }
+        let response = self
+            .authed(
+                self.http
+                    .post(self.url(&format!("sessions/{session}/messages"))),
+            )
+            .json(new)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::CREATED => Ok(response.json::<Appended>().await.map_err(transport)?.ids),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// The stream, oldest first; the cursor reads strictly forward.
+    pub async fn message_list(
+        &self,
+        session: SessionId,
+        page: &Pagination<MessageId>,
+    ) -> Result<Page<Message>, StoreError> {
+        self.list(&format!("sessions/{session}/messages"), &(), page)
+            .await
     }
 
     /// Auth capabilities (open — the login screen calls this before any

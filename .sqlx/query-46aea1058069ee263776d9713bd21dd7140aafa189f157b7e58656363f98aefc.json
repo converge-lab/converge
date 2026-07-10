@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, session_id, seq, speaker, body, sent_at, captured_at\n               from messages\n               where session_id = $1\n                 and ($2::uuid is null\n                      or seq > (select seq from messages where id = $2 and session_id = $1))\n               order by seq\n               limit $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "session_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "seq",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "speaker",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "sent_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "46aea1058069ee263776d9713bd21dd7140aafa189f157b7e58656363f98aefc"
+}

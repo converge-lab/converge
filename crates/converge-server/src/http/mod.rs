@@ -8,6 +8,7 @@
 mod agent;
 mod decision;
 mod error;
+mod evidence;
 mod group;
 mod oauth;
 mod project;
@@ -56,6 +57,7 @@ pub fn app<S: Storage + 'static>(
         .merge(group::routes().with_state(store.clone()))
         .merge(project::routes().with_state(store.clone()))
         .merge(decision::routes().with_state(store.clone()))
+        .merge(evidence::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))

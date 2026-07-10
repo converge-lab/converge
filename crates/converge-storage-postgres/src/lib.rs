@@ -12,15 +12,18 @@ use std::collections::HashMap;
 
 use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
-    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, NewAgent,
-    NewDecision, NewGroup, NewProject, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
-    Projects, Related, StoreError, Token, TokenId, Tokens, User, UserId, Users,
+    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, Message,
+    MessageId, Messages, NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession,
+    Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Session,
+    SessionFilter, SessionId, Sessions, Source, StoreError, Token, TokenId, Tokens, User, UserId,
+    Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 use wire::AgentKind as PgAgentKind;
 use wire::DecisionStatus as PgStatus;
 use wire::GroupKind as PgGroupKind;
+use wire::SessionKind as PgSessionKind;
 
 /// Superseded is derived from inbound edges — storing it is a caller error.
 const SUPERSEDED_IS_DERIVED: &str =
@@ -79,6 +82,30 @@ impl PgStorage {
     /// The underlying pool, for embedding and tests.
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Evidence anchors for a set of decisions — one query, grouped.
+    async fn evidence(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MessageId>>, StoreError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "select decision_id, message_id from evidence
+             where decision_id = any($1)
+             order by message_id",
+            ids,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut evidence: HashMap<Uuid, Vec<MessageId>> = HashMap::new();
+        for row in rows {
+            evidence
+                .entry(row.decision_id)
+                .or_default()
+                .push(wire::id(row.message_id));
+        }
+        Ok(evidence)
     }
 
     /// Authors for a set of decisions — one query, grouped by decision.
@@ -450,6 +477,150 @@ impl Projects for PgStorage {
     }
 }
 
+impl Sessions for PgStorage {
+    async fn session_ensure(&self, new: NewSession) -> Result<SessionId, StoreError> {
+        // `(kind, external)` decides identity; the title refreshes (titles
+        // evolve as conversations grow) while the project binding stays as
+        // first created — evidence doesn't silently re-home. On conflict
+        // the freshly minted id is discarded.
+        let kind = PgSessionKind::from(new.kind);
+        let row = sqlx::query!(
+            r#"insert into sessions (id, project_id, kind, external, title)
+               values ($1, $2, $3, $4, $5)
+               on conflict (kind, external) do update set title = excluded.title
+               returning id"#,
+            Uuid::from(SessionId::new().ulid()),
+            Uuid::from(new.project_id.ulid()),
+            kind as PgSessionKind,
+            new.external,
+            new.title,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(wire::id(row.id))
+    }
+
+    async fn session_get(&self, id: SessionId) -> Result<Option<Session>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::SessionRow,
+            r#"select id, project_id, kind as "kind: _", external, title, captured_at
+               from sessions where id = $1"#,
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(Session::from))
+    }
+
+    async fn session_list(
+        &self,
+        filter: SessionFilter,
+        page: Pagination<SessionId>,
+    ) -> Result<Vec<Session>, StoreError> {
+        let kind = filter.kind.map(PgSessionKind::from);
+        Ok(sqlx::query_as!(
+            wire::SessionRow,
+            r#"select id, project_id, kind as "kind: _", external, title, captured_at
+               from sessions
+               where ($1::uuid is null or project_id = $1)
+                 and ($2::session_kind is null or kind = $2)
+                 and ($4::uuid is null or id < $4)
+               order by id desc
+               limit $3"#,
+            filter.project.map(|p| Uuid::from(p.ulid())),
+            kind as Option<PgSessionKind>,
+            page.limit.map(i64::from),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Session::from)
+        .collect())
+    }
+}
+
+impl Messages for PgStorage {
+    async fn message_add(
+        &self,
+        session: SessionId,
+        new: Vec<NewMessage>,
+    ) -> Result<Vec<MessageId>, StoreError> {
+        let session = Uuid::from(session.ulid());
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // The session's row lock serializes appends: concurrent batches
+        // can't interleave or collide on seq. Missing session → NotFound.
+        let held = sqlx::query!("select id from sessions where id = $1 for update", session)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        if held.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        let base = sqlx::query_scalar!(
+            r#"select coalesce(max(seq) + 1, 0) as "base!" from messages where session_id = $1"#,
+            session,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        // A loop of inserts inside the one transaction: obviously correct,
+        // and evidence batches are conversation-sized. Bulk unnest can come
+        // when an importer proves it matters.
+        let mut ids = Vec::with_capacity(new.len());
+        for (offset, message) in new.into_iter().enumerate() {
+            let id = MessageId::new();
+            sqlx::query!(
+                r#"insert into messages (id, session_id, seq, speaker, body, sent_at)
+                   values ($1, $2, $3, $4, $5, $6)"#,
+                Uuid::from(id.ulid()),
+                session,
+                base + offset as i32,
+                message.speaker,
+                message.body,
+                message.sent_at,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            ids.push(id);
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(ids)
+    }
+
+    async fn message_list(
+        &self,
+        session: SessionId,
+        page: Pagination<MessageId>,
+    ) -> Result<Vec<Message>, StoreError> {
+        // Conversation order — oldest first, the one forward-reading list;
+        // the cursor returns rows strictly *after* it.
+        Ok(sqlx::query_as!(
+            wire::MessageRow,
+            r#"select id, session_id, seq, speaker, body, sent_at, captured_at
+               from messages
+               where session_id = $1
+                 and ($2::uuid is null
+                      or seq > (select seq from messages where id = $2 and session_id = $1))
+               order by seq
+               limit $3"#,
+            Uuid::from(session.ulid()),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+            page.limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Message::from)
+        .collect())
+    }
+}
+
 impl Decisions for PgStorage {
     async fn decision_add(&self, new: NewDecision) -> Result<DecisionId, StoreError> {
         if new.status == DecisionStatus::Superseded {
@@ -510,6 +681,19 @@ impl Decisions for PgStorage {
             .await
             .map_err(db_err)?;
         }
+        if !new.evidence.is_empty() {
+            let anchors: Vec<Uuid> = new.evidence.iter().map(|m| Uuid::from(m.ulid())).collect();
+            sqlx::query!(
+                r#"insert into evidence (decision_id, message_id)
+                   select $1, unnest($2::uuid[])
+                   on conflict do nothing"#,
+                Uuid::from(id.ulid()),
+                &anchors[..],
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
         tx.commit().await.map_err(db_err)?;
         Ok(id)
     }
@@ -536,6 +720,11 @@ impl Decisions for PgStorage {
         let mut decision = Decision::try_from(row)?;
         decision.authors = self
             .authors(&[uuid])
+            .await?
+            .remove(&uuid)
+            .unwrap_or_default();
+        decision.evidence = self
+            .evidence(&[uuid])
             .await?
             .remove(&uuid)
             .unwrap_or_default();
@@ -588,9 +777,11 @@ impl Decisions for PgStorage {
         .collect::<Result<Vec<_>, _>>()?;
         let ids: Vec<Uuid> = decisions.iter().map(|d| Uuid::from(d.id.ulid())).collect();
         let mut authors = self.authors(&ids).await?;
+        let mut evidence = self.evidence(&ids).await?;
         for decision in &mut decisions {
             let uuid = Uuid::from(decision.id.ulid());
             decision.authors = authors.remove(&uuid).unwrap_or_default();
+            decision.evidence = evidence.remove(&uuid).unwrap_or_default();
         }
         Ok(decisions)
     }
@@ -614,6 +805,102 @@ impl Decisions for PgStorage {
             apply(&mut tx, uuid, edit).await?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn decision_sources(&self, id: DecisionId) -> Result<Option<Vec<Source>>, StoreError> {
+        /// How many messages of context to carry on each side of an anchor.
+        const CONTEXT: i32 = 2;
+
+        let uuid = Uuid::from(id.ulid());
+        let exists = sqlx::query!("select id from decisions where id = $1", uuid)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?;
+        if exists.is_none() {
+            return Ok(None);
+        }
+        let anchors: Vec<Uuid> = sqlx::query_scalar!(
+            "select message_id from evidence where decision_id = $1",
+            uuid,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if anchors.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+
+        // The whole excerpt set in one pass: every message within CONTEXT
+        // of any anchor of this decision, in (session, seq) order —
+        // overlapping windows deduplicate for free.
+        let windows = sqlx::query_as!(
+            wire::MessageRow,
+            r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
+               from messages m
+               where exists (
+                   select 1
+                   from evidence e
+                   join messages a on a.id = e.message_id
+                   where e.decision_id = $1
+                     and a.session_id = m.session_id
+                     and m.seq between a.seq - $2 and a.seq + $2
+               )
+               order by m.session_id, m.seq"#,
+            uuid,
+            CONTEXT,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        let session_ids: Vec<Uuid> = {
+            let mut ids: Vec<Uuid> = windows.iter().map(|m| m.session_id).collect();
+            ids.dedup();
+            ids
+        };
+        let sessions: HashMap<Uuid, Session> = sqlx::query_as!(
+            wire::SessionRow,
+            r#"select id, project_id, kind as "kind: _", external, title, captured_at
+               from sessions where id = any($1)"#,
+            &session_ids[..],
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(|row| (row.id, Session::from(row)))
+        .collect();
+
+        // Group the ordered window rows into per-session sources, newest
+        // session first (ULID order, matching every other list).
+        let mut sources: Vec<Source> = Vec::new();
+        for row in windows {
+            let session_uuid = row.session_id;
+            let message = Message::from(row);
+            let current = match sources.last_mut() {
+                Some(source) if Uuid::from(source.session.id.ulid()) == session_uuid => {
+                    sources.last_mut().expect("just matched")
+                }
+                _ => {
+                    let session = sessions
+                        .get(&session_uuid)
+                        .cloned()
+                        .ok_or_else(|| StoreError::Backend("window row without session".into()))?;
+                    sources.push(Source {
+                        session,
+                        messages: Vec::new(),
+                        anchors: Vec::new(),
+                    });
+                    sources.last_mut().expect("just pushed")
+                }
+            };
+            if anchors.contains(&Uuid::from(message.id.ulid())) {
+                current.anchors.push(message.id);
+            }
+            current.messages.push(message);
+        }
+        sources.sort_by_key(|s| std::cmp::Reverse(s.session.id.ulid()));
+        Ok(Some(sources))
     }
 
     async fn decision_edges(&self, id: DecisionId) -> Result<Option<Edges>, StoreError> {
@@ -785,6 +1072,26 @@ async fn apply(
                 "delete from decision_related where decision_id = $1 and ref_id = $2",
                 id,
                 Uuid::from(target.ulid()),
+            )
+            .execute(&mut **tx)
+            .await
+        }
+        DecisionEdit::AddEvidence(message) => {
+            sqlx::query!(
+                r#"insert into evidence (decision_id, message_id)
+                   values ($1, $2)
+                   on conflict do nothing"#,
+                id,
+                Uuid::from(message.ulid()),
+            )
+            .execute(&mut **tx)
+            .await
+        }
+        DecisionEdit::RemoveEvidence(message) => {
+            sqlx::query!(
+                "delete from evidence where decision_id = $1 and message_id = $2",
+                id,
+                Uuid::from(message.ulid()),
             )
             .execute(&mut **tx)
             .await

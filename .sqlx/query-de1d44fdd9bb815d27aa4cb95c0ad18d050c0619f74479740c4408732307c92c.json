@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into evidence (decision_id, message_id)\n                   values ($1, $2)\n                   on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de1d44fdd9bb815d27aa4cb95c0ad18d050c0619f74479740c4408732307c92c"
+}

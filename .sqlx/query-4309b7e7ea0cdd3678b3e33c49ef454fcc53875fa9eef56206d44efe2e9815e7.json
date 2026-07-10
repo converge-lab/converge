@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from evidence where decision_id = $1 and message_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4309b7e7ea0cdd3678b3e33c49ef454fcc53875fa9eef56206d44efe2e9815e7"
+}

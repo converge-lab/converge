@@ -231,6 +231,9 @@ impl<S: Storage + 'static> Memory<S> {
                     .collect(),
                 authors: vec![Author::UserViaAgent { user, agent }],
                 supersedes,
+                // Evidence anchoring reaches the MCP surface with the
+                // session/message ingest tools (M2 E4).
+                evidence: Vec::new(),
             })
             .await
             .map_err(map_err)?;

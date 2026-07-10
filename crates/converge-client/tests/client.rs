@@ -71,6 +71,7 @@ fn decision(project_id: converge_storage::ProjectId, title: &str) -> NewDecision
         alternatives: Vec::new(),
         authors: Vec::new(),
         supersedes: Vec::new(),
+        evidence: Vec::new(),
     }
 }
 
@@ -152,6 +153,67 @@ async fn round_trip() {
     );
     let edges = api.decision_edges(a).await.unwrap().unwrap();
     assert_eq!(edges.superseded_by, vec![b]);
+
+    // Evidence: ensure a session (twice — the natural key converges),
+    // stream messages, anchor a decision, read the derived excerpt back.
+    use converge_client::{NewMessage, NewSession, SessionFilter, SessionKind};
+    let sid = api
+        .session_ensure(&NewSession {
+            project_id: project,
+            kind: SessionKind::Transcript,
+            external: "sess-1".into(),
+            title: "design chat".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        api.session_ensure(&NewSession {
+            project_id: project,
+            kind: SessionKind::Transcript,
+            external: "sess-1".into(),
+            title: "design chat, day 2".into(),
+        })
+        .await
+        .unwrap(),
+        sid
+    );
+    let messages = api
+        .message_add(
+            sid,
+            &[
+                NewMessage {
+                    speaker: "maksim".into(),
+                    body: "context".into(),
+                    sent_at: None,
+                },
+                NewMessage {
+                    speaker: "claude".into(),
+                    body: "the call".into(),
+                    sent_at: None,
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    api.decision_edit(b, &[DecisionEdit::AddEvidence(messages[1])])
+        .await
+        .unwrap();
+    let sources = api.decision_sources(b).await.unwrap().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].session.id, sid);
+    assert_eq!(sources[0].session.title, "design chat, day 2");
+    assert_eq!(sources[0].messages.len(), 2);
+    assert_eq!(sources[0].anchors, vec![messages[1]]);
+    let stream = api.message_list(sid, &Pagination::default()).await.unwrap();
+    assert_eq!(stream.items[0].speaker, "maksim");
+    assert_eq!(
+        api.session_list(&SessionFilter::default(), &Pagination::default())
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
 
     // The edit batch, then the feed sees the change.
     api.decision_edit(b, &[DecisionEdit::SetContext(Some("ctx".into()))])

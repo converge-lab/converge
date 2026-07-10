@@ -104,3 +104,43 @@ create table decision_related (
     primary key (decision_id, ref_id)
 );
 create index on decision_related (ref_id);                    -- inbound cross-refs
+
+-- ─── Evidence: sessions + append-only message streams ──────────────────────
+
+create type session_kind as enum ('transcript', 'slack', 'pr', 'incident');
+
+-- A conversation container decisions cite: an agent transcript, a Slack
+-- thread, a PR discussion, an incident channel. (kind, external) is the
+-- natural key importers and live agents converge on.
+create table sessions (
+    id          uuid primary key,
+    project_id  uuid not null references projects(id),
+    kind        session_kind not null,
+    external    text not null,                                      -- source system's reference
+    title       text not null,                                      -- refreshed on ensure
+    captured_at timestamptz not null default now(),
+    unique (kind, external)
+);
+create index on sessions (project_id);
+
+-- Append-only: the stream is evidence — no update path exists. seq carries
+-- the conversation order (assigned under the session's row lock).
+create table messages (
+    id          uuid primary key,
+    session_id  uuid not null references sessions(id) on delete cascade,
+    seq         integer not null,
+    speaker     text not null,                                      -- display string, not a user
+    body        text not null,
+    sent_at     timestamptz,                                        -- external fact (importers)
+    captured_at timestamptz not null default now(),
+    unique (session_id, seq)
+);
+
+-- Decision → message anchors, a set. The message FK has no cascade: an
+-- evidenced message (and its session, transitively) is undeletable.
+create table evidence (
+    decision_id uuid not null references decisions(id) on delete cascade,
+    message_id  uuid not null references messages(id),
+    primary key (decision_id, message_id)
+);
+create index on evidence (message_id);

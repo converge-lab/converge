@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select coalesce(max(seq) + 1, 0) as \"base!\" from messages where session_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "base!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2200ea830a9a85c166da1ea42407598f966175a31e9c51008e5a946ec40c61ae"
+}

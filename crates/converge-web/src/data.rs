@@ -374,15 +374,20 @@ fn q_sig_by_id<'a>(ds: &'a Dataset, id: &str) -> Option<&'a Rc<Sig>> {
     ds.signals.iter().find(|s| s.id == id)
 }
 
-fn q_group(ds: &Dataset, idx: usize) -> &GroupDef {
-    &ds.groups[idx.min(ds.groups.len().saturating_sub(1))]
+/// `None` only when the dataset has no groups at all — the server
+/// guarantees a workspace exists, so this is defense-in-depth for version
+/// skew, not an expected state.
+fn q_group(ds: &Dataset, idx: usize) -> Option<&GroupDef> {
+    ds.groups.get(idx.min(ds.groups.len().saturating_sub(1)))
 }
 
 fn q_group_decisions(ds: &Dataset, idx: usize) -> Vec<Rc<Dec>> {
-    let projs = &q_group(ds, idx).project_ids;
+    let Some(group) = q_group(ds, idx) else {
+        return Vec::new();
+    };
     ds.decisions
         .iter()
-        .filter(|d| projs.contains(&d.project_id))
+        .filter(|d| group.project_ids.contains(&d.project_id))
         .cloned()
         .collect()
 }
@@ -432,7 +437,12 @@ fn q_chain(ds: &Dataset, id: &str) -> Vec<Rc<Dec>> {
 
 pub fn cur_group() -> GroupDef {
     let d = ds();
-    q_group(&d, group_idx()).clone()
+    q_group(&d, group_idx()).cloned().unwrap_or(GroupDef {
+        id: String::new(),
+        name: "No groups".into(),
+        kind: GroupKind::Shared,
+        project_ids: Vec::new(),
+    })
 }
 
 pub fn groups() -> Vec<GroupDef> {
@@ -574,10 +584,12 @@ pub fn group_decisions() -> Vec<Rc<Dec>> {
 
 pub fn group_signals() -> Vec<Rc<Sig>> {
     let d = ds();
-    let projs = &q_group(&d, group_idx()).project_ids;
+    let Some(group) = q_group(&d, group_idx()) else {
+        return Vec::new();
+    };
     d.signals
         .iter()
-        .filter(|s| projs.contains(&s.from))
+        .filter(|s| group.project_ids.contains(&s.from))
         .cloned()
         .collect()
 }

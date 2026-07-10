@@ -11,6 +11,9 @@ use leptos::prelude::*;
 
 #[component]
 pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
+    // With no signals the aside is dropped entirely — the grid collapses
+    // to one column so the feed isn't stranded beside a phantom column.
+    let solo = data::group_signals().is_empty();
     view! {
         <div class="cv-dash">
             <div class="cv-dash__head">
@@ -23,7 +26,7 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                 </p>
             </div>
 
-            <div class="cv-dash__grid">
+            <div class=if solo { "cv-dash__grid cv-dash__grid--solo" } else { "cv-dash__grid" }>
                 <section>
                     <div class="cv-row cv-gap-8 cv-mb-14">
                         <SectionLabel text="recently captured" />

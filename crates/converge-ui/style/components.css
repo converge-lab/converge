@@ -536,6 +536,8 @@
 .cv-dash { max-width: 67.5rem; margin: 0 auto; }
 .cv-dash__head { margin-bottom: 1.625rem; }
 .cv-dash__grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 1.5rem; }
+/* No signals → no aside: one full-width column instead of a phantom gap. */
+.cv-dash__grid--solo { grid-template-columns: minmax(0, 1fr); }
 .cv-feed { display: flex; flex-direction: column; gap: 0.5rem; }
 .cv-dash__aside { display: flex; flex-direction: column; gap: 1.5rem; }
 .cv-stack8 { display: flex; flex-direction: column; gap: 0.5rem; }

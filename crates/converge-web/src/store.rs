@@ -189,10 +189,20 @@ mod api {
                     .await
                     .map_err(oops("load decisions"))?;
 
-                // The read-model wants each decision's one-hop edges; the API
-                // serves them as a projection per decision. Sequential is fine
-                // at boot-load scale.
+                // M4 residue from the fixture seed. Its ids don't intersect
+                // real data, so these features read as empty until their
+                // endpoints exist — honest, and contained here.
+                let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
+                let mock = seed::assemble(&seed);
+
+                // The read-model wants each decision's one-hop edges and its
+                // cited sources; the API serves both as per-decision
+                // projections. Sequential is fine at boot-load scale. Real
+                // sources ride the extras map (fixture ids can't collide
+                // with real ULIDs), flowing through the one seed→read-model
+                // conversion the embedded build uses too.
                 let mut wired = Vec::with_capacity(decisions.items.len());
+                let mut extras = mock.decision_extras;
                 for d in &decisions.items {
                     let edges = client
                         .decision_edges(d.id)
@@ -200,13 +210,23 @@ mod api {
                         .map_err(oops("load edges"))?
                         .unwrap_or_default();
                     wired.push(decision(d, &edges));
+                    let cited = client
+                        .decision_sources(d.id)
+                        .await
+                        .map_err(oops("load sources"))?
+                        .unwrap_or_default();
+                    if !cited.is_empty() {
+                        extras.insert(
+                            d.id.to_string(),
+                            wire::mock::Extras {
+                                description: None,
+                                session: None,
+                                tags: Vec::new(),
+                                sources: cited.iter().map(source).collect(),
+                            },
+                        );
+                    }
                 }
-
-                // M4 residue from the fixture seed. Its ids don't intersect
-                // real data, so these features read as empty until their
-                // endpoints exist — honest, and contained here.
-                let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
-                let mock = seed::assemble(&seed);
 
                 let assembled = seed::Assembled {
                     groups: groups
@@ -228,12 +248,41 @@ mod api {
                     },
                     user_colors: mock.user_colors,
                     signals: mock.signals,
-                    decision_extras: mock.decision_extras,
+                    decision_extras: extras,
                     unread: mock.unread,
                     agent_context: mock.agent_context,
                 };
                 Ok(Rc::new(build_dataset(assembled)))
             })
+        }
+    }
+
+    /// A cited excerpt → the fixture source shape (the read model's input):
+    /// session title as the label, capture time relativized, anchors → `hl`.
+    fn source(s: &converge_client::Source) -> wire::mock::Source {
+        wire::mock::Source {
+            kind: match s.session.kind {
+                converge_client::SessionKind::Transcript => seed::SourceKind::Transcript,
+                converge_client::SessionKind::Slack => seed::SourceKind::Slack,
+                converge_client::SessionKind::Pr => seed::SourceKind::Pr,
+                converge_client::SessionKind::Incident => seed::SourceKind::Incident,
+            },
+            label: s.session.title.clone(),
+            when: s
+                .session
+                .captured_at
+                .format(&Rfc3339)
+                .map(|iso| crate::when::when(&iso))
+                .unwrap_or_default(),
+            lines: s
+                .messages
+                .iter()
+                .map(|m| wire::mock::SourceLine {
+                    speaker: m.speaker.clone(),
+                    text: m.body.clone(),
+                    hl: s.anchors.contains(&m.id),
+                })
+                .collect(),
         }
     }
 

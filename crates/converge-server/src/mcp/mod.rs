@@ -22,8 +22,9 @@
 use std::sync::Arc;
 
 use converge_storage::{
-    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, NewAgent,
-    NewDecision, Pagination, ProjectId, Storage, StoreError,
+    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
+    NewAgent, NewDecision, NewMessage, NewSession, Pagination, ProjectId, SessionId, SessionKind,
+    Storage, StoreError,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -90,6 +91,10 @@ pub struct DecisionAdd {
     /// Decision ids this one replaces (creation-time supersession).
     #[serde(default)]
     pub supersedes: Vec<String>,
+    /// Message ids (from `message_add`) this decision is grounded in —
+    /// anchor the exact lines that decided it.
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -121,6 +126,37 @@ pub struct DecisionList {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectList {}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SessionEnsure {
+    /// The project this conversation belongs to (see `project_list`).
+    pub project_id: String,
+    /// Where it happens: transcript (agent session — the default),
+    /// slack, pr, or incident.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// The source system's stable reference — your own session id, a
+    /// thread URL, a PR reference. Ensuring again with the same
+    /// kind+external returns the same session (and refreshes the title).
+    pub external: String,
+    /// Human-readable title, shown wherever the source is cited.
+    pub title: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MessageAdd {
+    /// The session to append to (see `session_ensure`).
+    pub session_id: String,
+    /// Appended in order. Timestamps are server-assigned — never send them.
+    pub messages: Vec<MessageIn>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct MessageIn {
+    /// Who said it, as displayed ("maksim", "claude").
+    pub speaker: String,
+    pub body: String,
+}
 
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
@@ -170,6 +206,61 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&map)
     }
 
+    #[tool(description = "Ensure the conversation you're working in exists as \
+        a session — call once, early, with a stable external reference (your \
+        own session id). Idempotent: the same kind+external always returns the \
+        same session_id, which message_add and decision evidence need.")]
+    async fn session_ensure(
+        &self,
+        Parameters(req): Parameters<SessionEnsure>,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id: ProjectId = parse_id(&req.project_id, "project_id")?;
+        let kind = match req.kind.as_deref() {
+            None => SessionKind::Transcript,
+            Some(s) => parse_session_kind(s)?,
+        };
+        let id = self
+            .store
+            .session_ensure(NewSession {
+                project_id,
+                kind,
+                external: req.external,
+                title: req.title,
+            })
+            .await
+            .map_err(map_err)?;
+        json_result(&serde_json::json!({ "session_id": id }))
+    }
+
+    #[tool(description = "Append messages to a session's stream, in order — \
+        record the conversation as it happens. Returns the new message ids; \
+        pass them as `evidence` on decision_add to anchor the exact lines \
+        that decided it.")]
+    async fn message_add(
+        &self,
+        Parameters(req): Parameters<MessageAdd>,
+    ) -> Result<CallToolResult, McpError> {
+        let session: SessionId = parse_id(&req.session_id, "session_id")?;
+        let messages = req
+            .messages
+            .into_iter()
+            .map(|m| NewMessage {
+                speaker: m.speaker,
+                body: m.body,
+                // Live recording: capture time is the server's to assign
+                // (the time-authority decision); importers with real
+                // external timestamps use the REST batch surface instead.
+                sent_at: None,
+            })
+            .collect();
+        let ids = self
+            .store
+            .message_add(session, messages)
+            .await
+            .map_err(map_err)?;
+        json_result(&serde_json::json!({ "message_ids": ids }))
+    }
+
     #[tool(description = "Record a decision (ADR): what was decided, why, what \
         was rejected. Set `supersedes` when it replaces earlier decisions. \
         Authorship and timestamps are recorded server-side — never send them.")]
@@ -187,6 +278,11 @@ impl<S: Storage + 'static> Memory<S> {
             .supersedes
             .iter()
             .map(|s| parse_id::<DecisionId>(s, "supersedes"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let evidence = req
+            .evidence
+            .iter()
+            .map(|m| parse_id::<MessageId>(m, "evidence"))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Authorship: the deployment user working through the calling
@@ -231,9 +327,7 @@ impl<S: Storage + 'static> Memory<S> {
                     .collect(),
                 authors: vec![Author::UserViaAgent { user, agent }],
                 supersedes,
-                // Evidence anchoring reaches the MCP surface with the
-                // session/message ingest tools (M2 E4).
-                evidence: Vec::new(),
+                evidence,
             })
             .await
             .map_err(map_err)?;
@@ -324,7 +418,11 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
              find project ids, `decision_add` after a design decision \
              lands (set `supersedes` when it replaces one), and \
              `decision_list`/`decision_get` before re-deciding \
-             something that may already be settled."
+             something that may already be settled. To make decisions \
+             verifiable, `session_ensure` this conversation once, \
+             `message_add` the exchanges as they happen, and anchor \
+             `decision_add` with `evidence` message ids — the exact \
+             lines that decided it."
                 .into(),
         );
         info
@@ -343,6 +441,19 @@ fn parse_id<T: From<ulid::Ulid>>(s: &str, field: &str) -> Result<T, McpError> {
     s.parse::<ulid::Ulid>()
         .map(T::from)
         .map_err(|_| McpError::invalid_params(format!("invalid {field}: {s}"), None))
+}
+
+fn parse_session_kind(s: &str) -> Result<SessionKind, McpError> {
+    match s {
+        "transcript" => Ok(SessionKind::Transcript),
+        "slack" => Ok(SessionKind::Slack),
+        "pr" => Ok(SessionKind::Pr),
+        "incident" => Ok(SessionKind::Incident),
+        other => Err(McpError::invalid_params(
+            format!("invalid kind: {other} (transcript | slack | pr | incident)"),
+            None,
+        )),
+    }
 }
 
 fn parse_status(s: &str) -> Result<DecisionStatus, McpError> {

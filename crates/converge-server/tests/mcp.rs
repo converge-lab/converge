@@ -73,7 +73,9 @@ async fn tool_round_trip() {
             "decision_add",
             "decision_get",
             "decision_list",
-            "project_list"
+            "message_add",
+            "project_list",
+            "session_ensure",
         ]
     );
 
@@ -172,4 +174,87 @@ async fn tool_round_trip() {
             || bad["result"]["isError"].as_bool().unwrap_or(false),
         "{bad}"
     );
+}
+
+/// The live-recording loop: ensure this conversation, stream messages,
+/// anchor a decision to the exact lines — all over MCP.
+#[tokio::test]
+async fn ingest_round_trip() {
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let (_, project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group["id"], "name": "p", "description": null })),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap();
+
+    // Ensure converges on the natural key, refreshing the title.
+    let sid = call(
+        &app,
+        "session_ensure",
+        json!({ "project_id": project, "external": "cc-1", "title": "early" }),
+    )
+    .await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let again = call(
+        &app,
+        "session_ensure",
+        json!({ "project_id": project, "external": "cc-1", "title": "final title" }),
+    )
+    .await;
+    assert_eq!(again["session_id"].as_str().unwrap(), sid);
+
+    // Record the exchange; anchor the decision to the second line.
+    let ids = call(
+        &app,
+        "message_add",
+        json!({ "session_id": sid, "messages": [
+            { "speaker": "maksim", "body": "which way?" },
+            { "speaker": "claude", "body": "this way, because…" },
+        ]}),
+    )
+    .await["message_ids"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(ids.len(), 2);
+    let anchor = ids[1].as_str().unwrap();
+
+    let decision = call(
+        &app,
+        "decision_add",
+        json!({
+            "project_id": project, "title": "Go this way", "summary": "because…",
+            "evidence": [anchor],
+        }),
+    )
+    .await["decision_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // The anchor rides decision_get, and REST serves the derived excerpt.
+    let got = call(&app, "decision_get", json!({ "decision_id": decision })).await;
+    assert_eq!(got["decision"]["evidence"][0].as_str().unwrap(), anchor);
+    let (_, sources) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{decision}/sources"),
+        None,
+    )
+    .await;
+    assert_eq!(sources[0]["session"]["title"], "final title");
+    assert_eq!(sources[0]["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(sources[0]["anchors"], json!([anchor]));
 }

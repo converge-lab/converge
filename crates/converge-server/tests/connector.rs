@@ -220,7 +220,7 @@ async fn connector_round_trip() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 6);
 
     // The refresh grant mints a fresh access token…
     let (status, _, refreshed) = send(

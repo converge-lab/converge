@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/converge-cli",
     "crates/converge-client",
     "crates/converge-server",
     "crates/converge-storage",
@@ -15,6 +16,7 @@ members = [
 # The wasm crates (converge-ui, converge-web) are likewise out of the default
 # set — build them with `-p` / trunk; CI checks them on wasm32.
 default-members = [
+    "crates/converge-cli",
     "crates/converge-client",
     "crates/converge-server",
     "crates/converge-storage",
@@ -78,6 +80,7 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 # Binary plumbing
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+toml = "0.8"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

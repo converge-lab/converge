@@ -1,0 +1,21 @@
+[package]
+name = "converge-cli"
+description = "The Converge client-side integration for coding agents: project binding, session-start context, transcript sync."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The user-facing binary is `converge` (`converge init`, `converge inject`,
+# `converge sync`); the crate keeps the -cli suffix.
+[[bin]]
+name = "converge"
+path = "src/main.rs"
+
+[dependencies]
+converge-client.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+tokio.workspace = true

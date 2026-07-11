@@ -16,6 +16,7 @@
 //! `CONVERGE_TOKEN`.
 
 mod config;
+mod hook;
 mod init;
 mod marker;
 
@@ -34,6 +35,19 @@ enum Cmd {
     /// through the agent).
     #[command(subcommand)]
     Project(ProjectCmd),
+    /// Hook entrypoints — invoked by the agent tool, never interactively.
+    #[command(subcommand)]
+    Hook(HookCmd),
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    /// SessionStart: emit the context block for the marker's state.
+    Inject,
+    /// PreToolUse (converge tools): merge cwd + git remote into the call.
+    Ctx,
+    /// PostToolUse (binding tools): write the marker from the response.
+    Apply,
 }
 
 #[derive(Subcommand)]
@@ -56,5 +70,8 @@ enum ProjectCmd {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Cmd::Project(ProjectCmd::Init { rebind, off }) => init::run(rebind, off).await,
+        Cmd::Hook(HookCmd::Inject) => hook::inject().await,
+        Cmd::Hook(HookCmd::Ctx) => hook::ctx(),
+        Cmd::Hook(HookCmd::Apply) => hook::apply(),
     }
 }

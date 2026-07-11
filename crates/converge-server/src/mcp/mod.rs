@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use converge_storage::{
     AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
-    NewAgent, NewDecision, NewMessage, NewSession, Pagination, ProjectId, SessionId, SessionKind,
-    Storage, StoreError,
+    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, SessionId,
+    SessionKind, Storage, StoreError,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -158,6 +158,43 @@ pub struct MessageIn {
     pub body: String,
 }
 
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ProjectSuggest {
+    /// Working directory of the session (a client-side hook injects it;
+    /// omit when unknown).
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Git remote URL of the working tree (hook-injected; omit when
+    /// unknown).
+    #[serde(default)]
+    pub remote: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ProjectBind {
+    /// Bind to this existing project (from `project_suggest`). Exactly
+    /// one of `project_id` / `name`.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Create a new project with this name and bind to it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Owning group for a created project; only needed when the
+    /// deployment has more than one group.
+    #[serde(default)]
+    pub group_id: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ProjectDismiss {
+    /// `session` = skip for now (nothing persists); `repo` = don't ask
+    /// again (the client-side hook writes the opt-out marker).
+    pub scope: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ProjectPick {}
+
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
     pub fn new(store: S, me: Identity) -> Self {
@@ -204,6 +241,182 @@ impl<S: Storage + 'static> Memory<S> {
             })
             .collect();
         json_result(&map)
+    }
+
+    #[tool(description = "Suggest converge projects this working tree might \
+        map to, best match first (a client-side hook injects cwd + git \
+        remote). Present the candidates to the user, then call \
+        `project_bind` with their pick — or `project_dismiss` if they \
+        decline.")]
+    async fn project_suggest(
+        &self,
+        Parameters(req): Parameters<ProjectSuggest>,
+    ) -> Result<CallToolResult, McpError> {
+        let groups = self
+            .store
+            .group_list(Pagination::default())
+            .await
+            .map_err(map_err)?;
+        let projects = self
+            .store
+            .project_list(Default::default(), Pagination::default())
+            .await
+            .map_err(map_err)?;
+
+        // The working tree's own names are the ranking hints: the repo
+        // directory, and the repository name from the remote URL.
+        let mut hints: Vec<String> = Vec::new();
+        if let Some(cwd) = &req.cwd
+            && let Some(base) = std::path::Path::new(cwd).file_name()
+        {
+            hints.push(base.to_string_lossy().to_lowercase());
+        }
+        if let Some(remote) = &req.remote
+            && let Some(repo) = remote
+                .trim_end_matches('/')
+                .trim_end_matches(".git")
+                .rsplit(['/', ':'])
+                .next()
+        {
+            hints.push(repo.to_lowercase());
+        }
+        let score = |name: &str| -> u8 {
+            let name = name.to_lowercase();
+            if hints.contains(&name) {
+                2
+            } else if hints
+                .iter()
+                .any(|h| !h.is_empty() && (h.contains(&name) || name.contains(h.as_str())))
+            {
+                1
+            } else {
+                0
+            }
+        };
+        let mut candidates: Vec<_> = projects
+            .iter()
+            .map(|p| {
+                let group = groups
+                    .iter()
+                    .find(|g| g.id == p.group_id)
+                    .map(|g| g.name.clone())
+                    .unwrap_or_default();
+                (
+                    score(&p.name),
+                    serde_json::json!({
+                        "project_id": p.id,
+                        "name": p.name,
+                        "description": p.description,
+                        "group": group,
+                    }),
+                )
+            })
+            .collect();
+        candidates.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        let candidates: Vec<_> = candidates.into_iter().map(|(_, c)| c).collect();
+        json_result(&serde_json::json!({ "hints": hints, "candidates": candidates }))
+    }
+
+    #[tool(description = "Link the working tree to a converge project: pass \
+        `project_id` for an existing one, or `name` to create it. Answers \
+        {project_id, name}; a client-side hook writes the local `.converge` \
+        marker from that — do NOT write the file yourself.")]
+    async fn project_bind(
+        &self,
+        Parameters(req): Parameters<ProjectBind>,
+    ) -> Result<CallToolResult, McpError> {
+        let (id, name) = match (req.project_id.as_deref(), req.name) {
+            (Some(id), None) => {
+                let id: ProjectId = parse_id(id, "project_id")?;
+                let project = self
+                    .store
+                    .project_get(id)
+                    .await
+                    .map_err(map_err)?
+                    .ok_or_else(|| McpError::invalid_params("unknown project_id", None))?;
+                (id, project.name)
+            }
+            (None, Some(name)) => {
+                let groups = self
+                    .store
+                    .group_list(Pagination::default())
+                    .await
+                    .map_err(map_err)?;
+                let group = match (req.group_id.as_deref(), groups.len()) {
+                    (Some(gid), _) => parse_id::<GroupId>(gid, "group_id")?,
+                    (None, 1) => groups[0].id,
+                    (None, _) => {
+                        let list: Vec<String> = groups
+                            .iter()
+                            .map(|g| format!("{} = {}", g.name, g.id))
+                            .collect();
+                        return Err(McpError::invalid_params(
+                            format!("several groups exist; pass group_id ({})", list.join(", ")),
+                            None,
+                        ));
+                    }
+                };
+                let id = self
+                    .store
+                    .project_add(NewProject {
+                        group_id: group,
+                        name: name.clone(),
+                        description: None,
+                    })
+                    .await
+                    .map_err(map_err)?;
+                (id, name)
+            }
+            _ => {
+                return Err(McpError::invalid_params(
+                    "pass exactly one of project_id (bind existing) or name (create)",
+                    None,
+                ));
+            }
+        };
+        json_result(&serde_json::json!({ "project_id": id, "name": name }))
+    }
+
+    #[tool(description = "The user declined to link this repo. scope=session \
+        = skip for now (nothing persists); scope=repo = don't ask again (a \
+        client-side hook writes the opt-out marker).")]
+    async fn project_dismiss(
+        &self,
+        Parameters(req): Parameters<ProjectDismiss>,
+    ) -> Result<CallToolResult, McpError> {
+        match req.scope.as_str() {
+            "session" | "repo" => json_result(
+                &serde_json::json!({ "dismissed": req.scope, "disable": req.scope == "repo" }),
+            ),
+            other => Err(McpError::invalid_params(
+                format!("invalid scope: {other} (session | repo)"),
+                None,
+            )),
+        }
+    }
+
+    #[tool(description = "Render the project picker server-side (MCP \
+        elicitation) and link the repo — prefer this over project_suggest \
+        when it works. If it answers {\"elicitation\": false}, this client \
+        can't render it: fall back to project_suggest + your own question \
+        UI.")]
+    async fn project_pick(
+        &self,
+        Parameters(_req): Parameters<ProjectPick>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        // Server-driven elicitation needs a client that declares the
+        // capability — and a transport that can deliver server-initiated
+        // requests. The stateless `/mcp` retains no peer info, so today
+        // the probe always answers `false` and the documented fallback
+        // (project_suggest + the client's own question UI) carries the
+        // flow. When a capable transport exists, the elicit branch (a
+        // closed select of project names via `peer.elicit`) lands here.
+        let _capable = context
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.elicitation.is_some());
+        json_result(&serde_json::json!({ "elicitation": false }))
     }
 
     #[tool(description = "Ensure the conversation you're working in exists as \

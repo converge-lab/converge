@@ -74,7 +74,11 @@ async fn tool_round_trip() {
             "decision_get",
             "decision_list",
             "message_add",
+            "project_bind",
+            "project_dismiss",
             "project_list",
+            "project_pick",
+            "project_suggest",
             "session_ensure",
         ]
     );
@@ -257,4 +261,64 @@ async fn ingest_round_trip() {
     assert_eq!(sources[0]["session"]["title"], "final title");
     assert_eq!(sources[0]["messages"].as_array().unwrap().len(), 2);
     assert_eq!(sources[0]["anchors"], json!([anchor]));
+}
+
+/// The mapping loop's server half: suggest (hint-ranked), bind, dismiss,
+/// and the pick fallback contract.
+#[tokio::test]
+async fn mapping_round_trip() {
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    for name in ["gateway", "billing"] {
+        send(
+            &app,
+            "POST",
+            "/api/v1/projects",
+            Some(json!({ "group_id": group["id"], "name": name, "description": null })),
+        )
+        .await;
+    }
+
+    // The cwd hint ranks the matching project first.
+    let suggested = call(
+        &app,
+        "project_suggest",
+        json!({ "cwd": "/home/dev/billing", "remote": "git@example.com:corp/billing.git" }),
+    )
+    .await;
+    assert_eq!(suggested["hints"], json!(["billing", "billing"]));
+    let candidates = suggested["candidates"].as_array().unwrap();
+    assert_eq!(candidates[0]["name"], "billing");
+    assert_eq!(candidates[1]["name"], "gateway");
+
+    // Bind existing echoes the payload the marker hook writes.
+    let bound = call(
+        &app,
+        "project_bind",
+        json!({ "project_id": candidates[0]["project_id"] }),
+    )
+    .await;
+    assert_eq!(bound["name"], "billing");
+
+    // Create-by-name: the harness has exactly one group, so it is
+    // auto-picked without a group_id.
+    let created = call(&app, "project_bind", json!({ "name": "fresh" })).await;
+    assert!(created["project_id"].is_string());
+    assert_eq!(created["name"], "fresh");
+
+    // Dismiss scopes; repo carries the disable flag for the hook.
+    let dismissed = call(&app, "project_dismiss", json!({ "scope": "repo" })).await;
+    assert_eq!(dismissed["disable"], true);
+    let skipped = call(&app, "project_dismiss", json!({ "scope": "session" })).await;
+    assert_eq!(skipped["disable"], false);
+
+    // Stateless transport: pick reports the fallback contract.
+    let pick = call(&app, "project_pick", json!({})).await;
+    assert_eq!(pick["elicitation"], false);
 }

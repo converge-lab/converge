@@ -176,6 +176,74 @@ async fn bound(project: ProjectId) -> String {
     }
 }
 
+// ─── SessionEnd: transcript → evidence ──────────────────────────────────────
+
+pub async fn sync() -> Result<()> {
+    // Best effort throughout: a sync problem must never surface as a
+    // session failure. The quiet paths just return.
+    if let Err(e) = try_sync().await {
+        emit(&json!({ "systemMessage": format!("Converge: sync skipped — {e}") }));
+    }
+    Ok(())
+}
+
+async fn try_sync() -> Result<()> {
+    let payload = payload();
+    let cwd = cwd_of(&payload);
+    let Some(transcript) = payload["transcript_path"].as_str() else {
+        return Ok(());
+    };
+
+    // Only bound repos sync; unbound and disabled stay quiet.
+    let State::Bound { project, .. } = marker::find(&cwd)? else {
+        return Ok(());
+    };
+
+    let parsed = crate::transcript::read(std::path::Path::new(transcript))?;
+    let Some(external) = parsed.session_id.clone() else {
+        return Ok(()); // no session id in the content — nothing to key on
+    };
+
+    let mut marks = crate::watermark::Watermarks::load()?;
+    let already = marks.synced(transcript);
+    // A shrunk/rewritten transcript (fewer turns than synced) is left
+    // alone rather than re-sent, to avoid duplicating evidence.
+    let Some(fresh) = parsed.turns.get(already..).filter(|f| !f.is_empty()) else {
+        marks.set(transcript, parsed.turns.len());
+        marks.save()?;
+        return Ok(());
+    };
+
+    let config = Config::load()?;
+    let client = config.client()?;
+
+    let session = client
+        .session_ensure(&converge_client::NewSession {
+            project_id: project,
+            kind: converge_client::SessionKind::Transcript,
+            external,
+            title: crate::transcript::title(&parsed.turns),
+        })
+        .await?;
+    let messages: Vec<_> = fresh
+        .iter()
+        .map(|t| converge_client::NewMessage {
+            speaker: t.speaker.clone(),
+            body: t.body.clone(),
+            sent_at: t.sent_at,
+        })
+        .collect();
+    let added = messages.len();
+    client.message_add(session, &messages).await?;
+
+    marks.set(transcript, parsed.turns.len());
+    marks.save()?;
+    emit(&json!({
+        "systemMessage": format!("Converge: synced {added} message(s) to evidence ✓"),
+    }));
+    Ok(())
+}
+
 // ─── PreToolUse: context collector ──────────────────────────────────────────
 
 pub fn ctx() -> Result<()> {

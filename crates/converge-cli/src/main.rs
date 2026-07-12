@@ -19,6 +19,8 @@ mod config;
 mod hook;
 mod init;
 mod marker;
+mod transcript;
+mod watermark;
 
 use clap::{Parser, Subcommand};
 
@@ -48,6 +50,8 @@ enum HookCmd {
     Ctx,
     /// PostToolUse (binding tools): write the marker from the response.
     Apply,
+    /// SessionEnd: push new transcript turns into the evidence layer.
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -73,5 +77,6 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Hook(HookCmd::Inject) => hook::inject().await,
         Cmd::Hook(HookCmd::Ctx) => hook::ctx(),
         Cmd::Hook(HookCmd::Apply) => hook::apply(),
+        Cmd::Hook(HookCmd::Sync) => hook::sync().await,
     }
 }

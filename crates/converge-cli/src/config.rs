@@ -78,11 +78,33 @@ impl Config {
     }
 }
 
-fn path() -> Option<PathBuf> {
+pub fn path() -> Option<PathBuf> {
     let base = env::var("XDG_CONFIG_HOME")
         .or_else(|_| env::var("HOME").map(|home| format!("{home}/.config")))
         .ok()?;
     Some(PathBuf::from(base).join("converge/cli.toml"))
+}
+
+/// Write a fresh configuration file (0600 — it may hold the token).
+/// Used by the setup wizard; hand-editing stays first-class.
+pub fn write(server: &str, token: &str) -> Result<PathBuf> {
+    let path = path().context("neither XDG_CONFIG_HOME nor HOME is set")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    let text = format!(
+        "# Converge CLI configuration. `token_cmd` (a command printing the\n\
+         # secret) is preferred over a plaintext `token` — swap when you can.\n\
+         server = \"{server}\"\n\
+         token = \"{token}\"\n"
+    );
+    std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(path)
 }
 
 /// Run a `token_cmd` and take its stdout as the secret.

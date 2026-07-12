@@ -17,8 +17,9 @@
 
 mod config;
 mod hook;
-mod init;
 mod marker;
+mod project;
+mod setup;
 mod transcript;
 mod watermark;
 
@@ -33,6 +34,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// One-time machine setup: credentials, agent-tool integration
+    /// (hooks + MCP). Safe to re-run.
+    Init,
     /// Per-repository binding (the manual path; sessions normally bind
     /// through the agent).
     #[command(subcommand)]
@@ -73,7 +77,8 @@ enum ProjectCmd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Cmd::Project(ProjectCmd::Init { rebind, off }) => init::run(rebind, off).await,
+        Cmd::Init => setup::run().await,
+        Cmd::Project(ProjectCmd::Init { rebind, off }) => project::run(rebind, off).await,
         Cmd::Hook(HookCmd::Inject) => hook::inject().await,
         Cmd::Hook(HookCmd::Ctx) => hook::ctx(),
         Cmd::Hook(HookCmd::Apply) => hook::apply(),

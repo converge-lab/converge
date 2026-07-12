@@ -42,10 +42,24 @@ your terminal (never to logs, where collectors would keep it). Then:
   `public_url` behind a proxy) — registered clients are signed by that
   key, so an unset (per-boot random) key orphans them on restart.
 
-  Agents get four tools: `project_list` (discover ids), `decision_add`
-  (record an ADR, with creation-time supersession), `decision_get` (the
-  full record plus graph edges), and `decision_list` (filter by
-  project/group/status — `superseded` matches the *derived* status).
+  Agents get the full palette: decisions (`decision_add` with
+  supersession + evidence anchors, `decision_get`, `decision_list`),
+  evidence ingest (`session_ensure`, `message_add`), and project mapping
+  (`project_suggest`/`project_bind`/`project_dismiss`/`project_pick`).
+
+- **Claude Code integration** (`converge-cli`): one command wires it all —
+
+  ```sh
+  cargo install --path crates/converge-cli   # installs the `converge` binary
+  converge init    # credentials → hooks → MCP registration, once per machine
+  ```
+
+  After that, opening any repository in Claude Code suggests a project
+  binding in-session (the human answers in conversation; hooks write the
+  committed `.converge` marker), session transcripts sync into the
+  evidence layer automatically, and every session starts with the
+  project's decision index injected. `converge project init` is the
+  manual fallback for binding from the terminal.
 
 - **REST**: `GET`/`POST` `/api/v1/{groups,projects,decisions,users,agents}`
   with cursor pagination (`?limit=&cursor=` → `{items, next_cursor}`),

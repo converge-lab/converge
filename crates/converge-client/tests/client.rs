@@ -79,6 +79,9 @@ fn decision(project_id: converge_storage::ProjectId, title: &str) -> NewDecision
 async fn round_trip() {
     let (_pg, api) = client().await;
 
+    // The health probe carries the server version (same workspace here).
+    assert_eq!(api.version().await.unwrap(), env!("CARGO_PKG_VERSION"));
+
     // Identity resolves and is stable.
     let me = api.me().await.unwrap();
     assert_eq!(me.handle, "admin");

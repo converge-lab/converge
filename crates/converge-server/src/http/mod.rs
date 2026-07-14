@@ -82,6 +82,11 @@ pub fn app<S: Storage + 'static>(
 
 /// Process liveness only. Storage connectivity is proven at startup
 /// (connect + migrate); a readiness probe can come when something needs it.
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        // The workspace version — clients compare it against their own
+        // build to surface skew (the CLI is a distributed binary).
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }

@@ -259,6 +259,25 @@ impl Client {
             .await
     }
 
+    /// The server's version (open — from the health probe). Distributed
+    /// clients compare it against their own build to surface skew.
+    pub async fn version(&self) -> Result<String, StoreError> {
+        #[derive(serde::Deserialize)]
+        struct Health {
+            version: String,
+        }
+        let response = self
+            .http
+            .get(self.url("healthz"))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::OK => Ok(response.json::<Health>().await.map_err(transport)?.version),
+            _ => Err(fail(response).await),
+        }
+    }
+
     /// Auth capabilities (open — the login screen calls this before any
     /// credential exists).
     pub async fn auth_info(&self) -> Result<AuthInfo, StoreError> {

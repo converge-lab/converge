@@ -148,7 +148,13 @@ async fn bound(project: ProjectId) -> String {
     }
     .await;
 
-    match fetched {
+    // The daily-cached skew nudge rides the bound path (the one that
+    // already talks to the server); its failure is silence, not noise.
+    let skew = match Config::load().ok().and_then(|c| c.client().ok()) {
+        Some(client) => crate::skew::check_cached(&client).await,
+        None => None,
+    };
+    let block = match fetched {
         Ok((name, decisions)) if decisions.is_empty() => format!(
             "## Converge memory — project \"{name}\" ({project})\n\
              This working tree is bound to converge project `{project}`; \
@@ -173,6 +179,10 @@ async fn bound(project: ProjectId) -> String {
              the decision index is unavailable. Tools may still work; \
              `decision_list` fetches the index on demand."
         ),
+    };
+    match skew {
+        Some(warning) => format!("{block}\n\n(note: {warning})"),
+        None => block,
     }
 }
 

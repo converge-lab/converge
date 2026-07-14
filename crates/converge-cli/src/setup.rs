@@ -35,6 +35,10 @@ pub async fn run() -> Result<()> {
         Err(_) => credentials(&mut lines).await?,
     };
 
+    if let Some(warning) = crate::skew::check(&config.client()?).await {
+        println!("⚠ {warning}");
+    }
+
     // ── agent tool ─────────────────────────────────────────────────────
     if !claude_code_present() {
         println!(

@@ -16,6 +16,11 @@ path = "src/main.rs"
 converge-client.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+# Self-update: download (rustls reqwest), verify the signed manifest
+# (minisign-verify is pure Rust and dependency-free — the point), hash.
+reqwest.workspace = true
+sha2.workspace = true
+minisign-verify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

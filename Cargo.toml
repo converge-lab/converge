@@ -74,6 +74,7 @@ rmcp = { version = "1", features = ["server", "transport-streamable-http-server"
 rand = "0.9"
 sha2 = "0.10"
 base64 = "0.22"
+minisign-verify = "0.2"
 jsonwebtoken = "9"
 axum-extra = { version = "0.10", features = ["cookie"] }
 

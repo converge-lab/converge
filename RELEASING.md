@@ -18,17 +18,23 @@ that layout.
 
 ```sh
 minisign -G -W -p minisign.pub -s minisign.key
+# or, with the pure-Rust tool (note: --unencrypted, not just -W):
+cargo install rsign2
+rsign generate --unencrypted -p minisign.pub -s minisign.key
 ```
 
-- `-W` generates the secret **unencrypted**: CI signs unattended, so the
-  key's protection *is* the repository secret store. Anyone who can write
-  repo secrets can sign — acceptable for now; move to offline signing if
-  the project's threat model grows.
+- The secret must be **unencrypted**: CI signs unattended, so the key's
+  protection *is* the repository secret store. Anyone who can write repo
+  secrets can sign — acceptable for now; move to offline signing if the
+  project's threat model grows.
 - Put the content of `minisign.key` into the `MINISIGN_SECRET_KEY`
   repository secret, then delete the local file.
-- Commit `minisign.pub`, and bake its key line into `install.sh`
-  (replace `__MINISIGN_PUBKEY__`) and — from D3 on — the CLI's embedded
-  verification key.
+- Commit `minisign.pub`, then bake its **key line** (the second line of
+  the file) into two places, replacing `__MINISIGN_PUBKEY__`:
+  - `install.sh` — bootstrap verification, and
+  - `crates/converge-cli/src/update.rs` — the embedded key `converge
+    update` verifies against. Until that constant is real, `converge
+    update` **refuses to run** rather than update unverified.
 
 Rotation: generate the new pair, ship one release signed by the **old**
 key whose binary embeds the **new** public key, then switch the secret.

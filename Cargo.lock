@@ -604,8 +604,11 @@ dependencies = [
  "anyhow",
  "clap",
  "converge-client",
+ "minisign-verify",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "time",
  "tokio",
  "toml 0.8.23",
@@ -2052,6 +2055,12 @@ dependencies = [
  "mime",
  "unicase",
 ]
+
+[[package]]
+name = "minisign-verify"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f9645cb765ea72b8111f36c522475d2daa0d22c957a9826437e97534bc4e9e"
 
 [[package]]
 name = "mio"

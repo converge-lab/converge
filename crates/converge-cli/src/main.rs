@@ -22,6 +22,7 @@ mod project;
 mod setup;
 mod skew;
 mod transcript;
+mod update;
 mod watermark;
 
 use clap::{Parser, Subcommand};
@@ -38,6 +39,23 @@ enum Cmd {
     /// One-time machine setup: credentials, agent-tool integration
     /// (hooks + MCP). Safe to re-run.
     Init,
+    /// Self-update from a signed release (or roll back to the kept
+    /// previous binary).
+    Update {
+        /// A release tag (default: the latest).
+        #[arg(long)]
+        version: Option<String>,
+        /// A local release directory (closed contours): artifact +
+        /// SHA256SUMS + SHA256SUMS.minisig, verified the same way.
+        #[arg(long, conflicts_with = "version")]
+        from: Option<std::path::PathBuf>,
+        /// Swap back to the previous binary.
+        #[arg(long, conflicts_with_all = ["version", "from"])]
+        rollback: bool,
+        /// Reinstall even when already at the target version.
+        #[arg(long)]
+        force: bool,
+    },
     /// Per-repository binding (the manual path; sessions normally bind
     /// through the agent).
     #[command(subcommand)]
@@ -79,6 +97,12 @@ enum ProjectCmd {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Cmd::Init => setup::run().await,
+        Cmd::Update {
+            version,
+            from,
+            rollback,
+            force,
+        } => update::run(version, from, rollback, force).await,
         Cmd::Project(ProjectCmd::Init { rebind, off }) => project::run(rebind, off).await,
         Cmd::Hook(HookCmd::Inject) => hook::inject().await,
         Cmd::Hook(HookCmd::Ctx) => hook::ctx(),

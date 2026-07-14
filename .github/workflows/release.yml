@@ -1,0 +1,90 @@
+name: Release
+
+# Tag-driven CLI releases: `git tag v0.1.0 && git push --tags`.
+#
+# Builds the `converge` binary for every supported target (musl on Linux —
+# static, no glibc coupling), collects a SHA256SUMS manifest, signs it with
+# minisign (see RELEASING.md for the one-time key setup), and publishes a
+# GitHub Release. `install.sh` and `converge update` (D3) consume exactly
+# this layout: <tag>/converge-<target>.tar.gz + SHA256SUMS + SHA256SUMS.minisig.
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  SQLX_OFFLINE: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release -p converge-cli --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          tar -czf converge-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release converge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: converge-${{ matrix.target }}
+          path: converge-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+      - name: Manifest
+        run: sha256sum converge-*.tar.gz > SHA256SUMS
+      - name: Sign manifest
+        # The unencrypted minisign secret key lives in the repo secret
+        # (CI-custody tradeoff, documented in RELEASING.md); the public
+        # half is committed as minisign.pub and embedded in installers.
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::error::MINISIGN_SECRET_KEY is not set — see RELEASING.md" && exit 1
+          fi
+          sudo apt-get update && sudo apt-get install -y minisign
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > minisign.key
+          minisign -S -s minisign.key -m SHA256SUMS \
+            -t "converge ${{ github.ref_name }}"
+          rm minisign.key
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "converge ${{ github.ref_name }}" \
+            --generate-notes \
+            converge-*.tar.gz SHA256SUMS SHA256SUMS.minisig

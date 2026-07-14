@@ -50,9 +50,13 @@ your terminal (never to logs, where collectors would keep it). Then:
 - **Claude Code integration** (`converge-cli`): one command wires it all —
 
   ```sh
-  cargo install --path crates/converge-cli   # installs the `converge` binary
+  curl -fsSL https://raw.githubusercontent.com/converge-lab/converge/main/install.sh | sh
   converge init    # credentials → hooks → MCP registration, once per machine
   ```
+
+  (The binary lands in `~/.converge/bin` with a `~/.local/bin` symlink;
+  releases are checksum-manifested and minisign-signed. Building from
+  source works too: `cargo install --path crates/converge-cli`.)
 
   After that, opening any repository in Claude Code suggests a project
   binding in-session (the human answers in conversation; hooks write the

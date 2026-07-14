@@ -27,7 +27,7 @@ mod watermark;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "converge", about = "Converge agent integration", long_about = None)]
+#[command(name = "converge", version, about = "Converge agent integration", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,

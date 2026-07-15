@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/converge-cli",
     "crates/converge-client",
+    "crates/converge-expert",
     "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
@@ -47,6 +48,10 @@ markdown = "1"
 
 # HTTP client — compiles native (rustls) and to wasm (browser fetch; the
 # TLS feature is target-gated away there).
+async-openai = { version = "0.41.1", default-features = false, features = [
+    "chat-completion",
+    "rustls",
+] }
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",

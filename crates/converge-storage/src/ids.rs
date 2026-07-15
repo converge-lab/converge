@@ -46,7 +46,7 @@ macro_rules! id {
 }
 
 // One per entity: group, project, decision (graph node), user, agent,
-// bearer token, session (evidence container), message.
+// bearer token, session (evidence container), message, signal.
 id!(GroupId);
 id!(ProjectId);
 id!(DecisionId);
@@ -55,3 +55,4 @@ id!(AgentId);
 id!(TokenId);
 id!(SessionId);
 id!(MessageId);
+id!(SignalId);

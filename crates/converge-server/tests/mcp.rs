@@ -77,8 +77,8 @@ async fn tool_round_trip() {
             "project_bind",
             "project_dismiss",
             "project_list",
+            "project_match",
             "project_pick",
-            "project_suggest",
             "session_ensure",
         ]
     );
@@ -288,7 +288,7 @@ async fn mapping_round_trip() {
     // The cwd hint ranks the matching project first.
     let suggested = call(
         &app,
-        "project_suggest",
+        "project_match",
         json!({ "cwd": "/home/dev/billing", "remote": "git@example.com:corp/billing.git" }),
     )
     .await;

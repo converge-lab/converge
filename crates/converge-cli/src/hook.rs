@@ -68,12 +68,12 @@ pub async fn inject() -> Result<()> {
         ),
         Ok(State::Unbound) => (
             UNBOUND.to_string(),
-            "Converge: repo unmapped — link it via project_pick / project_suggest".to_string(),
+            "Converge: repo unmapped — link it via project_pick / project_match".to_string(),
         ),
         Err(_) => (
             "## Converge — marker unreadable\n\
              `.converge` exists but has neither `project_id` nor `disable`. \
-             Re-link: call `project_suggest`, then `project_bind` — or tell \
+             Re-link: call `project_match`, then `project_bind` — or tell \
              the user to run `converge project init --rebind`."
                 .to_string(),
             "Converge: marker unreadable — re-link".to_string(),
@@ -101,7 +101,7 @@ itself, a hook writes the marker — do NOT render your own menu or call \
 `project_bind` on this path. If it returns `{\"skipped\": true}`, leave \
 the repo unmapped for now.\n\
 2. FALLBACK — when `project_pick` returns `{\"elicitation\": false}` \
-(this client can't render the picker): call `project_suggest`, present \
+(this client can't render the picker): call `project_match`, present \
 the candidates via `AskUserQuestion` (one per candidate + a 'Disable \
 Converge for this repo' option; tell the user the built-in 'Type \
 something' is MANUAL MAPPING — an existing id links, a new name \

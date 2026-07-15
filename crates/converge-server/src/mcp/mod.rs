@@ -159,7 +159,7 @@ pub struct MessageIn {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-pub struct ProjectSuggest {
+pub struct ProjectMatch {
     /// Working directory of the session (a client-side hook injects it;
     /// omit when unknown).
     #[serde(default)]
@@ -172,7 +172,7 @@ pub struct ProjectSuggest {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectBind {
-    /// Bind to this existing project (from `project_suggest`). Exactly
+    /// Bind to this existing project (from `project_match`). Exactly
     /// one of `project_id` / `name`.
     #[serde(default)]
     pub project_id: Option<String>,
@@ -243,14 +243,13 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&map)
     }
 
-    #[tool(description = "Suggest converge projects this working tree might \
-        map to, best match first (a client-side hook injects cwd + git \
-        remote). Present the candidates to the user, then call \
-        `project_bind` with their pick — or `project_dismiss` if they \
-        decline.")]
-    async fn project_suggest(
+    #[tool(description = "Match this working tree to converge projects, \
+        best candidate first (a client-side hook injects cwd + git remote). \
+        Present the candidates to the user, then call `project_bind` with \
+        their pick — or `project_dismiss` if they decline.")]
+    async fn project_match(
         &self,
-        Parameters(req): Parameters<ProjectSuggest>,
+        Parameters(req): Parameters<ProjectMatch>,
     ) -> Result<CallToolResult, McpError> {
         let groups = self
             .store
@@ -396,9 +395,9 @@ impl<S: Storage + 'static> Memory<S> {
     }
 
     #[tool(description = "Render the project picker server-side (MCP \
-        elicitation) and link the repo — prefer this over project_suggest \
+        elicitation) and link the repo — prefer this over project_match \
         when it works. If it answers {\"elicitation\": false}, this client \
-        can't render it: fall back to project_suggest + your own question \
+        can't render it: fall back to project_match + your own question \
         UI.")]
     async fn project_pick(
         &self,
@@ -409,7 +408,7 @@ impl<S: Storage + 'static> Memory<S> {
         // capability — and a transport that can deliver server-initiated
         // requests. The stateless `/mcp` retains no peer info, so today
         // the probe always answers `false` and the documented fallback
-        // (project_suggest + the client's own question UI) carries the
+        // (project_match + the client's own question UI) carries the
         // flow. When a capable transport exists, the elicit branch (a
         // closed select of project names via `peer.elicit`) lands here.
         let _capable = context

@@ -11,7 +11,7 @@
 //! - `ctx` (PreToolUse, matched on converge tools): merge `cwd` + git
 //!   remote into the tool input, so the server ranks candidates without
 //!   the LLM gathering anything.
-//! - `apply` (PostToolUse, matched on the binding tools): perform the
+//! - `mark` (PostToolUse, matched on the binding tools): perform the
 //!   **local effect** — parse the tool response and write the marker at
 //!   the git root. The LLM only ever chose; the write is deterministic.
 
@@ -68,7 +68,7 @@ pub async fn inject() -> Result<()> {
         ),
         Ok(State::Unbound) => (
             UNBOUND.to_string(),
-            "Converge: repo unmapped — link it via project_pick / project_match".to_string(),
+            "Converge: repo unmapped — link it via project_match".to_string(),
         ),
         Err(_) => (
             "## Converge — marker unreadable\n\
@@ -96,17 +96,15 @@ const UNBOUND: &str = "## Converge — this repo is UNMAPPED\n\
 There is no `.converge` marker, so project memory is unavailable until \
 this working tree is linked to a converge project.\n\n\
 **Do this now, proactively, without being asked:**\n\
-1. Call `project_pick` (no arguments). If the server renders the picker \
-itself, a hook writes the marker — do NOT render your own menu or call \
-`project_bind` on this path. If it returns `{\"skipped\": true}`, leave \
-the repo unmapped for now.\n\
-2. FALLBACK — when `project_pick` returns `{\"elicitation\": false}` \
-(this client can't render the picker): call `project_match`, present \
-the candidates via `AskUserQuestion` (one per candidate + a 'Disable \
-Converge for this repo' option; tell the user the built-in 'Type \
-something' is MANUAL MAPPING — an existing id links, a new name \
-creates), then `project_bind` with the pick, or `project_dismiss` \
-scope='repo' to disable.\n\n\
+1. Call `project_match` (no arguments — a hook fills in the context).\n\
+2. If the response carries an outcome (`project_id` or `disable: \
+true`), the server already asked the user and a hook writes the marker \
+— you are done; do NOT render your own menu.\n\
+3. If it carries `candidates`: present them via `AskUserQuestion` (one \
+per candidate + a 'Disable Converge for this repo' option; tell the \
+user the built-in 'Type something' is MANUAL MAPPING — an existing id \
+links, a new name creates), then `project_bind` with the pick, or \
+`project_dismiss` scope='repo' to disable.\n\n\
 Do NOT write `.converge` yourself — the hooks do it. Start with step 1 \
 right away.";
 
@@ -294,7 +292,7 @@ fn remote(cwd: &Path) -> Option<String> {
 
 // ─── PostToolUse: the local effect ──────────────────────────────────────────
 
-pub fn apply() -> Result<()> {
+pub fn mark() -> Result<()> {
     let payload = payload();
     let cwd = cwd_of(&payload);
     let root = marker::root(&cwd);

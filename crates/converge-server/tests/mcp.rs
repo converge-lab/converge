@@ -78,7 +78,6 @@ async fn tool_round_trip() {
             "project_dismiss",
             "project_list",
             "project_match",
-            "project_pick",
             "session_ensure",
         ]
     );
@@ -317,8 +316,4 @@ async fn mapping_round_trip() {
     assert_eq!(dismissed["disable"], true);
     let skipped = call(&app, "project_dismiss", json!({ "scope": "session" })).await;
     assert_eq!(skipped["disable"], false);
-
-    // Stateless transport: pick reports the fallback contract.
-    let pick = call(&app, "project_pick", json!({})).await;
-    assert_eq!(pick["elicitation"], false);
 }

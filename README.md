@@ -45,7 +45,7 @@ your terminal (never to logs, where collectors would keep it). Then:
   Agents get the full palette: decisions (`decision_add` with
   supersession + evidence anchors, `decision_get`, `decision_list`),
   evidence ingest (`session_ensure`, `message_add`), and project mapping
-  (`project_suggest`/`project_bind`/`project_dismiss`/`project_pick`).
+  (`project_match`/`project_bind`/`project_dismiss`).
 
 - **Claude Code integration** (`converge-cli`): one command wires it all —
 

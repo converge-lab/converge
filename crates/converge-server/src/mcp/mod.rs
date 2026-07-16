@@ -192,9 +192,6 @@ pub struct ProjectDismiss {
     pub scope: String,
 }
 
-#[derive(Deserialize, schemars::JsonSchema)]
-pub struct ProjectPick {}
-
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
     pub fn new(store: S, me: Identity) -> Self {
@@ -247,6 +244,9 @@ impl<S: Storage + 'static> Memory<S> {
         best candidate first (a client-side hook injects cwd + git remote). \
         Present the candidates to the user, then call `project_bind` with \
         their pick — or `project_dismiss` if they decline.")]
+    // When a transport with elicitation support exists, this tool renders
+    // the picker server-side and returns the outcome directly (the POC's
+    // pick flow) — a capability-adaptive behavior, not a separate tool.
     async fn project_match(
         &self,
         Parameters(req): Parameters<ProjectMatch>,
@@ -392,30 +392,6 @@ impl<S: Storage + 'static> Memory<S> {
                 None,
             )),
         }
-    }
-
-    #[tool(description = "Render the project picker server-side (MCP \
-        elicitation) and link the repo — prefer this over project_match \
-        when it works. If it answers {\"elicitation\": false}, this client \
-        can't render it: fall back to project_match + your own question \
-        UI.")]
-    async fn project_pick(
-        &self,
-        Parameters(_req): Parameters<ProjectPick>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        // Server-driven elicitation needs a client that declares the
-        // capability — and a transport that can deliver server-initiated
-        // requests. The stateless `/mcp` retains no peer info, so today
-        // the probe always answers `false` and the documented fallback
-        // (project_match + the client's own question UI) carries the
-        // flow. When a capable transport exists, the elicit branch (a
-        // closed select of project names via `peer.elicit`) lands here.
-        let _capable = context
-            .peer
-            .peer_info()
-            .is_some_and(|info| info.capabilities.elicitation.is_some());
-        json_result(&serde_json::json!({ "elicitation": false }))
     }
 
     #[tool(description = "Ensure the conversation you're working in exists as \

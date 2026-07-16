@@ -44,7 +44,7 @@ pub async fn run() -> Result<()> {
         println!(
             "\nno Claude Code found (no `claude` in PATH, no ~/.claude). \
              Install it, then re-run `converge init`; other agent tools: \
-             wire the four hook commands (`converge hook inject|ctx|apply|sync`) \
+             wire the four hook commands (`converge hook inject|ctx|mark|sync`) \
              and add the MCP server {}/mcp manually.",
             config.server
         );
@@ -152,8 +152,8 @@ fn wanted(exe: &str) -> [(&'static str, Option<&'static str>, String); 4] {
         ),
         (
             "PostToolUse",
-            Some("mcp__converge__(project_bind|project_pick|project_dismiss)"),
-            format!("{exe} hook apply"),
+            Some("mcp__converge__(project_bind|project_dismiss)"),
+            format!("{exe} hook mark"),
         ),
     ]
 }

@@ -346,11 +346,15 @@ fn effect(response: &Value, root: &Path) -> Effect {
 }
 
 /// MCP tool responses arrive as a content array (`[{type: "text", text:
-/// "<json>"}]`), a plain object, or a string — accept all three (the
-/// POC's leniency, ported).
+/// "<json>"}]`), that array wrapped in a result envelope (`{content:
+/// [...], isError}` — what Claude Code hands PostToolUse today), a plain
+/// object, or a string — accept all four (the POC's leniency, extended).
 fn tool_json(response: &Value) -> Value {
     let text = match response {
         Value::Array(items) => items.first().and_then(|i| i["text"].as_str()),
+        Value::Object(_) if response["content"].is_array() => {
+            response["content"][0]["text"].as_str()
+        }
         Value::Object(_) => {
             if response["text"].is_string() {
                 response["text"].as_str()
@@ -396,6 +400,15 @@ mod tests {
             marker::find(&root).unwrap(),
             State::Bound { project, .. } if project == id
         ));
+
+        // The result envelope Claude Code hands PostToolUse → same.
+        let response = tool_json(&json!({
+            "content": [
+                { "type": "text", "text": format!("{{\"project_id\":\"{id}\",\"name\":\"gw\"}}") }
+            ],
+            "isError": false,
+        }));
+        assert!(matches!(effect(&response, &root), Effect::Bound(n) if n == "gw"));
 
         // Dismiss repo → disabled (overwrites).
         let response = tool_json(&json!({ "dismissed": "repo", "disable": true }));

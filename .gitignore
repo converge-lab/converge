@@ -2,6 +2,3 @@
 
 # trunk build output (converge-web)
 dist/
-
-# Private LLM evaluation datasets
-crates/converge-expert/tests/fixtures/

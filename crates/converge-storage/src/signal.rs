@@ -16,7 +16,7 @@ use crate::ids::{DecisionId, SignalId};
 ///
 /// This axis is fixed because product behavior can route on it. The
 /// open-ended reason why the relationship exists is [`Signal::kind`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
     /// Worth knowing; no action is currently required.

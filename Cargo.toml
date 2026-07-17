@@ -106,6 +106,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 # Serialization
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

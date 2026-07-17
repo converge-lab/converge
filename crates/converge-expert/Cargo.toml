@@ -6,12 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[features]
-private-fixtures = []
-
 [dependencies]
 async-openai.workspace = true
 converge-storage.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

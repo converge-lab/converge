@@ -1,14 +1,19 @@
 [package]
-name = "converge-storage"
-description = "Domain storage trait (the Repository seam) for Converge."
+name = "converge-expert"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 
 [dependencies]
+async-openai.workspace = true
+converge-storage.workspace = true
 schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-ulid.workspace = true
 time.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

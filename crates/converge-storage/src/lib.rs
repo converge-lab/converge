@@ -29,6 +29,7 @@ pub mod ids;
 pub mod message;
 pub mod project;
 pub mod session;
+pub mod signal;
 pub mod token;
 pub mod user;
 
@@ -38,10 +39,13 @@ pub use decision::{
     NewDecision, Related, Source,
 };
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
-pub use ids::{AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, TokenId, UserId};
+pub use ids::{
+    AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, SignalId, TokenId, UserId,
+};
 pub use message::{Message, Messages, NewMessage};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
 pub use session::{NewSession, Session, SessionFilter, SessionKind, Sessions};
+pub use signal::{Risk, Signal, SignalCreate, SignalStatus};
 pub use token::{Minted, NewToken, Token, Tokens};
 pub use user::{AuthInfo, Identity, User, Users};
 

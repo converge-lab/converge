@@ -1,0 +1,11 @@
+# Named system-prompt variants of the comparison. Only prompts listed here
+# run; sibling .md files not referenced are dormant drafts (the three
+# wave-1 variants still carry the single-decision wording and need a batch
+# rewrite before they can join).
+#
+# baseline_v1 must stay byte-equal to converge_expert::signals::PROMPT —
+# a unit test enforces it.
+
+[[prompts]]
+name = "baseline_v1"
+file = "baseline_v1.md"

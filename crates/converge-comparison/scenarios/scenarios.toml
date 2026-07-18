@@ -1,0 +1,39 @@
+# Scored scenarios of the comparison. Each entry names a fixture (a
+# serialized signals::Request under fixtures/) and the exact set of signals
+# the model must return, matched by source, target set, and risk — anything
+# beyond it is a failure. An absent expected list means the correct answer
+# is silence.
+
+[[scenarios]]
+name = "find_signal"
+fixture = "one-signal.json"
+
+# The fixture's intended contradiction: the new decision (…203, cache full
+# SSE payloads) breaks the server's SSE contract (…104, ids and revisions
+# only). An intra-project signal against …205 (drafts outside the cache)
+# counts as noise: SSE payloads are server-confirmed data — exactly what
+# …205 allows into the cache.
+[[scenarios.expected]]
+source = "01J00000000000000000000203"
+targets = ["01J00000000000000000000104"]
+risk = "will_break"
+
+# The trigger (…207, webapp prefetch with the stored cursor) is explicitly
+# compatible with the opaque-cursor contract (…102) and sits right next to
+# dismissed signal 501 — a deliberate lure for noisy models.
+[[scenarios]]
+name = "stay_silent"
+fixture = "trap-no-signal.json"
+
+# The trigger (…208, keep unsaved drafts in the query cache) contradicts the
+# webapp's own decision …205 (drafts stay outside the query cache) — an
+# intra-project signal, valid by design: one of the two decisions should be
+# superseded. No cross-project decision is affected.
+[[scenarios]]
+name = "find_internal_signal"
+fixture = "internal-signal.json"
+
+[[scenarios.expected]]
+source = "01J00000000000000000000208"
+targets = ["01J00000000000000000000205"]
+risk = "will_break"

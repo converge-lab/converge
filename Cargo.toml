@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/converge-cli",
     "crates/converge-client",
+    "crates/converge-comparison",
     "crates/converge-expert",
     "crates/converge-server",
     "crates/converge-storage",
@@ -37,6 +38,7 @@ converge-storage-postgres = { path = "crates/converge-storage-postgres" }
 converge-server = { path = "crates/converge-server" }
 converge-ui = { path = "crates/converge-ui" }
 converge-client = { path = "crates/converge-client" }
+converge-expert = { path = "crates/converge-expert" }
 
 # Web UI (Leptos CSR → wasm)
 leptos = { version = "0.8", features = ["csr"] }
@@ -46,12 +48,11 @@ leptos = { version = "0.8", features = ["csr"] }
 reactive_stores = "0.4"
 markdown = "1"
 
+# Multi-provider LLM client (the expert's transport). Beta pinned exactly —
+# the 0.7 betas move fast and may break API between releases.
+genai = "=0.7.0-beta.13"
 # HTTP client — compiles native (rustls) and to wasm (browser fetch; the
 # TLS feature is target-gated away there).
-async-openai = { version = "0.41.1", default-features = false, features = [
-    "chat-completion",
-    "rustls",
-] }
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
@@ -59,6 +60,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 url = "2"
 
 # Async
+futures = "0.3"
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",
@@ -104,6 +106,9 @@ sqlx = { version = "0.8", default-features = false, features = [
     "time",
     "json",
 ] }
+
+# Terminal/markdown tables for the comparison scoreboard.
+tabled = "0.21"
 
 # Serialization
 schemars = "1"

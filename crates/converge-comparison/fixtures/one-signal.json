@@ -1,0 +1,863 @@
+{
+  "state": {
+    "group": {
+      "id": "01J00000000000000000000000",
+      "name": "Workboard",
+      "description": "The team building Workboard, a SaaS issue-tracking and project-management product.",
+      "kind": "shared",
+      "created_at": "2026-01-10T09:00:00Z"
+    },
+    "projects": [
+      {
+        "id": "01J00000000000000000000001",
+        "group_id": "01J00000000000000000000000",
+        "name": "server",
+        "description": "The Rust and Axum API, product domain, and background jobs for Workboard.",
+        "created_at": "2026-01-10T09:10:00Z"
+      },
+      {
+        "id": "01J00000000000000000000002",
+        "group_id": "01J00000000000000000000000",
+        "name": "web-app",
+        "description": "The React and TypeScript application used by Workboard customers.",
+        "created_at": "2026-01-10T09:20:00Z"
+      },
+      {
+        "id": "01J00000000000000000000003",
+        "group_id": "01J00000000000000000000000",
+        "name": "billing",
+        "description": "Subscriptions, plans, Stripe integration, and the internal billing console.",
+        "created_at": "2026-01-10T09:30:00Z"
+      },
+      {
+        "id": "01J00000000000000000000004",
+        "group_id": "01J00000000000000000000000",
+        "name": "website",
+        "description": "The public marketing site, documentation, and pricing pages for Workboard.",
+        "created_at": "2026-01-10T09:40:00Z"
+      }
+    ],
+    "decisions": [
+      {
+        "id": "01J00000000000000000000101",
+        "project_id": "01J00000000000000000000001",
+        "status": "superseded",
+        "title": "Index active issues with a composite partial index",
+        "summary": "Add `(workspace_id, project_id, updated_at DESC, id DESC) WHERE archived_at IS NULL` for the issue list.",
+        "context": "The primary board query selects non-archived issues for one project inside a workspace and sorts them by update time and id. In production, it takes about three seconds once the issues table contains a large number of rows. Separate indexes force PostgreSQL to combine results and sort a large result set.",
+        "consequences": "The active issue list can read in the required order directly from the index, but archiving and every issue update also update the index. Queries over archived issues require a different access path.",
+        "alternatives": [
+          {
+            "option": "Create separate indexes on workspace_id, project_id, and updated_at",
+            "why_rejected": "Separate indexes do not cover both the filter and ordering, so large projects still require an expensive sort."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-01T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [
+            "01J00000000000000000000107"
+          ],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000102",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Keep issue-list cursors opaque",
+        "summary": "Return `next_cursor` as a base64url-encoded, versioned pair of `updated_at` and `id` that clients must pass back unchanged.",
+        "context": "The issue list changes while it is being viewed: new issues appear and edits move existing issues between pages. Offset pagination skips or duplicates records when that happens.",
+        "consequences": "The server owns the cursor format and can evolve it through the embedded version. Clients cannot construct cursors themselves or jump directly to an arbitrary numbered page.",
+        "alternatives": [
+          {
+            "option": "Use limit and offset",
+            "why_rejected": "Offsets are unstable over a changing result set and become expensive on later pages."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-02T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000201",
+        "project_id": "01J00000000000000000000002",
+        "status": "accepted",
+        "title": "Pass next_cursor through without parsing it",
+        "summary": "Store the `next_cursor` string as the query cache `pageParam` and return it to the server without decoding or transforming it.",
+        "context": "The API declares its cursor opaque and may change the internal representation. The client needs sequential board loading and cached pages, but it does not need navigation by page number.",
+        "consequences": "Components do not depend on cursor internals, so a server-side format change does not require a web-app release. Users cannot jump directly to a distant page.",
+        "alternatives": [
+          {
+            "option": "Build the cursor from the last issue's updated_at and id",
+            "why_rejected": "That duplicates a server contract and breaks when the cursor gains a version or another sort field."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-03T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000301",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Deduplicate webhooks with a unique provider_event_id index",
+        "summary": "Store the Stripe event id in `provider_event.provider_event_id` and enforce its uniqueness in the database.",
+        "context": "Stripe retries delivery after timeouts and does not guarantee that a webhook arrives only once. An application-level existence check leaves a race between concurrent handlers.",
+        "consequences": "A duplicate delivery becomes a successful no-op, and the database remains the final guard against races. Manual retries operate on the existing event record instead of inserting another one.",
+        "alternatives": [
+          {
+            "option": "Query for the event id before inserting it",
+            "why_rejected": "Two processes can both observe no row and start processing the same event."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-04T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000103",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Check issue revisions through If-Match",
+        "summary": "Require `PATCH /issues/{id}` to carry the current revision in `If-Match` and update the row only when that revision matches.",
+        "context": "Several users can edit the same issue concurrently. Without a conditional update, a later request silently overwrites changes made by another user.",
+        "consequences": "Every mutation increments the revision, and a conflict returns `409` with the current revision. Clients must set `If-Match` and resolve conflicts explicitly instead of retrying automatically.",
+        "alternatives": [
+          {
+            "option": "Use last-write-wins updates",
+            "why_rejected": "They cause undetectable loss of user changes."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-05T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000202",
+        "project_id": "01J00000000000000000000002",
+        "status": "accepted",
+        "title": "Put the revision inside the PATCH body",
+        "summary": "Add a `revision` field to every issue-edit command and keep conditional HTTP headers out of the shared mutation wrapper.",
+        "context": "Mutations are retained as serializable objects for pending UI state and retry after a network error. The shared wrapper only stores the method, URL, and JSON body.",
+        "consequences": "All retry data lives in one object, but the API must read the revision from the request body. `If-Match` will not be set without a separate client change.",
+        "alternatives": [
+          {
+            "option": "Send the revision in If-Match",
+            "why_rejected": "That requires a special branch in the shared wrapper and separate persistence for pending-request headers."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-06T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000302",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Process webhooks only after persisting them to the inbox",
+        "summary": "Verify the signature, persist the original webhook in one short transaction, and respond to Stripe before a worker starts domain processing.",
+        "context": "Creating customers, updating subscriptions, and delivering entitlements can exceed Stripe's timeout. Synchronous processing causes retries and couples webhook availability to every downstream dependency.",
+        "consequences": "The endpoint acknowledges receipt quickly, and a worker can retry processing from the stored payload. Subscription changes become asynchronous, so the UI temporarily displays a pending state.",
+        "alternatives": [
+          {
+            "option": "Process the entire event before responding to Stripe",
+            "why_rejected": "A failure in any dependency increases response time and produces unnecessary webhook retries."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-07T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000104",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Send only resource ids and revisions over SSE",
+        "summary": "Publish events shaped as `{id, type, resource_id, revision}` and require clients to reload the current resource through REST.",
+        "context": "The full issue has different projections for different roles, while the resource schema changes more often than the event schema. A client can also miss several intermediate changes while disconnected.",
+        "consequences": "SSE remains a compact invalidation mechanism instead of becoming a second data API. Each event causes another REST request, but the resulting state uses the normal authorization and serializer.",
+        "alternatives": [
+          {
+            "option": "Include the full updated issue in every SSE event",
+            "why_rejected": "That duplicates the REST contract and complicates permission filtering and recovery from missed events."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-08T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000303",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Store monetary amounts as integer minor units",
+        "summary": "Store each price as an integer `amount_minor` together with its ISO currency code and never use floating-point numbers.",
+        "context": "Plans support multiple currencies, and binary floating-point values cannot represent fractional amounts for tax and discount calculations without rounding errors.",
+        "consequences": "Every calculation uses integers and the currency exponent. APIs must send the currency beside the amount, while presentation clients are responsible for formatting major units.",
+        "alternatives": [
+          {
+            "option": "Store decimal amounts in major units",
+            "why_rejected": "That complicates the Stripe contract and requires every client to agree on a scale for each currency."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-10T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000401",
+        "project_id": "01J00000000000000000000004",
+        "status": "superseded",
+        "title": "Require an explicit slug in content front matter",
+        "summary": "Require every documentation page, changelog entry, and article to declare a unique `slug` alongside its title and description.",
+        "context": "Content files can move between folders during editorial cleanup. An explicit slug keeps the published URL stable even when the repository path changes.",
+        "consequences": "Authors control URLs independently of file layout, but the build must detect duplicate slugs and every new document repeats its route in metadata.",
+        "alternatives": [
+          {
+            "option": "Derive the slug from the content file path",
+            "why_rejected": "Moving a file would silently change its public URL."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-11T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [
+            "01J00000000000000000000407"
+          ],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000105",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Upload attachments through temporary storage URLs",
+        "summary": "Create a pending attachment, issue a presigned PUT URL valid for 15 minutes, and activate the attachment through a separate confirmation command.",
+        "context": "Files up to 100 MB must not pass through Axum processes and occupy their connections and memory. The server still needs to authorize the user and associate the object with an issue.",
+        "consequences": "The browser sends bytes directly to object storage, after which the server verifies the object key and size. A worker deletes abandoned uploads, and storage CORS must allow the web-app origin.",
+        "alternatives": [
+          {
+            "option": "Accept multipart uploads through the server",
+            "why_rejected": "That increases API network and resource load and makes horizontal scaling more expensive."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-12T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000204",
+        "project_id": "01J00000000000000000000002",
+        "status": "accepted",
+        "title": "Upload attachments directly through the upload URL",
+        "summary": "After creating an attachment, PUT the file to the returned `upload_url` and then call the confirmation command with the attachment id.",
+        "context": "The API returns a temporary object-storage address and does not accept file contents. The UI needs upload progress, cancellation, and the ability to retry only the network transfer.",
+        "consequences": "Progress comes from the direct storage request, and the issue receives the attachment only after confirmation. The client must distinguish an expired URL from a failed final confirmation.",
+        "alternatives": [
+          {
+            "option": "Send the file as multipart data to the API",
+            "why_rejected": "That endpoint does not exist and would remove direct progress reporting for object-storage uploads."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-13T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000205",
+        "project_id": "01J00000000000000000000002",
+        "status": "accepted",
+        "title": "Keep issue drafts outside the query cache",
+        "summary": "Keep unsaved editor fields in local form state and reserve the query cache for the latest server-confirmed issue version.",
+        "context": "SSE and background refetches can update the server issue during editing. If the form writes directly into the query cache, a remote update either erases the draft or merges with unconfirmed data.",
+        "consequences": "The draft survives cache invalidation, and a conflict view can compare it with the new server version. The component must explicitly reset form state after a successful save.",
+        "alternatives": [
+          {
+            "option": "Edit the issue object directly in the query cache",
+            "why_rejected": "That mixes a local draft with authoritative state and makes refetching unsafe."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-14T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000402",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Build documentation search as a static index",
+        "summary": "Generate the search index from final HTML during the website build and load it in the browser only when search is opened.",
+        "context": "Public documentation changes only when the website deploys and contains no private data. A separate search service adds operations and network latency without a need for runtime indexing.",
+        "consequences": "Search works without a backend and always matches the published pages. The index contributes to the site-size budget, so it is split by section and loaded lazily.",
+        "alternatives": [
+          {
+            "option": "Send documentation queries to an external search service",
+            "why_rejected": "That adds a runtime dependency, extra cost, and disclosure of search queries to a third party."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-15T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000304",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Change seat quantity with membership delta events",
+        "summary": "Accept `member_added` and `member_removed` events with a member id and adjust the stored billable-seat count by one.",
+        "context": "Billing needs a history of why subscription quantity changed and wants each member addition or removal to update Stripe immediately.",
+        "consequences": "Each event is deduplicated by event id, but the result depends on a complete and ordered stream. Recovery from a missed event requires periodic reconciliation with the server.",
+        "alternatives": [
+          {
+            "option": "Accept an absolute seat count with a membership version",
+            "why_rejected": "An absolute snapshot does not preserve the event that caused the change and overwrites the local count."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-16T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000305",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Version entitlement snapshots per workspace",
+        "summary": "Assign every entitlement snapshot a monotonically increasing `version` within its workspace and always deliver the complete snapshot.",
+        "context": "Subscription, trial, and seat changes are handled by different jobs and can reach the server more than once or out of order.",
+        "consequences": "The server can atomically replace its state and ignore older versions without understanding Stripe. Version allocation must happen in the same transaction that persists the new snapshot.",
+        "alternatives": [
+          {
+            "option": "Send separate feature_enabled and limit_changed events",
+            "why_rejected": "Partial events are harder to order and can leave the server in a state that never existed in billing."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-17T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000106",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Publish the absolute billable-seat count",
+        "summary": "After a membership change, send billing `{workspace_id, membership_version, billable_seats}` with the complete current seat count.",
+        "context": "The outbox provides at-least-once delivery, and temporary failures can reorder retries. Addition and removal events are difficult to reconstruct after one is missed.",
+        "consequences": "Billing can safely reapply the latest version and ignore older ones. The server owns the definition of a billable role and must increment `membership_version` in the membership transaction.",
+        "alternatives": [
+          {
+            "option": "Send member_added and member_removed events",
+            "why_rejected": "Losing one delta event permanently shifts the seat count until a separate reconciliation."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-18T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000206",
+        "project_id": "01J00000000000000000000002",
+        "status": "accepted",
+        "title": "Generate the TypeScript client from OpenAPI in CI",
+        "summary": "Generate wire types and server API functions from a pinned OpenAPI artifact and fail CI when the generated result has an uncommitted diff.",
+        "context": "Handwritten TypeScript interfaces have already diverged on nullable fields and Rust API error variants. Developers need a visible contract diff before merging a change.",
+        "consequences": "An OpenAPI change requires client regeneration in the same pull request. The UI still wraps generated functions with its own query-key and error-handling layer.",
+        "alternatives": [
+          {
+            "option": "Maintain API types by hand",
+            "why_rejected": "The Rust and TypeScript compilers cannot detect drift between two independently written models."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-19T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000306",
+        "project_id": "01J00000000000000000000003",
+        "status": "accepted",
+        "title": "Publish catalog prices in minor units",
+        "summary": "Return the catalog version, plan code, billing interval, ISO currency, and integer `amount_minor` from `GET /public/v1/catalog`.",
+        "context": "The website must display the same active plans that billing uses to create checkout sessions. The catalog contains no customer data and can be cached publicly.",
+        "consequences": "Consumers format amounts according to currency and use stable plan codes instead of provider price ids. A price change increments the catalog version and requires a refreshed website projection.",
+        "alternatives": [
+          {
+            "option": "Return fully localized price strings",
+            "why_rejected": "Billing would have to own language, formatting, and marketing presentation for every consumer."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-20T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000403",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Store displayed plan prices in MDX",
+        "summary": "Write each plan price as a decimal string in the pricing page front matter and do not fetch the billing catalog during the build.",
+        "context": "Marketing needs to change card order, labels, and crossed-out prices in one pull request with a preview that does not depend on a billing environment.",
+        "consequences": "The website fully controls presentation and builds independently, but every price change requires a separate MDX update. The displayed amount can temporarily differ from the amount used by checkout.",
+        "alternatives": [
+          {
+            "option": "Fetch prices from billing's public catalog during the build",
+            "why_rejected": "That makes preview and production builds depend on an external endpoint's availability and schema."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-21T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000404",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Pass only the plan code and interval to signup",
+        "summary": "Build signup links with `plan` and `interval` parameters and omit the displayed price, currency, and provider price id.",
+        "context": "A link is user input and can become stale or be modified manually. Checkout must select the actual price from billing's current catalog.",
+        "consequences": "The website can display any localized string without turning it into trusted payment data. The web app must validate known codes and pass the intent through the server.",
+        "alternatives": [
+          {
+            "option": "Pass the amount and currency in query parameters",
+            "why_rejected": "A user can edit those parameters, and an old link can carry a price that no longer exists."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-22T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000405",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Limit pricing-page JavaScript to one island",
+        "summary": "Hydrate only the monthly-versus-annual price switch while keeping plan cards, links, and SEO content as static HTML.",
+        "context": "The pricing page must render quickly from the CDN and remain indexable without JavaScript. Only the billing-interval selector needs client-side interactivity.",
+        "consequences": "The page remains usable with JavaScript disabled, and the client bundle has a small fixed size. Both sets of prices must be present in the generated HTML.",
+        "alternatives": [
+          {
+            "option": "Hydrate the entire page as a React application",
+            "why_rejected": "That increases bundle size and interaction time without adding a product capability."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-23T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000406",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Allow only known parameters in signup links",
+        "summary": "Forward only `plan`, `interval`, and an allowlist of UTM parameters to `app.workboard.com/signup`, dropping every other parameter from the current URL.",
+        "context": "Marketing pages receive query parameters from advertisements and external sites. Blind copying can send sensitive data or unexpected commands into the application.",
+        "consequences": "Signup links have a predictable contract, and every new attribution parameter requires an explicit allowlist change. Unknown parameters are silently discarded.",
+        "alternatives": [
+          {
+            "option": "Copy the entire query string into the application link",
+            "why_rejected": "The website does not control external URLs and could forward unwanted or conflicting parameters."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-24T10:00:00Z",
+        "edges": {
+          "supersedes": [],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000107",
+        "project_id": "01J00000000000000000000001",
+        "status": "accepted",
+        "title": "Replace the issue-list index with a covering board index",
+        "summary": "Drop the update-time index and add `(workspace_id, project_id, status_id, rank, id) INCLUDE (title, assignee_id, revision) WHERE archived_at IS NULL`.",
+        "context": "The board now orders issues by status and rank rather than update time. Production query plans show heap reads for every card because the old index neither follows the new order nor covers the fields used by board cards.",
+        "consequences": "The board can use an index-only scan in column order, while the old update-time list loses its specialized index. The migration must create the new index concurrently before dropping the old one.",
+        "alternatives": [
+          {
+            "option": "Keep both the old and new indexes",
+            "why_rejected": "The old query is no longer user-facing, and retaining both indexes adds write amplification and storage cost."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-25T10:00:00Z",
+        "edges": {
+          "supersedes": [
+            "01J00000000000000000000101"
+          ],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      },
+      {
+        "id": "01J00000000000000000000407",
+        "project_id": "01J00000000000000000000004",
+        "status": "accepted",
+        "title": "Derive content slugs from file paths",
+        "summary": "Derive each documentation and article slug from its path relative to the content root and remove the required `slug` front-matter field.",
+        "context": "The content directory now mirrors the public navigation hierarchy. Editors repeatedly update both a file path and an identical slug, and the two values have started to drift.",
+        "consequences": "The repository structure becomes the single route source, but moving a published file changes its URL and therefore requires an explicit redirect entry in the same pull request.",
+        "alternatives": [
+          {
+            "option": "Keep explicit stable slugs in front matter",
+            "why_rejected": "The duplicate route metadata has caused mismatches and adds work to every content move."
+          }
+        ],
+        "authors": [
+          {
+            "user": "01J00000000000000000000005"
+          }
+        ],
+        "evidence": [],
+        "captured_at": "2026-02-26T10:00:00Z",
+        "edges": {
+          "supersedes": [
+            "01J00000000000000000000401"
+          ],
+          "superseded_by": [],
+          "related_to": [],
+          "related_by": []
+        }
+      }
+    ],
+    "signals": [
+      {
+        "id": "01J00000000000000000000501",
+        "source": "01J00000000000000000000201",
+        "targets": [
+          "01J00000000000000000000102"
+        ],
+        "risk": "watch",
+        "kind": "contract_dependency",
+        "status": "dismissed",
+        "title": "Opaque cursor contract dependency",
+        "text": "The web app relies on the server preserving the opaque next_cursor contract.",
+        "consequence": "An incompatible cursor change would stop issue-list pagination.",
+        "recommendation": "Keep passing the cursor through unchanged and cover the contract with an integration test.",
+        "produced_by": {
+          "agent": "01J00000000000000000000006"
+        },
+        "validated_by": null,
+        "created_at": "2026-02-03T12:00:00Z"
+      },
+      {
+        "id": "01J00000000000000000000502",
+        "source": "01J00000000000000000000202",
+        "targets": [
+          "01J00000000000000000000103"
+        ],
+        "risk": "will_break",
+        "kind": "request_contract_mismatch",
+        "status": "validated",
+        "title": "Revision transport does not match",
+        "text": "The web app puts revision in the JSON body while the server requires it in If-Match.",
+        "consequence": "Issue-edit requests will be rejected or arrive without the concurrency precondition expected by the server.",
+        "recommendation": "Teach the mutation wrapper to persist and send If-Match with every issue edit.",
+        "produced_by": {
+          "agent": "01J00000000000000000000006"
+        },
+        "validated_by": {
+          "user": "01J00000000000000000000005"
+        },
+        "created_at": "2026-02-06T12:00:00Z"
+      },
+      {
+        "id": "01J00000000000000000000503",
+        "source": "01J00000000000000000000403",
+        "targets": [
+          "01J00000000000000000000306"
+        ],
+        "risk": "coordinate",
+        "kind": "pricing_source_divergence",
+        "status": "proposed",
+        "title": "Displayed prices can drift",
+        "text": "The website stores plan prices independently instead of consuming billing's versioned public catalog.",
+        "consequence": "Customers can see a price that differs from the amount selected when checkout starts.",
+        "recommendation": "Generate price values from the billing catalog while keeping marketing copy in MDX.",
+        "produced_by": {
+          "agent": "01J00000000000000000000006"
+        },
+        "validated_by": null,
+        "created_at": "2026-02-21T12:00:00Z"
+      },
+      {
+        "id": "01J00000000000000000000504",
+        "source": "01J00000000000000000000106",
+        "targets": [
+          "01J00000000000000000000304"
+        ],
+        "risk": "will_break",
+        "kind": "seat_sync_contract_mismatch",
+        "status": "validated",
+        "title": "Seat synchronization formats do not match",
+        "text": "The server publishes an absolute versioned seat count while billing accepts only member-added and member-removed deltas.",
+        "consequence": "Billing cannot consume the server event, so subscription seat quantity will stop following workspace membership.",
+        "recommendation": "Change billing to consume versioned absolute seat-count snapshots and ignore snapshots older than its stored membership version.",
+        "produced_by": {
+          "agent": "01J00000000000000000000006"
+        },
+        "validated_by": {
+          "user": "01J00000000000000000000005"
+        },
+        "created_at": "2026-02-18T12:00:00Z"
+      }
+    ]
+  },
+  "decisions": [
+    {
+      "id": "01J00000000000000000000203",
+      "project_id": "01J00000000000000000000002",
+      "status": "accepted",
+      "title": "Update the query cache with full SSE payloads",
+      "summary": "Assume that `issue.updated` contains a `data` field with the complete issue and replace the query-cache record without another GET.",
+      "context": "Dragging cards produces many events, and an additional request after every event adds visible board latency. Updating the cache directly from an event gives immediate feedback.",
+      "consequences": "The client depends on complete, compatible SSE payloads and applies only events with a greater revision. An event without `data` can announce a change but cannot update the UI.",
+      "alternatives": [
+        {
+          "option": "Invalidate the query and reload the issue through REST",
+          "why_rejected": "That adds a network request for every external change and slows bulk card movement."
+        }
+      ],
+      "authors": [
+        {
+          "user": "01J00000000000000000000005"
+        }
+      ],
+      "evidence": [],
+      "captured_at": "2026-02-09T10:00:00Z",
+      "edges": {
+        "supersedes": [],
+        "superseded_by": [],
+        "related_to": [],
+        "related_by": []
+      }
+    }
+  ]
+}

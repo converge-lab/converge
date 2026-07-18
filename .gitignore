@@ -2,3 +2,6 @@
 
 # trunk build output (converge-web)
 dist/
+
+# Comparison run outputs (jsonl/summaries) — data, not source.
+/crates/converge-comparison/results/

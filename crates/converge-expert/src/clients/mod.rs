@@ -1,3 +1,3 @@
-//! Clients for supported LLM provider protocols.
+//! Provider transports the expert runs on.
 
-pub mod completions;
+pub mod genai;

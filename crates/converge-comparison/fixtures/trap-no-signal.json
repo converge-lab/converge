@@ -830,32 +830,29 @@
       }
     ]
   },
-  "decision": {
-    "id": "01J00000000000000000000203",
-    "project_id": "01J00000000000000000000002",
-    "status": "accepted",
-    "title": "Update the query cache with full SSE payloads",
-    "summary": "Assume that `issue.updated` contains a `data` field with the complete issue and replace the query-cache record without another GET.",
-    "context": "Dragging cards produces many events, and an additional request after every event adds visible board latency. Updating the cache directly from an event gives immediate feedback.",
-    "consequences": "The client depends on complete, compatible SSE payloads and applies only events with a greater revision. An event without `data` can announce a change but cannot update the UI.",
-    "alternatives": [
-      {
-        "option": "Invalidate the query and reload the issue through REST",
-        "why_rejected": "That adds a network request for every external change and slows bulk card movement."
+  "decisions": [
+    {
+      "id": "01J00000000000000000000207",
+      "project_id": "01J00000000000000000000002",
+      "status": "accepted",
+      "title": "Prefetch the next issue page with the stored cursor",
+      "summary": "Request the following issue page in the background using the stored `next_cursor` value exactly as returned by the server, without decoding or altering it.",
+      "context": "Scrolling through long issue lists shows a visible loading pause at every page boundary.",
+      "consequences": "The next page is usually cached before the user reaches it, and the cursor contract stays untouched.",
+      "alternatives": [],
+      "authors": [
+        {
+          "user": "01J00000000000000000000005"
+        }
+      ],
+      "evidence": [],
+      "captured_at": "2026-03-02T10:00:00Z",
+      "edges": {
+        "supersedes": [],
+        "superseded_by": [],
+        "related_to": [],
+        "related_by": []
       }
-    ],
-    "authors": [
-      {
-        "user": "01J00000000000000000000005"
-      }
-    ],
-    "evidence": [],
-    "captured_at": "2026-02-09T10:00:00Z",
-    "edges": {
-      "supersedes": [],
-      "superseded_by": [],
-      "related_to": [],
-      "related_by": []
     }
-  }
+  ]
 }

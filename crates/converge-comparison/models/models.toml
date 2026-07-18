@@ -1,0 +1,92 @@
+# --- open weight, fits in 32 GB locally (hosted for wave 1) ---
+
+[[models]]
+label = "qwen3.5-9b"
+id = "qwen/qwen3.5-9b"
+tier = "local32"
+
+[[models]]
+label = "gpt-oss-20b"
+id = "openai/gpt-oss-20b"
+tier = "local32"
+
+[[models]]
+label = "qwen3.5-27b"
+id = "qwen/qwen3.5-27b"
+tier = "local32"
+
+# --- open weight, fits in 64 GB locally ---
+
+[[models]]
+label = "llama-3.3-70b"
+id = "meta-llama/llama-3.3-70b-instruct"
+tier = "local64"
+
+[[models]]
+label = "qwen3-next-80b-thinking"
+id = "qwen/qwen3-next-80b-a3b-thinking"
+tier = "local64"
+
+# --- closed, cheap ---
+
+[[models]]
+label = "qwen3.5-flash"
+id = "qwen/qwen3.5-flash-02-23"
+tier = "cheap"
+# With default reasoning Alibaba burns ~8.7k tokens and dies with "Model
+# output became abnormal" against the strict schema (smoke 2026-07-17).
+reasoning = "off"
+
+[[models]]
+label = "gemini-3.1-flash-lite"
+id = "google/gemini-3.1-flash-lite"
+tier = "cheap"
+
+[[models]]
+label = "claude-haiku-4.5"
+id = "anthropic/claude-haiku-4.5"
+tier = "cheap"
+
+[[models]]
+label = "gpt-5.6-luna"
+id = "openai/gpt-5.6-luna"
+tier = "cheap"
+# gpt-5.6 endpoints don't accept temperature; sending it fails provider
+# routing under require_parameters (catalog check 2026-07-17).
+omit_params = ["temperature"]
+
+# --- closed, production-grade ---
+
+[[models]]
+label = "gemini-3.1-pro"
+id = "google/gemini-3.1-pro-preview"
+tier = "production"
+
+[[models]]
+label = "gpt-5.6-terra"
+id = "openai/gpt-5.6-terra"
+tier = "production"
+omit_params = ["temperature"]
+
+[[models]]
+label = "claude-sonnet-4.6"
+id = "anthropic/claude-sonnet-4.6"
+tier = "production"
+
+# --- frontier ---
+
+[[models]]
+label = "grok-4.5"
+id = "x-ai/grok-4.5"
+tier = "frontier"
+
+[[models]]
+label = "claude-opus-4.6"
+id = "anthropic/claude-opus-4.6"
+tier = "frontier"
+
+[[models]]
+label = "gpt-5.6-sol-pro"
+id = "openai/gpt-5.6-sol-pro"
+tier = "frontier"
+omit_params = ["temperature"]

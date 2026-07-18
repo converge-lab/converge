@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/converge-cli",
     "crates/converge-client",
+    "crates/converge-expert",
     "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
@@ -18,6 +19,7 @@ members = [
 default-members = [
     "crates/converge-cli",
     "crates/converge-client",
+    "crates/converge-expert",
     "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",
@@ -31,6 +33,7 @@ rust-version = "1.88"
 repository = "https://github.com/converge-lab/converge"
 
 [workspace.dependencies]
+converge-expert = { path = "crates/converge-expert" }
 converge-storage = { path = "crates/converge-storage" }
 converge-storage-postgres = { path = "crates/converge-storage-postgres" }
 converge-server = { path = "crates/converge-server" }
@@ -52,6 +55,10 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 url = "2"
+# Multi-provider model client (Anthropic / OpenAI-compat / ollama, one API):
+# the wire layer under converge-expert — the expert layer keeps its own
+# routing and policy, genai keeps the per-provider protocol churn.
+genai = "0.6"
 
 # Async
 tokio = { version = "1", features = [

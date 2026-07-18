@@ -71,6 +71,11 @@ pub struct Config {
     /// Authentication (`[auth]` table).
     #[serde(default)]
     pub auth: Auth,
+    /// The expert-model layer (`[expert]` table): named model endpoints
+    /// (`[expert.models.<name>]`) and per-job bindings (`[expert.jobs]`).
+    /// Absent → every expert job is disabled and no model is ever called.
+    #[serde(default)]
+    pub expert: converge_expert::Config,
     /// The config files that existed and merged, weakest first — provenance
     /// for the startup log, not a setting.
     #[serde(skip)]

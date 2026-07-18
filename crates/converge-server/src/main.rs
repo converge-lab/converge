@@ -36,6 +36,19 @@ enum Cmd {
     /// Administer bearer tokens (host trust; secrets print to stdout).
     #[command(subcommand)]
     Token(TokenCmd),
+    /// The expert-model layer (`[expert]` config).
+    #[command(subcommand)]
+    Expert(ExpertCmd),
+}
+
+#[derive(Subcommand)]
+enum ExpertCmd {
+    /// Send a canned prompt through each configured job's model and
+    /// report the reply and latency. No database needed.
+    Check {
+        /// Check this job only.
+        job: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -83,6 +96,10 @@ async fn main() -> anyhow::Result<()> {
         name: config.user.name.clone(),
     };
 
+    if let Some(Cmd::Expert(ExpertCmd::Check { job })) = &cli.command {
+        return check(&config.expert, job.as_deref()).await;
+    }
+
     if let Some(Cmd::Token(cmd)) = cli.command {
         let store = PgStorage::connect(&config.database_url).await?;
         store.migrate().await?;
@@ -91,6 +108,15 @@ async fn main() -> anyhow::Result<()> {
 
     let _guard = telemetry::init(&config.log)?;
     info!(sources = ?config.sources, "configuration layers (weakest first, env on top)");
+
+    // Build the expert registry even though nothing consumes it yet: a
+    // bad binding or key command must fail the boot, not the first
+    // signal. The signal pipeline picks it up when it lands.
+    let expert = converge_expert::Registry::new(&config.expert)
+        .context("build the expert registry ([expert] config)")?;
+    for (job, client) in expert.jobs() {
+        info!(job, model = client.describe(), "expert job configured");
+    }
 
     let store = PgStorage::connect(&config.database_url).await?;
     store.migrate().await?;
@@ -127,6 +153,60 @@ async fn main() -> anyhow::Result<()> {
     .with_graceful_shutdown(shutdown())
     .await?;
     info!("shut down cleanly");
+    Ok(())
+}
+
+/// `expert check`: exercise each configured job's model with a canned
+/// prompt — config validation, connectivity, and credentials in one
+/// command. Replies print to stdout; exits nonzero if any job fails.
+async fn check(config: &converge_expert::Config, only: Option<&str>) -> anyhow::Result<()> {
+    let registry = converge_expert::Registry::new(config)
+        .context("build the expert registry ([expert] config)")?;
+    if registry.is_empty() {
+        println!("no expert jobs configured ([expert.jobs] is empty) — nothing to check");
+        return Ok(());
+    }
+    if let Some(job) = only
+        && registry.job(job).is_none()
+    {
+        let jobs: Vec<_> = registry.jobs().map(|(name, _)| name).collect();
+        anyhow::bail!(
+            "job \"{job}\" is not configured (configured: {})",
+            jobs.join(", ")
+        );
+    }
+
+    let mut failed = false;
+    for (job, client) in registry.jobs() {
+        if only.is_some_and(|o| o != job) {
+            continue;
+        }
+        let start = std::time::Instant::now();
+        match client
+            .reply(
+                "You are the health check for converge's expert layer. \
+                 Reply with the single word: ok",
+                "healthcheck",
+            )
+            .await
+        {
+            Ok(reply) => {
+                let reply = reply.lines().next().unwrap_or_default();
+                println!(
+                    "{job}: ok — {} answered {reply:?} in {:.1?}",
+                    client.describe(),
+                    start.elapsed()
+                );
+            }
+            Err(error) => {
+                failed = true;
+                println!("{job}: FAILED — {}: {error}", client.describe());
+            }
+        }
+    }
+    if failed {
+        anyhow::bail!("expert check failed");
+    }
     Ok(())
 }
 

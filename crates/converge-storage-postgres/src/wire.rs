@@ -3,8 +3,8 @@
 //! The domain crate stays sqlx-free; the Postgres type names live only here.
 
 use converge_storage::{
-    Agent, Alternative, Author, Decision, Group, Message, Project, ProjectId, Session, StoreError,
-    Token, User,
+    Agent, Alternative, Author, Decision, Group, Message, Project, ProjectId, Session, Signal,
+    StoreError, Token, User,
 };
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -315,6 +315,115 @@ impl From<ProjectRow> for Project {
             description: r.description,
             created_at: r.created_at,
         }
+    }
+}
+
+/// The `signal_tier` Postgres enum.
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "signal_tier", rename_all = "lowercase")]
+pub(crate) enum Tier {
+    Watch,
+    Coordinate,
+    Conflict,
+}
+
+impl From<converge_storage::Tier> for Tier {
+    fn from(t: converge_storage::Tier) -> Self {
+        use converge_storage::Tier as D;
+        match t {
+            D::Watch => Self::Watch,
+            D::Coordinate => Self::Coordinate,
+            D::Conflict => Self::Conflict,
+        }
+    }
+}
+
+impl From<Tier> for converge_storage::Tier {
+    fn from(t: Tier) -> Self {
+        use Tier as P;
+        match t {
+            P::Watch => Self::Watch,
+            P::Coordinate => Self::Coordinate,
+            P::Conflict => Self::Conflict,
+        }
+    }
+}
+
+/// The `signal_status` Postgres enum.
+#[derive(Debug, Clone, Copy, sqlx::Type)]
+#[sqlx(type_name = "signal_status", rename_all = "lowercase")]
+pub(crate) enum SignalStatus {
+    Proposed,
+    Confirmed,
+    Dismissed,
+}
+
+impl From<converge_storage::SignalStatus> for SignalStatus {
+    fn from(s: converge_storage::SignalStatus) -> Self {
+        use converge_storage::SignalStatus as D;
+        match s {
+            D::Proposed => Self::Proposed,
+            D::Confirmed => Self::Confirmed,
+            D::Dismissed => Self::Dismissed,
+        }
+    }
+}
+
+impl From<SignalStatus> for converge_storage::SignalStatus {
+    fn from(s: SignalStatus) -> Self {
+        use SignalStatus as P;
+        match s {
+            P::Proposed => Self::Proposed,
+            P::Confirmed => Self::Confirmed,
+            P::Dismissed => Self::Dismissed,
+        }
+    }
+}
+
+/// One `signals` row, as fetched (the target set is attached by the
+/// caller from `signal_targets`).
+pub(crate) struct SignalRow {
+    pub id: Uuid,
+    pub source: Uuid,
+    pub kind: String,
+    pub tier: Tier,
+    pub status: SignalStatus,
+    pub title: String,
+    pub text: String,
+    pub consequence: Option<String>,
+    pub recommendation: Option<String>,
+    pub produced_user: Option<Uuid>,
+    pub produced_agent: Option<Uuid>,
+    pub resolved_user: Option<Uuid>,
+    pub resolved_agent: Option<Uuid>,
+    pub captured_at: OffsetDateTime,
+}
+
+impl TryFrom<SignalRow> for Signal {
+    type Error = StoreError;
+
+    fn try_from(r: SignalRow) -> Result<Self, StoreError> {
+        // Resolver: both-null means unresolved; anything else is an
+        // author pair like decision_author.
+        let resolved_by = match (r.resolved_user, r.resolved_agent) {
+            (None, None) => None,
+            (user, agent) => Some(author(user, agent)?),
+        };
+        Ok(Signal {
+            id: id(r.id),
+            source: id(r.source),
+            targets: Vec::new(), // attached by the caller
+            kind: r.kind,
+            tier: r.tier.into(),
+            status: r.status.into(),
+            title: r.title,
+            text: r.text,
+            consequence: r.consequence,
+            recommendation: r.recommendation,
+            produced_by: author(r.produced_user, r.produced_agent)?,
+            resolved_by,
+            captured_at: r.captured_at,
+        })
     }
 }
 

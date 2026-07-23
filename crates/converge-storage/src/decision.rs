@@ -129,6 +129,13 @@ pub struct Related {
 }
 
 /// The direct graph edges of one decision, both directions.
+///
+/// Signal pairs are edges of the same graph (see [`crate::signal`]) but
+/// deliberately NOT projected here: every current consumer of a
+/// decision's signals wants the full records (`/decisions/{id}/signals`),
+/// and a compact ref here would serve only a whole-graph reader that
+/// doesn't exist yet. Extending this projection is additive when one
+/// does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edges {
     /// Decisions this one replaced.

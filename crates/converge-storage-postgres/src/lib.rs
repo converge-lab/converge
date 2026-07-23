@@ -14,9 +14,9 @@ use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
     DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, Message,
     MessageId, Messages, NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession,
-    Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Session,
-    SessionFilter, SessionId, Sessions, Source, StoreError, Token, TokenId, Tokens, User, UserId,
-    Users,
+    NewSignal, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Projects, Related,
+    Session, SessionFilter, SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus,
+    Signals, Source, StoreError, Token, TokenId, Tokens, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -24,6 +24,8 @@ use wire::AgentKind as PgAgentKind;
 use wire::DecisionStatus as PgStatus;
 use wire::GroupKind as PgGroupKind;
 use wire::SessionKind as PgSessionKind;
+use wire::SignalStatus as PgSignalStatus;
+use wire::Tier as PgTier;
 
 /// Superseded is derived from inbound edges — storing it is a caller error.
 const SUPERSEDED_IS_DERIVED: &str =
@@ -967,6 +969,226 @@ impl Decisions for PgStorage {
             related_to,
             related_by,
         }))
+    }
+}
+
+impl PgStorage {
+    /// Target sets for a batch of signals — one query, grouped.
+    async fn targets(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<DecisionId>>, StoreError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "select signal_id, target from signal_targets
+             where signal_id = any($1)
+             order by target",
+            ids,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut targets: HashMap<Uuid, Vec<DecisionId>> = HashMap::new();
+        for row in rows {
+            targets
+                .entry(row.signal_id)
+                .or_default()
+                .push(wire::id(row.target));
+        }
+        Ok(targets)
+    }
+}
+
+impl Signals for PgStorage {
+    async fn signal_add(&self, new: NewSignal) -> Result<SignalId, StoreError> {
+        let kind = new.kind.trim();
+        if kind.is_empty() {
+            return Err(StoreError::Invalid("kind must not be empty".into()));
+        }
+        let source = Uuid::from(new.source.ulid());
+        let mut targets: Vec<Uuid> = new.targets.iter().map(|t| Uuid::from(t.ulid())).collect();
+        targets.sort();
+        targets.dedup();
+        if targets.is_empty() {
+            return Err(StoreError::Invalid(
+                "at least one target is required".into(),
+            ));
+        }
+        if targets.contains(&source) {
+            return Err(StoreError::Invalid(
+                "a signal cannot target its own source".into(),
+            ));
+        }
+        let (produced_user, produced_agent) = wire::split(&new.produced_by);
+        let id = SignalId::new();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // The (source, target, kind) uniqueness spans two tables, so it is
+        // enforced here, not by a constraint: serialize concurrent adds on
+        // the same (source, kind) with an advisory lock, then guard.
+        sqlx::query!(
+            "select pg_advisory_xact_lock(hashtextextended($1::text || $2, 0))",
+            source.to_string(),
+            kind,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let raised = sqlx::query_scalar!(
+            r#"select exists (
+                   select 1 from signals s
+                   join signal_targets t on t.signal_id = s.id
+                   where s.source = $1 and s.kind = $2 and t.target = any($3)
+               ) as "raised!""#,
+            source,
+            kind,
+            &targets[..],
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        if raised {
+            return Err(StoreError::Conflict(format!(
+                "a `{kind}` signal from this source already covers a requested target \
+                 (possibly dismissed — dismissed observations are not re-raised)"
+            )));
+        }
+        sqlx::query!(
+            r#"insert into signals
+                   (id, source, kind, tier, title, text, consequence, recommendation,
+                    produced_user, produced_agent)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            Uuid::from(id.ulid()),
+            source,
+            kind,
+            PgTier::from(new.tier) as PgTier,
+            new.title,
+            new.text,
+            new.consequence,
+            new.recommendation,
+            produced_user,
+            produced_agent,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query!(
+            r#"insert into signal_targets (signal_id, target)
+               select $1, unnest($2::uuid[])"#,
+            Uuid::from(id.ulid()),
+            &targets[..],
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(id)
+    }
+
+    async fn signal_get(&self, id: SignalId) -> Result<Option<Signal>, StoreError> {
+        let row = sqlx::query_as!(
+            wire::SignalRow,
+            r#"select id, source, kind, tier as "tier: _", status as "status: _",
+                      title, text, consequence, recommendation,
+                      produced_user, produced_agent, resolved_user, resolved_agent,
+                      captured_at
+               from signals where id = $1"#,
+            Uuid::from(id.ulid()),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let Some(row) = row else { return Ok(None) };
+        let uuid = row.id;
+        let mut signal = Signal::try_from(row)?;
+        signal.targets = self
+            .targets(&[uuid])
+            .await?
+            .remove(&uuid)
+            .unwrap_or_default();
+        Ok(Some(signal))
+    }
+
+    async fn signal_list(
+        &self,
+        filter: SignalFilter,
+        page: Pagination<SignalId>,
+    ) -> Result<Vec<Signal>, StoreError> {
+        let status = filter.status.map(PgSignalStatus::from);
+        let tier = filter.tier.map(PgTier::from);
+        // Project and decision filters match either end: the source
+        // decision's project, or any target's.
+        let mut signals = sqlx::query_as!(
+            wire::SignalRow,
+            r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
+                      s.title, s.text, s.consequence, s.recommendation,
+                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,
+                      s.captured_at
+               from signals s
+               where ($1::uuid is null
+                      or exists (select 1 from decisions d
+                                 where d.id = s.source and d.project_id = $1)
+                      or exists (select 1 from signal_targets t
+                                 join decisions d on d.id = t.target
+                                 where t.signal_id = s.id and d.project_id = $1))
+                 and ($2::uuid is null
+                      or s.source = $2
+                      or exists (select 1 from signal_targets t
+                                 where t.signal_id = s.id and t.target = $2))
+                 and ($3::signal_status is null or s.status = $3)
+                 and ($4::signal_tier is null or s.tier = $4)
+                 and ($6::uuid is null or s.id < $6)
+               order by s.id desc
+               limit $5"#,
+            filter.project.map(|p| Uuid::from(p.ulid())),
+            filter.decision.map(|d| Uuid::from(d.ulid())),
+            status as Option<PgSignalStatus>,
+            tier as Option<PgTier>,
+            page.limit.map(i64::from),
+            page.cursor.map(|c| Uuid::from(c.ulid())),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Signal::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        let ids: Vec<Uuid> = signals.iter().map(|s| Uuid::from(s.id.ulid())).collect();
+        let mut targets = self.targets(&ids).await?;
+        for signal in &mut signals {
+            signal.targets = targets
+                .remove(&Uuid::from(signal.id.ulid()))
+                .unwrap_or_default();
+        }
+        Ok(signals)
+    }
+
+    async fn signal_resolve(
+        &self,
+        id: SignalId,
+        status: SignalStatus,
+        by: Author,
+    ) -> Result<(), StoreError> {
+        if status == SignalStatus::Proposed {
+            return Err(StoreError::Invalid(
+                "`proposed` is not a resolution — confirm or dismiss".into(),
+            ));
+        }
+        let (user, agent) = wire::split(&by);
+        let result = sqlx::query!(
+            r#"update signals
+               set status = $2, resolved_user = $3, resolved_agent = $4
+               where id = $1"#,
+            Uuid::from(id.ulid()),
+            PgSignalStatus::from(status) as PgSignalStatus,
+            user,
+            agent,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
     }
 }
 

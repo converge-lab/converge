@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into signal_targets (signal_id, target)\n               select $1, unnest($2::uuid[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac2e4c31707f0c4b7cb4c0176d64aac103b2bab0db54777fbe774f2135b775ad"
+}

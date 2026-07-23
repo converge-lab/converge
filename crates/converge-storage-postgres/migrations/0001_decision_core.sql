@@ -144,3 +144,43 @@ create table evidence (
     primary key (decision_id, message_id)
 );
 create index on evidence (message_id);
+
+-- ─── Signals: typed decision → decisions observations ──────────────────────
+
+create type signal_tier   as enum ('watch', 'coordinate', 'conflict');
+create type signal_status as enum ('proposed', 'confirmed', 'dismissed');
+
+-- One observation: a source decision bearing on a target set, with a
+-- response tier (the routing key) and one narrative + lifecycle. Producer
+-- and resolver are (user?, agent?) pairs like decision_author; the
+-- resolver pair is set exactly when status leaves 'proposed'.
+create table signals (
+    id             uuid primary key,
+    source         uuid not null references decisions(id) on delete cascade,
+    kind           text not null,                              -- open label: 'dependency', …
+    tier           signal_tier not null,
+    status         signal_status not null default 'proposed',
+    title          text not null,
+    text           text not null,
+    consequence    text,
+    recommendation text,
+    produced_user  uuid references users(id),
+    produced_agent uuid references agents(id),
+    resolved_user  uuid references users(id),
+    resolved_agent uuid references agents(id),
+    captured_at    timestamptz not null default now(),
+    check (produced_user is not null or produced_agent is not null)
+);
+create index on signals (source);
+create index on signals (status);
+
+-- The edge table: each row is one (signal.source → target) pair the graph
+-- projects. Non-empty per signal and (source, target, kind) uniqueness are
+-- domain-layer invariants (the latter spans both tables — dismissed
+-- observations must not be re-raised).
+create table signal_targets (
+    signal_id uuid not null references signals(id) on delete cascade,
+    target    uuid not null references decisions(id) on delete cascade,
+    primary key (signal_id, target)
+);
+create index on signal_targets (target);

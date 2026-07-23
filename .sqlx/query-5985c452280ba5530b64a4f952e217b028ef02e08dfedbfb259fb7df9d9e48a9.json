@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                   select 1 from signals s\n                   join signal_targets t on t.signal_id = s.id\n                   where s.source = $1 and s.kind = $2 and t.target = any($3)\n               ) as \"raised!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raised!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5985c452280ba5530b64a4f952e217b028ef02e08dfedbfb259fb7df9d9e48a9"
+}

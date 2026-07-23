@@ -29,6 +29,7 @@ pub mod ids;
 pub mod message;
 pub mod project;
 pub mod session;
+pub mod signal;
 pub mod token;
 pub mod user;
 
@@ -38,10 +39,13 @@ pub use decision::{
     NewDecision, Related, Source,
 };
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
-pub use ids::{AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, TokenId, UserId};
+pub use ids::{
+    AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, SignalId, TokenId, UserId,
+};
 pub use message::{Message, Messages, NewMessage};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
 pub use session::{NewSession, Session, SessionFilter, SessionKind, Sessions};
+pub use signal::{NewSignal, Signal, SignalFilter, SignalStatus, Signals, Tier};
 pub use token::{Minted, NewToken, Token, Tokens};
 pub use user::{AuthInfo, Identity, User, Users};
 
@@ -114,7 +118,18 @@ pub enum StoreError {
 /// The full storage surface — every resource trait, bundled. Implemented
 /// automatically for any type that implements them all.
 pub trait Storage:
-    Groups + Projects + Users + Agents + Tokens + Decisions + Sessions + Messages + Clone + Send + Sync
+    Groups
+    + Projects
+    + Users
+    + Agents
+    + Tokens
+    + Decisions
+    + Sessions
+    + Messages
+    + Signals
+    + Clone
+    + Send
+    + Sync
 {
 }
 
@@ -127,6 +142,7 @@ impl<
         + Decisions
         + Sessions
         + Messages
+        + Signals
         + Clone
         + Send
         + Sync,

@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, source, kind, tier as \"tier: _\", status as \"status: _\",\n                      title, text, consequence, recommendation,\n                      produced_user, produced_agent, resolved_user, resolved_agent,\n                      captured_at\n               from signals where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "tier: _",
+        "type_info": {
+          "Custom": {
+            "name": "signal_tier",
+            "kind": {
+              "Enum": [
+                "watch",
+                "coordinate",
+                "conflict"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "signal_status",
+            "kind": {
+              "Enum": [
+                "proposed",
+                "confirmed",
+                "dismissed"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "consequence",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "recommendation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "produced_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "produced_agent",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "resolved_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
+        "name": "resolved_agent",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "cdb7b93ebf5c9d42fb63dbcd6b474533db2648c7c749bab4b574827aef14a761"
+}

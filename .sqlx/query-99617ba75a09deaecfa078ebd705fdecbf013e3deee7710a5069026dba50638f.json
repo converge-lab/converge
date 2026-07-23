@@ -1,0 +1,149 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where ($1::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $1)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $1))\n                 and ($2::uuid is null\n                      or s.source = $2\n                      or exists (select 1 from signal_targets t\n                                 where t.signal_id = s.id and t.target = $2))\n                 and ($3::signal_status is null or s.status = $3)\n                 and ($4::signal_tier is null or s.tier = $4)\n                 and ($6::uuid is null or s.id < $6)\n               order by s.id desc\n               limit $5",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "tier: _",
+        "type_info": {
+          "Custom": {
+            "name": "signal_tier",
+            "kind": {
+              "Enum": [
+                "watch",
+                "coordinate",
+                "conflict"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "signal_status",
+            "kind": {
+              "Enum": [
+                "proposed",
+                "confirmed",
+                "dismissed"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "consequence",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "recommendation",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "produced_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "produced_agent",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "resolved_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
+        "name": "resolved_agent",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "signal_status",
+            "kind": {
+              "Enum": [
+                "proposed",
+                "confirmed",
+                "dismissed"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "signal_tier",
+            "kind": {
+              "Enum": [
+                "watch",
+                "coordinate",
+                "conflict"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "99617ba75a09deaecfa078ebd705fdecbf013e3deee7710a5069026dba50638f"
+}

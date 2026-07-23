@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update signals\n               set status = $2, resolved_user = $3, resolved_agent = $4\n               where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "signal_status",
+            "kind": {
+              "Enum": [
+                "proposed",
+                "confirmed",
+                "dismissed"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b05a01c826ca49c4cef1693c619276ceb9def9aa7371d50fbb16873c25222cfb"
+}

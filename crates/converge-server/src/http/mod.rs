@@ -13,6 +13,7 @@ mod group;
 mod oauth;
 mod project;
 mod session;
+mod signal;
 mod signin;
 mod token;
 mod user;
@@ -58,6 +59,7 @@ pub fn app<S: Storage + 'static>(
         .merge(project::routes().with_state(store.clone()))
         .merge(decision::routes().with_state(store.clone()))
         .merge(evidence::routes().with_state(store.clone()))
+        .merge(signal::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))

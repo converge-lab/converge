@@ -15,9 +15,9 @@ pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
     DecisionFilter, DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind,
     Identity, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup, NewMessage, NewProject,
-    NewSession, NewToken, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
-    Related, Session, SessionFilter, SessionId, SessionKind, Source, StoreError, Token, TokenId,
-    User, UserId,
+    NewSession, NewSignal, NewToken, Page, Pagination, Project, ProjectEdit, ProjectFilter,
+    ProjectId, Related, Session, SessionFilter, SessionId, SessionKind, Signal, SignalFilter,
+    SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -256,6 +256,55 @@ impl Client {
         page: &Pagination<MessageId>,
     ) -> Result<Page<Message>, StoreError> {
         self.list(&format!("sessions/{session}/messages"), &(), page)
+            .await
+    }
+
+    // Signals
+
+    /// Record an observation (born `proposed`).
+    pub async fn signal_add(&self, new: &NewSignal) -> Result<SignalId, StoreError> {
+        self.create("signals", new).await
+    }
+
+    pub async fn signal_get(&self, id: SignalId) -> Result<Option<Signal>, StoreError> {
+        self.fetch(&format!("signals/{id}")).await
+    }
+
+    pub async fn signal_list(
+        &self,
+        filter: &SignalFilter,
+        page: &Pagination<SignalId>,
+    ) -> Result<Page<Signal>, StoreError> {
+        self.list("signals", filter, page).await
+    }
+
+    /// Signals touching one decision on either end
+    /// (`/decisions/{id}/signals`). The filter's `decision`/`project`
+    /// must stay unset — the path binds them.
+    pub async fn decision_signals(
+        &self,
+        decision: DecisionId,
+        filter: &SignalFilter,
+        page: &Pagination<SignalId>,
+    ) -> Result<Page<Signal>, StoreError> {
+        self.list(&format!("decisions/{decision}/signals"), filter, page)
+            .await
+    }
+
+    /// Resolve a signal — `Confirmed` or `Dismissed` — stamping who
+    /// judged it.
+    pub async fn signal_resolve(
+        &self,
+        id: SignalId,
+        status: SignalStatus,
+        by: &Author,
+    ) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct Resolve<'a> {
+            status: SignalStatus,
+            by: &'a Author,
+        }
+        self.apply(&format!("signals/{id}"), &Resolve { status, by })
             .await
     }
 

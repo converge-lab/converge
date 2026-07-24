@@ -208,4 +208,16 @@ pub trait Decisions {
         &self,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Vec<Source>>, StoreError>> + Send;
+
+    /// Ranked full-text search (title weighs over summary over body
+    /// prose), best match first; the filter narrows as in
+    /// [`Decisions::decision_list`]. `query` is websearch syntax: bare
+    /// words AND, `or`, `-`, and `"quoted phrases"`. An empty or
+    /// all-syntax query is `Invalid` — search needs at least one term.
+    fn decision_search(
+        &self,
+        query: &str,
+        filter: DecisionFilter,
+        limit: Option<u32>,
+    ) -> impl Future<Output = Result<Vec<Decision>, StoreError>> + Send;
 }

@@ -60,6 +60,12 @@ create table tokens (
 create index on tokens (user_id);
 
 -- The ADR record AND the graph node.
+--
+-- `search` drives full-text: weighted title > summary > body prose. The
+-- text-search config is a DDL literal by necessity (generated columns
+-- demand immutable expressions); 'english' stems English and passes
+-- other scripts through unstemmed — a per-deployment config is a later
+-- seam and means a column rebuild.
 create table decisions (
     id           uuid primary key,
     project_id   uuid not null references projects(id) on delete cascade,
@@ -69,10 +75,17 @@ create table decisions (
     context      text,
     consequences text,
     alternatives jsonb not null default '[]',                      -- [{option, why_rejected}], ordered
-    captured_at  timestamptz not null default now()
+    captured_at  timestamptz not null default now(),
+    search       tsvector generated always as (
+        setweight(to_tsvector('english', title), 'A') ||
+        setweight(to_tsvector('english', summary), 'B') ||
+        setweight(to_tsvector('english', coalesce(context, '')), 'C') ||
+        setweight(to_tsvector('english', coalesce(consequences, '')), 'C')
+    ) stored
 );
 create index on decisions (project_id);
 create index on decisions (project_id, status);
+create index on decisions using gin (search);
 
 -- Authorship: many per decision; (user?, agent?), at least one present.
 create table decision_author (

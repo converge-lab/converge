@@ -346,3 +346,48 @@ async fn decision_graph() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn search_rides_the_list() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let hit = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted",
+            "title": "Cache invalidation strategy", "summary": "",
+            "context": null, "consequences": null,
+        }),
+    )
+    .await;
+    add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted",
+            "title": "Unrelated", "summary": "nothing",
+            "context": null, "consequences": null,
+        }),
+    )
+    .await;
+
+    // `?q=` ranks (stemmed match), unpaged: next_cursor is null.
+    let (status, page) = send(&app, "GET", "/api/v1/decisions?q=caching", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["id"], json!(hit));
+    assert_eq!(page["next_cursor"], serde_json::Value::Null);
+
+    // A cursor with `?q=` is the caller's error.
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions?q=caching&cursor={hit}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A term-free query is an error, not an empty result.
+    let (status, _) = send(&app, "GET", "/api/v1/decisions?q=-", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

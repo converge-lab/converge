@@ -125,6 +125,22 @@ pub struct DecisionList {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct DecisionSearch {
+    /// What to find. Websearch syntax: bare words AND together, `or`
+    /// alternates, `-` excludes, `"quoted phrases"` match exactly.
+    pub query: String,
+    /// Narrow to one project.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Narrow to one group (spans its projects).
+    #[serde(default)]
+    pub group_id: Option<String>,
+    /// Best matches first; omit for everything that matches.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectList {}
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -588,6 +604,48 @@ impl<S: Storage + 'static> Memory<S> {
                         .captured_at
                         .format(&time::format_description::well_known::Rfc3339)
                         .expect("timestamps format as RFC3339"),
+                })
+            })
+            .collect();
+        json_result(&items)
+    }
+
+    #[tool(description = "Full-text search over decisions, best match \
+        first (title weighs over summary over body). Websearch syntax: \
+        bare words AND, `or`, `-` excludes, \"quoted phrases\". Use this \
+        before decision_list when looking for a topic rather than \
+        browsing.")]
+    async fn decision_search(
+        &self,
+        Parameters(req): Parameters<DecisionSearch>,
+    ) -> Result<CallToolResult, McpError> {
+        let filter = DecisionFilter {
+            project: req
+                .project_id
+                .as_deref()
+                .map(|s| parse_id::<ProjectId>(s, "project_id"))
+                .transpose()?,
+            group: req
+                .group_id
+                .as_deref()
+                .map(|s| parse_id::<GroupId>(s, "group_id"))
+                .transpose()?,
+            status: None,
+        };
+        let decisions = self
+            .store
+            .decision_search(&req.query, filter, req.limit)
+            .await
+            .map_err(map_err)?;
+        let items: Vec<_> = decisions
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "decision_id": d.id,
+                    "project_id": d.project_id,
+                    "status": d.status,
+                    "title": d.title,
+                    "summary": d.summary,
                 })
             })
             .collect();

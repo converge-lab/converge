@@ -788,6 +788,81 @@ impl Decisions for PgStorage {
         Ok(decisions)
     }
 
+    async fn decision_search(
+        &self,
+        query: &str,
+        filter: DecisionFilter,
+        limit: Option<u32>,
+    ) -> Result<Vec<Decision>, StoreError> {
+        if query.trim().is_empty() {
+            return Err(StoreError::Invalid("search needs a query".into()));
+        }
+        let status = filter.status.map(PgStatus::from);
+        // websearch_to_tsquery never errors on user input; a query that is
+        // all syntax ("-", "or") parses to the empty tsquery, which would
+        // match nothing anyway — surface that as Invalid instead of an
+        // empty page pretending to be a result.
+        let mut decisions = sqlx::query_as!(
+            wire::DecisionRow,
+            r#"select id as "id!", project_id as "project_id!", status as "status!: _",
+                      title as "title!", summary as "summary!", context, consequences,
+                      alternatives as "alternatives!", captured_at as "captured_at!"
+               from (
+                   select d.id, d.project_id, p.group_id,
+                          case when exists (select 1 from decision_supersedes s
+                                            where s.supersedes_id = d.id)
+                               then 'superseded'::decision_status
+                               else d.status
+                          end as status,
+                          d.title, d.summary, d.context, d.consequences,
+                          d.alternatives, d.captured_at, d.search
+                   from decisions d
+                   join projects p on p.id = d.project_id
+               ) d
+               where d.search @@ websearch_to_tsquery('english', $1)
+                 and ($2::uuid is null or d.project_id = $2)
+                 and ($3::uuid is null or d.group_id = $3)
+                 and ($4::decision_status is null or d.status = $4)
+               order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,
+                        d.id desc
+               limit $5"#,
+            query,
+            filter.project.map(|p| Uuid::from(p.ulid())),
+            filter.group.map(|g| Uuid::from(g.ulid())),
+            status as Option<PgStatus>,
+            limit.map(i64::from),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Decision::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        if decisions.is_empty() {
+            let empty = sqlx::query_scalar!(
+                r#"select numnode(websearch_to_tsquery('english', $1)) = 0 as "empty!""#,
+                query,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+            if empty {
+                return Err(StoreError::Invalid(
+                    "the query has no searchable terms".into(),
+                ));
+            }
+        }
+        let ids: Vec<Uuid> = decisions.iter().map(|d| Uuid::from(d.id.ulid())).collect();
+        let mut authors = self.authors(&ids).await?;
+        let mut evidence = self.evidence(&ids).await?;
+        for decision in &mut decisions {
+            let uuid = Uuid::from(decision.id.ulid());
+            decision.authors = authors.remove(&uuid).unwrap_or_default();
+            decision.evidence = evidence.remove(&uuid).unwrap_or_default();
+        }
+        Ok(decisions)
+    }
+
     async fn decision_edit(
         &self,
         id: DecisionId,

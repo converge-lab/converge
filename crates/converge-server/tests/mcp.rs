@@ -73,6 +73,7 @@ async fn tool_round_trip() {
             "decision_add",
             "decision_get",
             "decision_list",
+            "decision_search",
             "message_add",
             "project_bind",
             "project_dismiss",
@@ -151,6 +152,24 @@ async fn tool_round_trip() {
     let got = call(&app, "decision_get", json!({ "decision_id": first })).await;
     assert_eq!(got["decision"]["status"], "superseded");
     assert_eq!(got["edges"]["superseded_by"][0].as_str().unwrap(), second);
+
+    // Search finds by stem ("session" ~ "sessions"), best match first;
+    // exclusion syntax narrows.
+    let hits = call(
+        &app,
+        "decision_search",
+        json!({ "query": "session postgres" }),
+    )
+    .await;
+    assert_eq!(hits.as_array().unwrap().len(), 1);
+    assert_eq!(hits[0]["decision_id"].as_str().unwrap(), second);
+    let hits = call(
+        &app,
+        "decision_search",
+        json!({ "query": "session -postgres" }),
+    )
+    .await;
+    assert_eq!(hits[0]["decision_id"].as_str().unwrap(), first);
 
     // Authorship was stamped server-side: the deployment user through the
     // generic mcp agent (stateless transport carries no client info), and

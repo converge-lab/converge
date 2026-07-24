@@ -30,14 +30,37 @@ async fn add<S: Storage>(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
+/// `?q=` switches the list into ranked search: best match first, no
+/// cursor (rank order has no stable resume point — narrow the query or
+/// raise `limit` instead).
+#[derive(serde::Deserialize)]
+struct Q {
+    q: Option<String>,
+}
+
 /// List, narrowed by the filter (`?project=&group=&status=`), paged by
-/// `?limit=&cursor=`. Status matches the *derived* status — `superseded`
-/// finds decisions with inbound edges.
+/// `?limit=&cursor=` — or searched by `?q=` (websearch syntax; ranked,
+/// unpaged). Status matches the *derived* status — `superseded` finds
+/// decisions with inbound edges.
 async fn list<S: Storage>(
     State(store): State<S>,
     Query(filter): Query<DecisionFilter>,
+    Query(q): Query<Q>,
     Query(page): Query<Pagination<DecisionId>>,
 ) -> Result<Json<Page<Decision>>> {
+    if let Some(query) = q.q.as_deref() {
+        if page.cursor.is_some() {
+            return Err(StoreError::Invalid(
+                "search results are ranked, not paged — drop the cursor".into(),
+            )
+            .into());
+        }
+        let items = store.decision_search(query, filter, page.limit).await?;
+        return Ok(Json(Page {
+            items,
+            next_cursor: None,
+        }));
+    }
     let items = store.decision_list(filter, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select numnode(websearch_to_tsquery('english', $1)) = 0 as \"empty!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "empty!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3e836a101cad10db5b06f0560560a867f99da3b98b2306b694e2b9739bf350e0"
+}

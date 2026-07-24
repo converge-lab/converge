@@ -159,6 +159,26 @@ impl Client {
         self.list("decisions", filter, page).await
     }
 
+    /// Ranked full-text search over decisions (`?q=`, websearch syntax:
+    /// bare words AND, `or`, `-`, `"quoted phrases"`) — best match
+    /// first, unpaged.
+    pub async fn decision_search(
+        &self,
+        query: &str,
+        filter: &DecisionFilter,
+        limit: Option<u32>,
+    ) -> Result<Vec<Decision>, StoreError> {
+        #[derive(Serialize)]
+        struct Q<'a> {
+            q: &'a str,
+            limit: Option<u32>,
+        }
+        Ok(self
+            .list("decisions", filter, &Q { q: query, limit })
+            .await?
+            .items)
+    }
+
     /// One project's decision log (`/projects/{id}/decisions`). The filter's
     /// `project`/`group` must stay unset — the path binds them.
     pub async fn project_decisions(

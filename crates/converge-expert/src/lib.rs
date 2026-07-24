@@ -30,10 +30,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, JsonSpec};
 use genai::resolver::{AuthData, ServiceTargetResolver};
 use genai::{ModelIden, ServiceTarget};
 use serde::Deserialize;
+
+pub mod signals;
 
 /// The `[expert]` configuration table.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -159,6 +161,39 @@ impl Client {
             .filter(|t| !t.is_empty())
             .ok_or_else(|| Error::Shape("no text in the reply".into()))?;
         Ok(text.to_string())
+    }
+
+    /// One-shot **schema-constrained** exchange: the reply must be a JSON
+    /// document matching `schema` (enforced provider-side via structured
+    /// output, verified here by parsing). Deterministic by construction —
+    /// temperature 0. Providers that can't enforce a schema surface a
+    /// call-time error, which `expert check` on the bound job exposes.
+    pub async fn extract(
+        &self,
+        system: &str,
+        user: &str,
+        name: &str,
+        schema: serde_json::Value,
+    ) -> Result<serde_json::Value, Error> {
+        let request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(user)]);
+        let options = self
+            .options
+            .clone()
+            .with_temperature(0.0)
+            .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(name, schema)));
+        let response = tokio::time::timeout(
+            self.timeout,
+            self.genai.exec_chat(&self.model, request, Some(&options)),
+        )
+        .await
+        .map_err(|_| Error::Timeout(self.timeout))??;
+        let text = response
+            .first_text()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| Error::Shape("no text in the reply".into()))?;
+        serde_json::from_str(text)
+            .map_err(|e| Error::Shape(format!("the reply is not the requested JSON: {e}")))
     }
 
     /// "provider model @ origin" — for logs and `expert check` output.

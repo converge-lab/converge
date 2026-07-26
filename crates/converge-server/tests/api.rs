@@ -205,10 +205,12 @@ async fn users_me() {
     assert_eq!(users["items"].as_array().unwrap().len(), 1);
     assert_eq!(users["items"][0]["handle"], "admin");
 
-    // Agents: empty until a write path ensures one (no REST create).
+    // Agents: only the boot-ensured `expert` until a write path ensures
+    // another (no REST create).
     let (status, agents) = send(&app, "GET", "/api/v1/agents", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(agents["items"], json!([]));
+    assert_eq!(agents["items"].as_array().unwrap().len(), 1);
+    assert_eq!(agents["items"][0]["name"], "expert");
     let agent = store
         .agent_ensure(NewAgent {
             kind: AgentKind::Model,
@@ -217,9 +219,11 @@ async fn users_me() {
         .await
         .unwrap();
     let (_, agents) = send(&app, "GET", "/api/v1/agents", None).await;
-    assert_eq!(
-        agents["items"][0]["id"].as_str().unwrap(),
-        agent.to_string()
-    );
-    assert_eq!(agents["items"][0]["kind"], "model");
+    let ids: Vec<String> = agents["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(ids.contains(&agent.to_string()), "{ids:?}");
 }

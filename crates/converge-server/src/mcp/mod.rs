@@ -24,7 +24,7 @@ use std::sync::Arc;
 use converge_storage::{
     AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
     NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, SessionId,
-    SessionKind, Storage, StoreError,
+    SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -41,8 +41,9 @@ use serde::{Deserialize, Serialize};
 pub fn service<S: Storage + 'static>(
     store: S,
     me: Identity,
+    expert: crate::expert::Expert<S>,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
-    let memory = Memory::new(store, me);
+    let memory = Memory::new(store, me, expert);
     // Stateless + plain-JSON POST responses: nothing to orphan on
     // restart, and simple JSON survives proxies better than SSE.
     let mut config = StreamableHttpServerConfig::default();
@@ -62,6 +63,7 @@ pub struct Memory<S> {
     tool_router: ToolRouter<Self>,
     store: S,
     me: Identity,
+    expert: crate::expert::Expert<S>,
 }
 
 // ---- tool wire types (ids as strings; instants never accepted) -----------
@@ -141,6 +143,34 @@ pub struct DecisionSearch {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct SignalList {
+    /// Signals touching this project on either end.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Signals touching this decision on either end.
+    #[serde(default)]
+    pub decision_id: Option<String>,
+    /// proposed | confirmed | dismissed.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// watch | coordinate | conflict.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// Newest first; omit for everything.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SignalResolve {
+    /// The signal to judge (see `signal_list`).
+    pub signal_id: String,
+    /// The verdict: `confirmed` (it holds — act on it) or `dismissed`
+    /// (wrong or not worth acting on; it will NOT be raised again).
+    pub status: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectList {}
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -210,11 +240,12 @@ pub struct ProjectDismiss {
 
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
-    pub fn new(store: S, me: Identity) -> Self {
+    pub fn new(store: S, me: Identity, expert: crate::expert::Expert<S>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store,
             me,
+            expert,
         }
     }
 
@@ -490,27 +521,8 @@ impl<S: Storage + 'static> Memory<S> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Authorship: the deployment user working through the calling
-        // agent. Client info is the best identity the transport offers;
-        // stateless requests may not carry it — then the generic tool
-        // agent stands in.
-        let user = self
-            .store
-            .user_login(self.me.clone())
-            .await
-            .map_err(map_err)?;
-        let client = context
-            .peer
-            .peer_info()
-            .map(|info| info.client_info.name.clone())
-            .unwrap_or_else(|| "mcp".into());
-        let agent = self
-            .store
-            .agent_ensure(NewAgent {
-                kind: AgentKind::Tool,
-                name: client,
-            })
-            .await
-            .map_err(map_err)?;
+        // agent (see `caller`).
+        let author = self.caller(&context).await?;
 
         let id = self
             .store
@@ -529,12 +541,13 @@ impl<S: Storage + 'static> Memory<S> {
                         why_rejected: a.why_rejected,
                     })
                     .collect(),
-                authors: vec![Author::UserViaAgent { user, agent }],
+                authors: vec![author],
                 supersedes,
                 evidence,
             })
             .await
             .map_err(map_err)?;
+        self.expert.detect(id);
         json_result(&serde_json::json!({ "decision_id": id }))
     }
 
@@ -651,6 +664,104 @@ impl<S: Storage + 'static> Memory<S> {
             .collect();
         json_result(&items)
     }
+
+    #[tool(description = "List signals — observations that one decision \
+        affects others (tier: watch < coordinate < conflict; status: \
+        proposed = awaiting judgment). project_id/decision_id match either \
+        end. Surface proposed signals to the user, then `signal_resolve` \
+        with their verdict.")]
+    async fn signal_list(
+        &self,
+        Parameters(req): Parameters<SignalList>,
+    ) -> Result<CallToolResult, McpError> {
+        let filter = SignalFilter {
+            project: req
+                .project_id
+                .as_deref()
+                .map(|s| parse_id::<ProjectId>(s, "project_id"))
+                .transpose()?,
+            decision: req
+                .decision_id
+                .as_deref()
+                .map(|s| parse_id::<DecisionId>(s, "decision_id"))
+                .transpose()?,
+            status: req.status.as_deref().map(parse_signal_status).transpose()?,
+            tier: req.tier.as_deref().map(parse_tier).transpose()?,
+        };
+        let signals = self
+            .store
+            .signal_list(
+                filter,
+                Pagination {
+                    limit: req.limit,
+                    cursor: None,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        let items: Vec<_> = signals
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "signal_id": s.id,
+                    "source": s.source,
+                    "targets": s.targets,
+                    "kind": s.kind,
+                    "tier": s.tier,
+                    "status": s.status,
+                    "title": s.title,
+                    "text": s.text,
+                    "consequence": s.consequence,
+                    "recommendation": s.recommendation,
+                })
+            })
+            .collect();
+        json_result(&items)
+    }
+
+    #[tool(description = "Resolve a signal with the user's verdict: \
+        `confirmed` (the observation holds — act on it) or `dismissed` \
+        (wrong or not worth acting on — it will not be raised again). \
+        Ask the user before resolving; never judge on their behalf.")]
+    async fn signal_resolve(
+        &self,
+        Parameters(req): Parameters<SignalResolve>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let id: SignalId = parse_id(&req.signal_id, "signal_id")?;
+        let status = parse_signal_status(&req.status)?;
+        let by = self.caller(&context).await?;
+        self.store
+            .signal_resolve(id, status, by)
+            .await
+            .map_err(map_err)?;
+        json_result(&serde_json::json!({ "signal_id": id, "status": status }))
+    }
+
+    /// The judging/authoring identity: the deployment user working
+    /// through the calling agent (client info when the transport carries
+    /// it, the generic tool agent otherwise).
+    async fn caller(&self, context: &RequestContext<RoleServer>) -> Result<Author, McpError> {
+        let user = self
+            .store
+            .user_login(self.me.clone())
+            .await
+            .map_err(map_err)?;
+        let client = context
+            .peer
+            .peer_info()
+            .map(|info| info.client_info.name.clone())
+            .unwrap_or_else(|| "mcp".into());
+        let agent = self
+            .store
+            .agent_ensure(NewAgent {
+                kind: AgentKind::Tool,
+                name: client,
+            })
+            .await
+            .map_err(map_err)?;
+        Ok(Author::UserViaAgent { user, agent })
+    }
 }
 
 #[tool_handler]
@@ -711,6 +822,30 @@ fn parse_status(s: &str) -> Result<DecisionStatus, McpError> {
         "rejected" => Ok(DecisionStatus::Rejected),
         other => Err(McpError::invalid_params(
             format!("invalid status: {other}"),
+            None,
+        )),
+    }
+}
+
+fn parse_signal_status(s: &str) -> Result<SignalStatus, McpError> {
+    match s {
+        "proposed" => Ok(SignalStatus::Proposed),
+        "confirmed" => Ok(SignalStatus::Confirmed),
+        "dismissed" => Ok(SignalStatus::Dismissed),
+        other => Err(McpError::invalid_params(
+            format!("invalid status: {other} (proposed | confirmed | dismissed)"),
+            None,
+        )),
+    }
+}
+
+fn parse_tier(s: &str) -> Result<Tier, McpError> {
+    match s {
+        "watch" => Ok(Tier::Watch),
+        "coordinate" => Ok(Tier::Coordinate),
+        "conflict" => Ok(Tier::Conflict),
+        other => Err(McpError::invalid_params(
+            format!("invalid tier: {other} (watch | coordinate | conflict)"),
             None,
         )),
     }

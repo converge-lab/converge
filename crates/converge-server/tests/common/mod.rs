@@ -5,8 +5,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use converge_server::auth::Sessions;
-use converge_server::{app, auth};
-use converge_storage::{Identity, Tokens, Users};
+use converge_server::{Expert, app, auth};
+use converge_storage::{AgentKind, Agents, Identity, NewAgent, Tokens, Users};
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -44,6 +44,16 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
         .token_add(admin, "test".into(), auth::hash(TOKEN))
         .await
         .unwrap();
+    // No expert jobs configured: detection is a no-op in the harness (the
+    // dedicated suite builds its own registry against a stub endpoint).
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "expert".into(),
+        })
+        .await
+        .unwrap();
+    let expert = Expert::new(store.clone(), converge_expert::Registry::default(), agent);
     (
         node,
         store.clone(),
@@ -54,6 +64,7 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
             None,
             None,
             None,
+            expert,
         ),
     )
 }

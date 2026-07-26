@@ -19,6 +19,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 axum.workspace = true
+converge-expert.workspace = true
 converge-server.workspace = true
 converge-storage-postgres.workspace = true
 testcontainers-modules.workspace = true

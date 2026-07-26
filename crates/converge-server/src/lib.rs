@@ -6,9 +6,11 @@
 //! binary picks the backend (PostgreSQL) at the edge.
 
 pub mod auth;
+pub mod expert;
 pub mod http;
 pub mod mcp;
 pub mod oauth;
 pub mod oidc;
 
+pub use expert::Expert;
 pub use http::app;

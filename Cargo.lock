@@ -711,6 +711,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "converge-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "testcontainers-modules",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "converge-expert"
 version = "0.1.0"
 dependencies = [

@@ -37,7 +37,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --exclude converge-e2e
+
+  e2e:
+    # Real Converge and agent CLIs run only inside disposable containers.
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Claude Code installation E2E
+        run: cargo test -p converge-e2e --test claude_installation -- --test-threads=1
 
   sqlx:
     # A stale query cache compiles fine offline but lies about the schema —

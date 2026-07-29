@@ -4,6 +4,7 @@ members = [
     "crates/converge-cli",
     "crates/converge-client",
     "crates/converge-expert",
+    "crates/converge-e2e",
     "crates/converge-server",
     "crates/converge-storage",
     "crates/converge-storage-postgres",

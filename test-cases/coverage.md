@@ -201,7 +201,7 @@
 
 ### Wire / serialization
 - [ ] Malformed JSON body (truncated, wrong field type, unknown enum tag) on a REST POST/PATCH
-- [ ] Full enum coverage over the wire for `DecisionStatus` (`Draft`), `SessionKind` (`Pr`, `Incident`)
+- [ ] Full enum coverage over the wire for `DecisionStatus` (`Draft`, `Rejected` — only `proposed`/`accepted`/`superseded` ever cross REST/MCP in any test, incl. the `"draft"`/`"rejected"` string-parse arms in `mcp/mod.rs`), `SessionKind` (`Pr`, `Incident`)
 - [ ] `converge-client` error mapping for `Conflict` (e.g., duplicate signal pair) and `Backend` variants — currently the only `Conflict` producer in the whole codebase is the signal duplicate-pair path, and it's never asserted through the typed client, only over raw REST (`signal_round_trip`, server/signal.rs)
 
 ### Expert

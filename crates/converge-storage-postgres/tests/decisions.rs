@@ -85,6 +85,40 @@ async fn round_trip() {
 }
 
 #[tokio::test]
+async fn add_with_proposed_status() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(&store).await;
+
+    let id = store
+        .decision_add(NewDecision {
+            status: DecisionStatus::Proposed,
+            ..decision(project, "try Z")
+        })
+        .await
+        .unwrap();
+
+    let got = store.decision_get(id).await.unwrap().unwrap();
+    assert_eq!(got.status, DecisionStatus::Proposed);
+}
+
+#[tokio::test]
+async fn add_with_rejected_status() {
+    let (_pg, store) = store().await;
+    let (_, project) = seed_project(&store).await;
+
+    let id = store
+        .decision_add(NewDecision {
+            status: DecisionStatus::Rejected,
+            ..decision(project, "skip W")
+        })
+        .await
+        .unwrap();
+
+    let got = store.decision_get(id).await.unwrap().unwrap();
+    assert_eq!(got.status, DecisionStatus::Rejected);
+}
+
+#[tokio::test]
 async fn list_filters() {
     let (_pg, store) = store().await;
     let (_, a) = seed_project(&store).await;

@@ -2,7 +2,7 @@
 //! decision and a set of **retrieved candidates**, judge which of them
 //! the new decision materially affects, and draft the signals.
 //!
-//! This is a pure function over a [`Client`](crate::Client): no storage,
+//! This is a pure function over a [`Client`]: no storage,
 //! no side effects. The caller (the server's production pass) retrieves
 //! the candidates (full-text similarity + graph neighbourhood, under a
 //! token budget), runs [`discover`], stamps authorship, and writes the

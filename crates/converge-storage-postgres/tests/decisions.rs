@@ -6,27 +6,43 @@ mod common;
 use common::store;
 use converge_storage::{
     Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions,
-    GroupId, GroupKind, Groups, NewDecision, NewGroup, NewProject, Pagination, ProjectId, Projects,
-    Related, StoreError, UserId,
+    GroupId, GroupKind, Groups, Identity, NewDecision, NewGroup, NewProject, Pagination, ProjectId,
+    Projects, Related, Scope, StoreError, UserId, Users,
 };
 use converge_storage_postgres::PgStorage;
 
-/// A group + project to hang decisions on.
+/// A group + project to hang decisions on (owned by a bootstrap user;
+/// `user_login` is idempotent, so repeated seeding reuses the same owner).
 async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId) {
-    let group = store
-        .group_add(NewGroup {
-            name: "test group".into(),
-            description: None,
-            kind: GroupKind::Shared,
+    let owner = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "test".into(),
+            handle: "test".into(),
+            name: "Test".into(),
         })
         .await
         .unwrap();
+    let group = store
+        .group_add(
+            owner,
+            NewGroup {
+                name: "test group".into(),
+                description: None,
+                kind: GroupKind::Shared,
+            },
+        )
+        .await
+        .unwrap();
     let project = store
-        .project_add(NewProject {
-            group_id: group,
-            name: "test project".into(),
-            description: None,
-        })
+        .project_add(
+            Scope::System,
+            NewProject {
+                group_id: group,
+                name: "test project".into(),
+                description: None,
+            },
+        )
         .await
         .unwrap();
     (group, project)
@@ -56,11 +72,11 @@ async fn round_trip() {
     let (_, project) = seed_project(&store).await;
 
     let id = store
-        .decision_add(decision(project, "adopt X"))
+        .decision_add(Scope::System, decision(project, "adopt X"))
         .await
         .unwrap();
     let got = store
-        .decision_get(id)
+        .decision_get(Scope::System, id)
         .await
         .unwrap()
         .expect("stored decision");
@@ -77,7 +93,7 @@ async fn round_trip() {
 
     assert!(
         store
-            .decision_get(DecisionId::new())
+            .decision_get(Scope::System, DecisionId::new())
             .await
             .unwrap()
             .is_none()
@@ -90,19 +106,32 @@ async fn list_filters() {
     let (_, a) = seed_project(&store).await;
     let (group_b, b) = seed_project(&store).await;
 
-    let d1 = store.decision_add(decision(a, "one")).await.unwrap();
-    let d2 = store
-        .decision_add(NewDecision {
-            status: DecisionStatus::Proposed,
-            ..decision(a, "two")
-        })
+    let d1 = store
+        .decision_add(Scope::System, decision(a, "one"))
         .await
         .unwrap();
-    let d3 = store.decision_add(decision(b, "three")).await.unwrap();
+    let d2 = store
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                status: DecisionStatus::Proposed,
+                ..decision(a, "two")
+            },
+        )
+        .await
+        .unwrap();
+    let d3 = store
+        .decision_add(Scope::System, decision(b, "three"))
+        .await
+        .unwrap();
 
     // No filter: everything, newest first (ULID = time order).
     let all = store
-        .decision_list(DecisionFilter::default(), Pagination::default())
+        .decision_list(
+            Scope::System,
+            DecisionFilter::default(),
+            Pagination::default(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -112,6 +141,7 @@ async fn list_filters() {
 
     let of_a = store
         .decision_list(
+            Scope::System,
             DecisionFilter {
                 project: Some(a),
                 ..Default::default()
@@ -124,6 +154,7 @@ async fn list_filters() {
 
     let of_group_b = store
         .decision_list(
+            Scope::System,
             DecisionFilter {
                 group: Some(group_b),
                 ..Default::default()
@@ -139,6 +170,7 @@ async fn list_filters() {
 
     let proposed = store
         .decision_list(
+            Scope::System,
             DecisionFilter {
                 status: Some(DecisionStatus::Proposed),
                 ..Default::default()
@@ -151,6 +183,7 @@ async fn list_filters() {
 
     let latest = store
         .decision_list(
+            Scope::System,
             DecisionFilter::default(),
             Pagination {
                 limit: Some(2),
@@ -167,6 +200,7 @@ async fn list_filters() {
     // Cursor paging: strictly older than the cursor, newest first.
     let paged = store
         .decision_list(
+            Scope::System,
             DecisionFilter::default(),
             Pagination {
                 limit: Some(2),
@@ -183,12 +217,13 @@ async fn edit_batch() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
     let id = store
-        .decision_add(decision(project, "draft Y"))
+        .decision_add(Scope::System, decision(project, "draft Y"))
         .await
         .unwrap();
 
     store
         .decision_edit(
+            Scope::System,
             id,
             vec![
                 DecisionEdit::SetTitle("adopt Y".into()),
@@ -200,7 +235,11 @@ async fn edit_batch() {
         .await
         .unwrap();
 
-    let got = store.decision_get(id).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.title, "adopt Y");
     assert_eq!(got.status, DecisionStatus::Rejected);
     assert_eq!(got.context, None);
@@ -210,7 +249,11 @@ async fn edit_batch() {
 
     // Editing a missing decision is NotFound.
     let missing = store
-        .decision_edit(DecisionId::new(), vec![DecisionEdit::SetTitle("x".into())])
+        .decision_edit(
+            Scope::System,
+            DecisionId::new(),
+            vec![DecisionEdit::SetTitle("x".into())],
+        )
         .await;
     assert!(matches!(missing, Err(StoreError::NotFound)));
 }
@@ -220,31 +263,54 @@ async fn supersession_derives_status() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
 
-    let old = store.decision_add(decision(project, "v1")).await.unwrap();
+    let old = store
+        .decision_add(Scope::System, decision(project, "v1"))
+        .await
+        .unwrap();
     let new = store
-        .decision_add(NewDecision {
-            supersedes: vec![old],
-            ..decision(project, "v2")
-        })
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                supersedes: vec![old],
+                ..decision(project, "v2")
+            },
+        )
         .await
         .unwrap();
 
     // The stored status of `old` is untouched, but it *reads* superseded.
-    let got_old = store.decision_get(old).await.unwrap().unwrap();
+    let got_old = store
+        .decision_get(Scope::System, old)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got_old.status, DecisionStatus::Superseded);
-    let got_new = store.decision_get(new).await.unwrap().unwrap();
+    let got_new = store
+        .decision_get(Scope::System, new)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got_new.status, DecisionStatus::Accepted);
 
     // Edges, both directions.
-    let edges_old = store.decision_edges(old).await.unwrap().unwrap();
+    let edges_old = store
+        .decision_edges(Scope::System, old)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(edges_old.superseded_by, vec![new]);
     assert!(edges_old.supersedes.is_empty());
-    let edges_new = store.decision_edges(new).await.unwrap().unwrap();
+    let edges_new = store
+        .decision_edges(Scope::System, new)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(edges_new.supersedes, vec![old]);
 
     // The list status filter matches the derived status.
     let superseded = store
         .decision_list(
+            Scope::System,
             DecisionFilter {
                 status: Some(DecisionStatus::Superseded),
                 ..Default::default()
@@ -260,16 +326,24 @@ async fn supersession_derives_status() {
 
     // Removing the edge restores the stored status.
     store
-        .decision_edit(new, vec![DecisionEdit::RemoveSupersedes(old)])
+        .decision_edit(
+            Scope::System,
+            new,
+            vec![DecisionEdit::RemoveSupersedes(old)],
+        )
         .await
         .unwrap();
-    let restored = store.decision_get(old).await.unwrap().unwrap();
+    let restored = store
+        .decision_get(Scope::System, old)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(restored.status, DecisionStatus::Accepted);
 
     // Edges of a missing decision → None.
     assert!(
         store
-            .decision_edges(DecisionId::new())
+            .decision_edges(Scope::System, DecisionId::new())
             .await
             .unwrap()
             .is_none()
@@ -280,12 +354,19 @@ async fn supersession_derives_status() {
 async fn related_upsert() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
-    let a = store.decision_add(decision(project, "a")).await.unwrap();
-    let b = store.decision_add(decision(project, "b")).await.unwrap();
+    let a = store
+        .decision_add(Scope::System, decision(project, "a"))
+        .await
+        .unwrap();
+    let b = store
+        .decision_add(Scope::System, decision(project, "b"))
+        .await
+        .unwrap();
 
     // Re-adding an existing cross-ref updates `why` (upsert, no duplicate).
     store
         .decision_edit(
+            Scope::System,
             a,
             vec![DecisionEdit::AddRelated {
                 to: b,
@@ -296,6 +377,7 @@ async fn related_upsert() {
         .unwrap();
     store
         .decision_edit(
+            Scope::System,
             a,
             vec![DecisionEdit::AddRelated {
                 to: b,
@@ -305,7 +387,11 @@ async fn related_upsert() {
         .await
         .unwrap();
 
-    let ea = store.decision_edges(a).await.unwrap().unwrap();
+    let ea = store
+        .decision_edges(Scope::System, a)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         ea.related_to,
         vec![Related {
@@ -314,7 +400,11 @@ async fn related_upsert() {
         }]
     );
     assert!(ea.related_by.is_empty());
-    let eb = store.decision_edges(b).await.unwrap().unwrap();
+    let eb = store
+        .decision_edges(Scope::System, b)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         eb.related_by,
         vec![Related {
@@ -326,16 +416,16 @@ async fn related_upsert() {
 
     // Removal is idempotent.
     store
-        .decision_edit(a, vec![DecisionEdit::RemoveRelated(b)])
+        .decision_edit(Scope::System, a, vec![DecisionEdit::RemoveRelated(b)])
         .await
         .unwrap();
     store
-        .decision_edit(a, vec![DecisionEdit::RemoveRelated(b)])
+        .decision_edit(Scope::System, a, vec![DecisionEdit::RemoveRelated(b)])
         .await
         .unwrap();
     assert!(
         store
-            .decision_edges(a)
+            .decision_edges(Scope::System, a)
             .await
             .unwrap()
             .unwrap()
@@ -348,18 +438,25 @@ async fn related_upsert() {
 async fn graph_guards() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
-    let a = store.decision_add(decision(project, "a")).await.unwrap();
+    let a = store
+        .decision_add(Scope::System, decision(project, "a"))
+        .await
+        .unwrap();
 
     // Self-loops are rejected.
     assert!(matches!(
         store
-            .decision_edit(a, vec![DecisionEdit::AddSupersedes(a)])
+            .decision_edit(Scope::System, a, vec![DecisionEdit::AddSupersedes(a)])
             .await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
         store
-            .decision_edit(a, vec![DecisionEdit::AddRelated { to: a, why: None }])
+            .decision_edit(
+                Scope::System,
+                a,
+                vec![DecisionEdit::AddRelated { to: a, why: None }]
+            )
             .await,
         Err(StoreError::Invalid(_))
     ));
@@ -367,16 +464,23 @@ async fn graph_guards() {
     // Superseded is derived — it can't be set or created.
     assert!(matches!(
         store
-            .decision_edit(a, vec![DecisionEdit::SetStatus(DecisionStatus::Superseded)])
+            .decision_edit(
+                Scope::System,
+                a,
+                vec![DecisionEdit::SetStatus(DecisionStatus::Superseded)]
+            )
             .await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
         store
-            .decision_add(NewDecision {
-                status: DecisionStatus::Superseded,
-                ..decision(project, "born superseded")
-            })
+            .decision_add(
+                Scope::System,
+                NewDecision {
+                    status: DecisionStatus::Superseded,
+                    ..decision(project, "born superseded")
+                }
+            )
             .await,
         Err(StoreError::Invalid(_))
     ));
@@ -387,11 +491,15 @@ async fn graph_guards() {
         ..decision(project, "dangling")
     };
     assert!(matches!(
-        store.decision_add(orphan_edge).await,
+        store.decision_add(Scope::System, orphan_edge).await,
         Err(StoreError::Invalid(_))
     ));
     let titles: Vec<String> = store
-        .decision_list(DecisionFilter::default(), Pagination::default())
+        .decision_list(
+            Scope::System,
+            DecisionFilter::default(),
+            Pagination::default(),
+        )
         .await
         .unwrap()
         .into_iter()
@@ -405,7 +513,7 @@ async fn edit_batch_is_atomic() {
     let (_pg, store) = store().await;
     let (_, project) = seed_project(&store).await;
     let id = store
-        .decision_add(decision(project, "stable"))
+        .decision_add(Scope::System, decision(project, "stable"))
         .await
         .unwrap();
 
@@ -413,6 +521,7 @@ async fn edit_batch_is_atomic() {
     // already-applied first op must roll back with it.
     let failed = store
         .decision_edit(
+            Scope::System,
             id,
             vec![
                 DecisionEdit::SetSummary("half-applied".into()),
@@ -422,7 +531,11 @@ async fn edit_batch_is_atomic() {
         .await;
     assert!(failed.is_err());
 
-    let got = store.decision_get(id).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.summary, "because it won");
     assert_eq!(got.title, "stable");
 }
@@ -436,14 +549,14 @@ async fn add_guards() {
     let mut authored = decision(project, "authored");
     authored.authors.push(Author::User(UserId::new()));
     assert!(matches!(
-        store.decision_add(authored).await,
+        store.decision_add(Scope::System, authored).await,
         Err(StoreError::Invalid(_))
     ));
 
     // Unknown project: FK violation surfaces as Invalid.
     let orphan = decision(ProjectId::new(), "orphan");
     assert!(matches!(
-        store.decision_add(orphan).await,
+        store.decision_add(Scope::System, orphan).await,
         Err(StoreError::Invalid(_))
     ));
 }

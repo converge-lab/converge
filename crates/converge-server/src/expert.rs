@@ -23,8 +23,8 @@
 use converge_expert::Registry;
 use converge_expert::signals::{Entry, Request, discover};
 use converge_storage::{
-    AgentId, Author, Decision, DecisionFilter, DecisionId, NewSignal, Pagination, Signal,
-    SignalFilter, Storage, StoreError,
+    AgentId, Author, Decision, DecisionFilter, DecisionId, GroupId, NewSignal, Pagination, Scope,
+    Signal, SignalFilter, Storage, StoreError,
 };
 use tracing::{debug, info, warn};
 
@@ -89,11 +89,19 @@ impl<S: Storage + 'static> Expert<S> {
         };
         let subject = self
             .store
-            .decision_get(id)
+            .decision_get(Scope::System, id)
             .await?
             .ok_or(StoreError::NotFound)?;
+        // Detection never leaves the subject's group — the ACL boundary
+        // is also the coordination boundary.
+        let group = self
+            .store
+            .project_get(Scope::System, subject.project_id)
+            .await?
+            .ok_or(StoreError::NotFound)?
+            .group_id;
 
-        let candidates = self.retrieve(&subject).await?;
+        let candidates = self.retrieve(&subject, group).await?;
         if candidates.is_empty() {
             return Ok(0);
         }
@@ -133,7 +141,7 @@ impl<S: Storage + 'static> Expert<S> {
                 recommendation: draft.recommendation,
                 produced_by: Author::Agent(self.agent),
             };
-            match self.store.signal_add(new).await {
+            match self.store.signal_add(Scope::System, new).await {
                 Ok(_) => written += 1,
                 // Already observed (possibly dismissed): the re-raise
                 // ban working as designed — not an error.
@@ -147,10 +155,15 @@ impl<S: Storage + 'static> Expert<S> {
     }
 
     /// Deterministic retrieval: an OR-query of the subject's content
-    /// words over the full-text index, minus the subject itself and its
-    /// own project (the judgment is cross-project by contract — same-
-    /// project hits would waste candidate slots).
-    async fn retrieve(&self, subject: &Decision) -> Result<Vec<Decision>, StoreError> {
+    /// words over the full-text index, **within the subject's group**,
+    /// minus the subject itself and its own project (the judgment is
+    /// cross-project by contract — same-project hits would waste
+    /// candidate slots).
+    async fn retrieve(
+        &self,
+        subject: &Decision,
+        group: GroupId,
+    ) -> Result<Vec<Decision>, StoreError> {
         let text = format!(
             "{} {} {}",
             subject.title,
@@ -171,8 +184,12 @@ impl<S: Storage + 'static> Expert<S> {
         let hits = self
             .store
             .decision_search(
+                Scope::System,
                 &query,
-                DecisionFilter::default(),
+                DecisionFilter {
+                    group: Some(group),
+                    ..Default::default()
+                },
                 Some((CANDIDATES * 3) as u32),
             )
             .await?;
@@ -187,6 +204,7 @@ impl<S: Storage + 'static> Expert<S> {
     async fn touching(&self, id: DecisionId) -> Result<Vec<Signal>, StoreError> {
         self.store
             .signal_list(
+                Scope::System,
                 SignalFilter {
                     decision: Some(id),
                     ..Default::default()
@@ -200,13 +218,13 @@ impl<S: Storage + 'static> Expert<S> {
     async fn entry(&self, decision: Decision) -> Result<Entry, StoreError> {
         let project = self
             .store
-            .project_get(decision.project_id)
+            .project_get(Scope::System, decision.project_id)
             .await?
             .map(|p| p.name)
             .unwrap_or_else(|| decision.project_id.to_string());
         let edges = self
             .store
-            .decision_edges(decision.id)
+            .decision_edges(Scope::System, decision.id)
             .await?
             .unwrap_or_default();
         Ok(Entry {

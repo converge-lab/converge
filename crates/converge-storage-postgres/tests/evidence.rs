@@ -5,28 +5,44 @@ mod common;
 
 use common::store;
 use converge_storage::{
-    DecisionEdit, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, MessageId, Messages,
-    NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination, ProjectId, Projects,
-    SessionFilter, SessionId, SessionKind, Sessions, StoreError,
+    DecisionEdit, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity, MessageId,
+    Messages, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination, ProjectId,
+    Projects, Scope, SessionFilter, SessionId, SessionKind, Sessions, StoreError, Users,
 };
 use converge_storage_postgres::PgStorage;
 use time::OffsetDateTime;
 
 async fn project(store: &PgStorage) -> ProjectId {
-    let group = store
-        .group_add(NewGroup {
-            name: "g".into(),
-            description: None,
-            kind: GroupKind::Shared,
+    // A bootstrap user to own the group (pre-ACL tests run as `Scope::System`).
+    let owner = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "test".into(),
+            handle: "test".into(),
+            name: "Test".into(),
         })
         .await
         .unwrap();
+    let group = store
+        .group_add(
+            owner,
+            NewGroup {
+                name: "g".into(),
+                description: None,
+                kind: GroupKind::Shared,
+            },
+        )
+        .await
+        .unwrap();
     store
-        .project_add(NewProject {
-            group_id: group,
-            name: "p".into(),
-            description: None,
-        })
+        .project_add(
+            Scope::System,
+            NewProject {
+                group_id: group,
+                name: "p".into(),
+                description: None,
+            },
+        )
         .await
         .unwrap()
 }
@@ -56,36 +72,51 @@ async fn session_ensure_by_natural_key() {
 
     // `(kind, external)` decides identity; the title refreshes…
     let first = store
-        .session_ensure(session(project_id, "sess-1", "Early title"))
+        .session_ensure(Scope::System, session(project_id, "sess-1", "Early title"))
         .await
         .unwrap();
     let again = store
-        .session_ensure(session(project_id, "sess-1", "Grown-up title"))
+        .session_ensure(
+            Scope::System,
+            session(project_id, "sess-1", "Grown-up title"),
+        )
         .await
         .unwrap();
     assert_eq!(first, again);
-    let got = store.session_get(first).await.unwrap().unwrap();
+    let got = store
+        .session_get(Scope::System, first)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.title, "Grown-up title");
     assert_eq!(got.kind, SessionKind::Transcript);
     assert_eq!(got.external, "sess-1");
 
     // …but the project binding stays as first created.
     let rehomed = store
-        .session_ensure(session(other_project, "sess-1", "x"))
+        .session_ensure(Scope::System, session(other_project, "sess-1", "x"))
         .await
         .unwrap();
     assert_eq!(rehomed, first);
     assert_eq!(
-        store.session_get(first).await.unwrap().unwrap().project_id,
+        store
+            .session_get(Scope::System, first)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
         project_id
     );
 
     // Same external under a different kind is a different session.
     let slack = store
-        .session_ensure(NewSession {
-            kind: SessionKind::Slack,
-            ..session(project_id, "sess-1", "thread")
-        })
+        .session_ensure(
+            Scope::System,
+            NewSession {
+                kind: SessionKind::Slack,
+                ..session(project_id, "sess-1", "thread")
+            },
+        )
         .await
         .unwrap();
     assert_ne!(slack, first);
@@ -93,6 +124,7 @@ async fn session_ensure_by_natural_key() {
     // Filters narrow; unknown id reads absent.
     let of_project = store
         .session_list(
+            Scope::System,
             SessionFilter {
                 project: Some(project_id),
                 kind: Some(SessionKind::Transcript),
@@ -103,7 +135,13 @@ async fn session_ensure_by_natural_key() {
         .unwrap();
     assert_eq!(of_project.len(), 1);
     assert_eq!(of_project[0].id, first);
-    assert!(store.session_get(SessionId::new()).await.unwrap().is_none());
+    assert!(
+        store
+            .session_get(Scope::System, SessionId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -111,7 +149,7 @@ async fn streams_append_in_order() {
     let (_pg, store) = store().await;
     let project_id = project(&store).await;
     let sid = store
-        .session_ensure(session(project_id, "s", "s"))
+        .session_ensure(Scope::System, session(project_id, "s", "s"))
         .await
         .unwrap();
 
@@ -119,6 +157,7 @@ async fn streams_append_in_order() {
     let when = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
     let first = store
         .message_add(
+            Scope::System,
             sid,
             vec![
                 message("maksim", "should we split the trait?"),
@@ -132,13 +171,13 @@ async fn streams_append_in_order() {
         .unwrap();
     assert_eq!(first.len(), 2);
     let second = store
-        .message_add(sid, vec![message("maksim", "agreed, do it")])
+        .message_add(Scope::System, sid, vec![message("maksim", "agreed, do it")])
         .await
         .unwrap();
     assert_eq!(second.len(), 1);
 
     let stream = store
-        .message_list(sid, Pagination::default())
+        .message_list(Scope::System, sid, Pagination::default())
         .await
         .unwrap();
     assert_eq!(stream.len(), 3);
@@ -151,6 +190,7 @@ async fn streams_append_in_order() {
     // Forward cursor: strictly after the given message.
     let rest = store
         .message_list(
+            Scope::System,
             sid,
             Pagination {
                 limit: Some(10),
@@ -165,13 +205,13 @@ async fn streams_append_in_order() {
     // Unknown session: NotFound on append, empty on read.
     assert!(matches!(
         store
-            .message_add(SessionId::new(), vec![message("x", "y")])
+            .message_add(Scope::System, SessionId::new(), vec![message("x", "y")])
             .await,
         Err(StoreError::NotFound)
     ));
     assert!(
         store
-            .message_list(SessionId::new(), Pagination::default())
+            .message_list(Scope::System, SessionId::new(), Pagination::default())
             .await
             .unwrap()
             .is_empty()
@@ -183,11 +223,12 @@ async fn evidence_anchors_decisions_to_messages() {
     let (_pg, store) = store().await;
     let project_id = project(&store).await;
     let sid = store
-        .session_ensure(session(project_id, "s", "s"))
+        .session_ensure(Scope::System, session(project_id, "s", "s"))
         .await
         .unwrap();
     let messages = store
         .message_add(
+            Scope::System,
             sid,
             vec![message("maksim", "context"), message("claude", "the call")],
         )
@@ -197,24 +238,31 @@ async fn evidence_anchors_decisions_to_messages() {
     // Anchors at capture time round-trip on get and list; duplicates
     // collapse (a set, like authorship).
     let decision = store
-        .decision_add(NewDecision {
-            project_id,
-            status: DecisionStatus::Accepted,
-            title: "t".into(),
-            summary: String::new(),
-            context: None,
-            consequences: None,
-            alternatives: Vec::new(),
-            authors: Vec::new(),
-            supersedes: Vec::new(),
-            evidence: vec![messages[1], messages[1]],
-        })
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id,
+                status: DecisionStatus::Accepted,
+                title: "t".into(),
+                summary: String::new(),
+                context: None,
+                consequences: None,
+                alternatives: Vec::new(),
+                authors: Vec::new(),
+                supersedes: Vec::new(),
+                evidence: vec![messages[1], messages[1]],
+            },
+        )
         .await
         .unwrap();
-    let got = store.decision_get(decision).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, decision)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.evidence, vec![messages[1]]);
     let listed = store
-        .decision_list(Default::default(), Pagination::default())
+        .decision_list(Scope::System, Default::default(), Pagination::default())
         .await
         .unwrap();
     assert_eq!(listed[0].evidence, vec![messages[1]]);
@@ -223,6 +271,7 @@ async fn evidence_anchors_decisions_to_messages() {
     // caller's error.
     store
         .decision_edit(
+            Scope::System,
             decision,
             vec![
                 DecisionEdit::AddEvidence(messages[0]),
@@ -231,31 +280,42 @@ async fn evidence_anchors_decisions_to_messages() {
         )
         .await
         .unwrap();
-    let got = store.decision_get(decision).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, decision)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.evidence, vec![messages[0]]);
     assert!(matches!(
         store
-            .decision_edit(decision, vec![DecisionEdit::AddEvidence(MessageId::new())])
+            .decision_edit(
+                Scope::System,
+                decision,
+                vec![DecisionEdit::AddEvidence(MessageId::new())]
+            )
             .await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
         store
-            .decision_add(NewDecision {
-                evidence: vec![MessageId::new()],
-                ..NewDecision {
-                    project_id,
-                    status: DecisionStatus::Accepted,
-                    title: "x".into(),
-                    summary: String::new(),
-                    context: None,
-                    consequences: None,
-                    alternatives: Vec::new(),
-                    authors: Vec::new(),
-                    supersedes: Vec::new(),
-                    evidence: Vec::new(),
+            .decision_add(
+                Scope::System,
+                NewDecision {
+                    evidence: vec![MessageId::new()],
+                    ..NewDecision {
+                        project_id,
+                        status: DecisionStatus::Accepted,
+                        title: "x".into(),
+                        summary: String::new(),
+                        context: None,
+                        consequences: None,
+                        alternatives: Vec::new(),
+                        authors: Vec::new(),
+                        supersedes: Vec::new(),
+                        evidence: Vec::new(),
+                    }
                 }
-            })
+            )
             .await,
         Err(StoreError::Invalid(_))
     ));
@@ -269,39 +329,54 @@ async fn sources_derive_windows_around_anchors() {
     // Session one: eight messages, anchors at seq 1 and 6 — two disjoint
     // windows. Session two: one anchored message of three.
     let s1 = store
-        .session_ensure(session(project_id, "s1", "first"))
+        .session_ensure(Scope::System, session(project_id, "s1", "first"))
         .await
         .unwrap();
     let m1 = store
-        .message_add(s1, (0..8).map(|i| message("a", &format!("m{i}"))).collect())
+        .message_add(
+            Scope::System,
+            s1,
+            (0..8).map(|i| message("a", &format!("m{i}"))).collect(),
+        )
         .await
         .unwrap();
     let s2 = store
-        .session_ensure(session(project_id, "s2", "second"))
+        .session_ensure(Scope::System, session(project_id, "s2", "second"))
         .await
         .unwrap();
     let m2 = store
-        .message_add(s2, (0..3).map(|i| message("b", &format!("n{i}"))).collect())
+        .message_add(
+            Scope::System,
+            s2,
+            (0..3).map(|i| message("b", &format!("n{i}"))).collect(),
+        )
         .await
         .unwrap();
 
     let decision = store
-        .decision_add(NewDecision {
-            project_id,
-            status: DecisionStatus::Accepted,
-            title: "t".into(),
-            summary: String::new(),
-            context: None,
-            consequences: None,
-            alternatives: Vec::new(),
-            authors: Vec::new(),
-            supersedes: Vec::new(),
-            evidence: vec![m1[1], m1[6], m2[0]],
-        })
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id,
+                status: DecisionStatus::Accepted,
+                title: "t".into(),
+                summary: String::new(),
+                context: None,
+                consequences: None,
+                alternatives: Vec::new(),
+                authors: Vec::new(),
+                supersedes: Vec::new(),
+                evidence: vec![m1[1], m1[6], m2[0]],
+            },
+        )
         .await
         .unwrap();
 
-    let sources = store.decision_sources(decision).await.unwrap().unwrap();
+    let sources = store
+        .decision_sources(Scope::System, decision)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(sources.len(), 2);
     // Newest session first (like every other list).
     assert_eq!(sources[0].session.id, s2);
@@ -319,27 +394,34 @@ async fn sources_derive_windows_around_anchors() {
 
     // No evidence → empty; unknown decision → None.
     let bare = store
-        .decision_add(NewDecision {
-            project_id,
-            status: DecisionStatus::Accepted,
-            title: "bare".into(),
-            summary: String::new(),
-            context: None,
-            consequences: None,
-            alternatives: Vec::new(),
-            authors: Vec::new(),
-            supersedes: Vec::new(),
-            evidence: Vec::new(),
-        })
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id,
+                status: DecisionStatus::Accepted,
+                title: "bare".into(),
+                summary: String::new(),
+                context: None,
+                consequences: None,
+                alternatives: Vec::new(),
+                authors: Vec::new(),
+                supersedes: Vec::new(),
+                evidence: Vec::new(),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
-        store.decision_sources(bare).await.unwrap().unwrap(),
+        store
+            .decision_sources(Scope::System, bare)
+            .await
+            .unwrap()
+            .unwrap(),
         Vec::new()
     );
     assert!(
         store
-            .decision_sources(DecisionId::new())
+            .decision_sources(Scope::System, DecisionId::new())
             .await
             .unwrap()
             .is_none()

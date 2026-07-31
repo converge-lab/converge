@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 use crate::ids::{AgentId, DecisionId, GroupId, MessageId, ProjectId, UserId};
 use crate::message::Message;
 use crate::session::Session;
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// Lifecycle of a decision.
 ///
@@ -171,33 +171,43 @@ pub struct Source {
     pub anchors: Vec<MessageId>,
 }
 
-/// Storage operations on decisions and their graph edges.
+/// Storage operations on decisions and their graph edges. Reads are
+/// scope-filtered through project → group; `decision_add` requires the
+/// project AND every referenced decision (`supersedes`, cross-refs) and
+/// message (`evidence`) to be visible to the writer.
 pub trait Decisions {
     fn decision_add(
         &self,
+        scope: Scope,
         new: NewDecision,
     ) -> impl Future<Output = Result<DecisionId, StoreError>> + Send;
 
     fn decision_get(
         &self,
+        scope: Scope,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Decision>, StoreError>> + Send;
 
     fn decision_list(
         &self,
+        scope: Scope,
         filter: DecisionFilter,
         page: Pagination<DecisionId>,
     ) -> impl Future<Output = Result<Vec<Decision>, StoreError>> + Send;
 
     fn decision_edit(
         &self,
+        scope: Scope,
         id: DecisionId,
         edits: Vec<DecisionEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The direct graph edges of `id`, or `None` when it doesn't exist.
+    /// Edge endpoints never leave the group (references are validated
+    /// visible-at-write), so no per-edge filtering happens here.
     fn decision_edges(
         &self,
+        scope: Scope,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Edges>, StoreError>> + Send;
 
@@ -206,6 +216,7 @@ pub trait Decisions {
     /// the decision doesn't exist; empty when it has no evidence.
     fn decision_sources(
         &self,
+        scope: Scope,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Vec<Source>>, StoreError>> + Send;
 
@@ -216,6 +227,7 @@ pub trait Decisions {
     /// all-syntax query is `Invalid` — search needs at least one term.
     fn decision_search(
         &self,
+        scope: Scope,
         query: &str,
         filter: DecisionFilter,
         limit: Option<u32>,

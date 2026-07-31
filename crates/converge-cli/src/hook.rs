@@ -111,15 +111,21 @@ right away.";
 /// The bound block: binding + a compact decision index + unjudged
 /// signals, fetched best-effort (a hook must not fail the session
 /// because the server is down — the binding itself is local knowledge).
+/// What the bound block fetches: the project name, the decision index
+/// lines, and the proposed-signal lines. `None` = the server answered
+/// but doesn't know the project for this account.
+type Index = Option<(String, Vec<String>, Vec<String>)>;
+
 async fn bound(project: ProjectId) -> String {
-    let fetched: Result<(String, Vec<String>, Vec<String>)> = async {
+    let fetched: Result<Index> = async {
         let config = Config::load()?;
         let client = config.client()?;
-        let name = client
-            .project_get(project)
-            .await?
-            .map(|p| p.name)
-            .unwrap_or_else(|| project.to_string());
+        // ACL: an invisible project answers exactly like a missing one —
+        // don't dress that up as an empty decision index.
+        let Some(found) = client.project_get(project).await? else {
+            return Ok(None);
+        };
+        let name = found.name;
         let decisions = client
             .decision_list(
                 &DecisionFilter {
@@ -167,7 +173,7 @@ async fn bound(project: ProjectId) -> String {
                 )
             })
             .collect();
-        Ok((name, decisions, signals))
+        Ok(Some((name, decisions, signals)))
     }
     .await;
 
@@ -178,7 +184,15 @@ async fn bound(project: ProjectId) -> String {
         None => None,
     };
     let block = match fetched {
-        Ok((name, decisions, signals)) => {
+        Ok(None) => format!(
+            "## Converge memory — project {project}\n\
+             This working tree is bound to converge project `{project}`, \
+             but the server doesn't know it for this account — the project \
+             was deleted, or this token's user isn't a member of its \
+             group. Ask a group owner to add you, or re-bind with \
+             `project_match`."
+        ),
+        Ok(Some((name, decisions, signals))) => {
             let mut block = if decisions.is_empty() {
                 format!(
                     "## Converge memory — project \"{name}\" ({project})\n\

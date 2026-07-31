@@ -69,12 +69,26 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
     )
 }
 
-/// Send one request; return status and parsed JSON body (`null` when empty).
+/// Send one request as the admin; return status and parsed JSON body
+/// (`null` when empty).
 // Not every suite that pulls in the harness uses the authed helper (the
 // session suite sends raw requests on purpose).
 #[allow(dead_code)]
 pub async fn send(
     app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    send_as(app, TOKEN, method, uri, body).await
+}
+
+/// [`send`], but presenting a specific bearer token — the ACL suite
+/// speaks as several users.
+#[allow(dead_code)]
+pub async fn send_as(
+    app: &Router,
+    token: &str,
     method: &str,
     uri: &str,
     body: Option<Value>,
@@ -87,7 +101,7 @@ pub async fn send(
         // a Host header (DNS-rebinding protection); harmless for REST.
         .header(header::ACCEPT, "application/json, text/event-stream")
         .header(header::HOST, "127.0.0.1")
-        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
     let request = match body {
         Some(v) => request.body(Body::from(v.to_string())).unwrap(),
         None => request.body(Body::empty()).unwrap(),

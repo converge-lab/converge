@@ -17,7 +17,9 @@ use clap::{Parser, Subcommand};
 use config::ConfigService;
 use converge_server::auth::Sessions;
 use converge_server::{app, auth};
-use converge_storage::{AgentKind, Agents, Identity, NewAgent, Pagination, Storage, TokenId};
+use converge_storage::{
+    AgentKind, Agents, Identity, Memberships, NewAgent, Pagination, Storage, TokenId, Users,
+};
 use converge_storage_postgres::PgStorage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -121,6 +123,13 @@ async fn main() -> anyhow::Result<()> {
     store.migrate().await?;
     if store.ensure_default_workspace().await? {
         info!("created the default personal workspace (My workspace)");
+    }
+    // The ACL backfill: pre-ownership groups (including a fresh default
+    // workspace) belong to the deployment user. Idempotent, every boot.
+    let owner = store.user_login(me.clone()).await?;
+    let adopted = store.adopt(owner).await?;
+    if adopted > 0 {
+        info!(adopted, owner = %owner, "adopted ownerless groups");
     }
     auth::hint(&store, me.clone()).await?;
 

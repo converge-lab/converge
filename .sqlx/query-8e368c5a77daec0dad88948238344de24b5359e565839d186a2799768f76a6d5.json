@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, session_id, seq, speaker, body, sent_at, captured_at\n               from messages\n               where session_id = $1\n                 and ($2::uuid is null\n                      or seq > (select seq from messages where id = $2 and session_id = $1))\n               order by seq\n               limit $3",
+  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where m.session_id = $1\n                 and ($2::uuid is null\n                      or m.seq > (select seq from messages where id = $2 and session_id = $1))\n                 and ($4::uuid is null\n                      or group_visible((select p.group_id from sessions s\n                                        join projects p on p.id = s.project_id\n                                        where s.id = m.session_id), $4))\n               order by m.seq\n               limit $3",
   "describe": {
     "columns": [
       {
@@ -43,7 +43,8 @@
       "Left": [
         "Uuid",
         "Uuid",
-        "Int8"
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -56,5 +57,5 @@
       false
     ]
   },
-  "hash": "46aea1058069ee263776d9713bd21dd7140aafa189f157b7e58656363f98aefc"
+  "hash": "8e368c5a77daec0dad88948238344de24b5359e565839d186a2799768f76a6d5"
 }

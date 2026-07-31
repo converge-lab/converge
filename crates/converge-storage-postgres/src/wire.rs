@@ -276,24 +276,32 @@ pub(crate) fn split(author: &Author) -> (Option<Uuid>, Option<Uuid>) {
     }
 }
 
-/// One `groups` row, as fetched.
+/// One `groups` row, as fetched. `owner_id` is nullable only during the
+/// pre-adoption migration window (see `Memberships::adopt`) — a null
+/// reaching a read is a deployment that skipped the boot pass.
 pub(crate) struct GroupRow {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
     pub kind: GroupKind,
+    pub owner_id: Option<Uuid>,
     pub created_at: OffsetDateTime,
 }
 
-impl From<GroupRow> for Group {
-    fn from(r: GroupRow) -> Self {
-        Group {
+impl TryFrom<GroupRow> for Group {
+    type Error = StoreError;
+
+    fn try_from(r: GroupRow) -> Result<Self, StoreError> {
+        Ok(Group {
             id: id(r.id),
             name: r.name,
             description: r.description,
             kind: r.kind.into(),
+            owner: id(r.owner_id.ok_or_else(|| {
+                StoreError::Backend("unowned group — boot adoption has not run".into())
+            })?),
             created_at: r.created_at,
-        }
+        })
     }
 }
 

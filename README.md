@@ -96,8 +96,18 @@ allowed = ["singulared"]   # optional handle allowlist; absent = the IdP decides
 ```
 
 The login screen then offers "Sign in with …" beside the token paste.
-Every authenticated user currently sees everything — multi-user today
-means a shared-trust team; per-group authorization is a later milestone.
+
+Authorization is group-based: every group has exactly one owner and a
+flat member list, and **membership is visibility** — you see the groups
+you own or belong to, and nothing else exists for you (projects,
+decisions, sessions, and signals all inherit the group's boundary;
+expert signal detection never crosses it). The owner manages membership:
+`POST /api/v1/groups/{id}/members {"handle": "..."}` adds an existing
+user (signing in once is what creates a user — there are no pending
+invites yet), `DELETE .../members/{user}` removes one (members can
+remove themselves). Pre-ACL databases are adopted at boot: ownerless
+groups become the deployment user's. Owner transfer and invitations for
+not-yet-registered users are the next step of the ownership model.
 
 ## Development
 

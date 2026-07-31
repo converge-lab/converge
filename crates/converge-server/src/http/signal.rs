@@ -6,18 +6,20 @@
 //! signals (either end) live at `/decisions/{id}/signals` — a read-only
 //! relation projection, per the REST-shape decision.
 
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    Author, DecisionId, NewSignal, Page, Pagination, Signal, SignalFilter, SignalId, SignalStatus,
-    Storage, StoreError,
+    Author, DecisionId, NewSignal, Page, Pagination, Scope, Signal, SignalFilter, SignalId,
+    SignalStatus, Storage, StoreError,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::error::Result;
+use crate::auth::Caller;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -28,9 +30,10 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
 
 async fn add<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Json(new): Json<NewSignal>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let id = store.signal_add(new).await?;
+    let id = store.signal_add(Scope::User(caller.user), new).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
@@ -38,19 +41,26 @@ async fn add<S: Storage>(
 /// decision match either end), paged by `?limit=&cursor=`.
 async fn list<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Query(filter): Query<SignalFilter>,
     Query(page): Query<Pagination<SignalId>>,
 ) -> Result<Json<Page<Signal>>> {
-    let items = store.signal_list(filter, page.clone()).await?;
+    let items = store
+        .signal_list(Scope::User(caller.user), filter, page.clone())
+        .await?;
     Ok(Json(Page::new(items, &page, |s| s.id.to_string())))
 }
 
 async fn fetch<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<SignalId>,
 ) -> Result<Json<Signal>> {
     Ok(Json(
-        store.signal_get(id).await?.ok_or(StoreError::NotFound)?,
+        store
+            .signal_get(Scope::User(caller.user), id)
+            .await?
+            .ok_or(StoreError::NotFound)?,
     ))
 }
 
@@ -63,10 +73,13 @@ struct Resolve {
 
 async fn resolve<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<SignalId>,
     Json(resolve): Json<Resolve>,
 ) -> Result<StatusCode> {
-    store.signal_resolve(id, resolve.status, resolve.by).await?;
+    store
+        .signal_resolve(Scope::User(caller.user), id, resolve.status, resolve.by)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -75,6 +88,7 @@ async fn resolve<S: Storage>(
 /// must exist — an unknown decision is 404, not `[]`.
 async fn by_decision<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<DecisionId>,
     Query(mut filter): Query<SignalFilter>,
     Query(page): Query<Pagination<SignalId>>,
@@ -85,8 +99,12 @@ async fn by_decision<S: Storage>(
         )
         .into());
     }
-    store.decision_get(id).await?.ok_or(StoreError::NotFound)?;
+    let scope = Scope::User(caller.user);
+    store
+        .decision_get(scope, id)
+        .await?
+        .ok_or(StoreError::NotFound)?;
     filter.decision = Some(id);
-    let items = store.signal_list(filter, page.clone()).await?;
+    let items = store.signal_list(scope, filter, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |s| s.id.to_string())))
 }

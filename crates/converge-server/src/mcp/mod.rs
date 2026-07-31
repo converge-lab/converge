@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use converge_storage::{
     AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
-    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, SessionId,
-    SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
+    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, Scope,
+    SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -255,14 +255,15 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(_req): Parameters<ProjectList>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let groups = self
             .store
-            .group_list(Pagination::default())
+            .group_list(scope, Pagination::default())
             .await
             .map_err(map_err)?;
         let projects = self
             .store
-            .project_list(Default::default(), Pagination::default())
+            .project_list(scope, Default::default(), Pagination::default())
             .await
             .map_err(map_err)?;
         let map: Vec<_> = groups
@@ -298,14 +299,15 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(req): Parameters<ProjectMatch>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let groups = self
             .store
-            .group_list(Pagination::default())
+            .group_list(scope, Pagination::default())
             .await
             .map_err(map_err)?;
         let projects = self
             .store
-            .project_list(Default::default(), Pagination::default())
+            .project_list(scope, Default::default(), Pagination::default())
             .await
             .map_err(map_err)?;
 
@@ -371,12 +373,13 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(req): Parameters<ProjectBind>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let (id, name) = match (req.project_id.as_deref(), req.name) {
             (Some(id), None) => {
                 let id: ProjectId = parse_id(id, "project_id")?;
                 let project = self
                     .store
-                    .project_get(id)
+                    .project_get(scope, id)
                     .await
                     .map_err(map_err)?
                     .ok_or_else(|| McpError::invalid_params("unknown project_id", None))?;
@@ -385,7 +388,7 @@ impl<S: Storage + 'static> Memory<S> {
             (None, Some(name)) => {
                 let groups = self
                     .store
-                    .group_list(Pagination::default())
+                    .group_list(scope, Pagination::default())
                     .await
                     .map_err(map_err)?;
                 let group = match (req.group_id.as_deref(), groups.len()) {
@@ -404,11 +407,14 @@ impl<S: Storage + 'static> Memory<S> {
                 };
                 let id = self
                     .store
-                    .project_add(NewProject {
-                        group_id: group,
-                        name: name.clone(),
-                        description: None,
-                    })
+                    .project_add(
+                        scope,
+                        NewProject {
+                            group_id: group,
+                            name: name.clone(),
+                            description: None,
+                        },
+                    )
                     .await
                     .map_err(map_err)?;
                 (id, name)
@@ -456,12 +462,15 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let id = self
             .store
-            .session_ensure(NewSession {
-                project_id,
-                kind,
-                external: req.external,
-                title: req.title,
-            })
+            .session_ensure(
+                self.scope().await?,
+                NewSession {
+                    project_id,
+                    kind,
+                    external: req.external,
+                    title: req.title,
+                },
+            )
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "session_id": id }))
@@ -490,7 +499,7 @@ impl<S: Storage + 'static> Memory<S> {
             .collect();
         let ids = self
             .store
-            .message_add(session, messages)
+            .message_add(self.scope().await?, session, messages)
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "message_ids": ids }))
@@ -521,30 +530,37 @@ impl<S: Storage + 'static> Memory<S> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Authorship: the deployment user working through the calling
-        // agent (see `caller`).
+        // agent (see `caller`); the same user is the write's scope.
         let author = self.caller(&context).await?;
+        let scope = match author {
+            Author::UserViaAgent { user, .. } | Author::User(user) => Scope::User(user),
+            Author::Agent(_) => Scope::System,
+        };
 
         let id = self
             .store
-            .decision_add(NewDecision {
-                project_id,
-                status,
-                title: req.title,
-                summary: req.summary,
-                context: req.context,
-                consequences: req.consequences,
-                alternatives: req
-                    .alternatives
-                    .into_iter()
-                    .map(|a| converge_storage::Alternative {
-                        option: a.option,
-                        why_rejected: a.why_rejected,
-                    })
-                    .collect(),
-                authors: vec![author],
-                supersedes,
-                evidence,
-            })
+            .decision_add(
+                scope,
+                NewDecision {
+                    project_id,
+                    status,
+                    title: req.title,
+                    summary: req.summary,
+                    context: req.context,
+                    consequences: req.consequences,
+                    alternatives: req
+                        .alternatives
+                        .into_iter()
+                        .map(|a| converge_storage::Alternative {
+                            option: a.option,
+                            why_rejected: a.why_rejected,
+                        })
+                        .collect(),
+                    authors: vec![author],
+                    supersedes,
+                    evidence,
+                },
+            )
             .await
             .map_err(map_err)?;
         self.expert.detect(id);
@@ -558,15 +574,16 @@ impl<S: Storage + 'static> Memory<S> {
         Parameters(req): Parameters<DecisionGet>,
     ) -> Result<CallToolResult, McpError> {
         let id: DecisionId = parse_id(&req.decision_id, "decision_id")?;
+        let scope = self.scope().await?;
         let decision = self
             .store
-            .decision_get(id)
+            .decision_get(scope, id)
             .await
             .map_err(map_err)?
             .ok_or_else(|| McpError::invalid_params("decision not found", None))?;
         let edges = self
             .store
-            .decision_edges(id)
+            .decision_edges(scope, id)
             .await
             .map_err(map_err)?
             .unwrap_or_default();
@@ -598,7 +615,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_list(filter, page)
+            .decision_list(self.scope().await?, filter, page)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -647,7 +664,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_search(&req.query, filter, req.limit)
+            .decision_search(self.scope().await?, &req.query, filter, req.limit)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -691,6 +708,7 @@ impl<S: Storage + 'static> Memory<S> {
         let signals = self
             .store
             .signal_list(
+                self.scope().await?,
                 filter,
                 Pagination {
                     limit: req.limit,
@@ -731,11 +749,26 @@ impl<S: Storage + 'static> Memory<S> {
         let id: SignalId = parse_id(&req.signal_id, "signal_id")?;
         let status = parse_signal_status(&req.status)?;
         let by = self.caller(&context).await?;
+        let scope = match by {
+            Author::UserViaAgent { user, .. } | Author::User(user) => Scope::User(user),
+            Author::Agent(_) => Scope::System,
+        };
         self.store
-            .signal_resolve(id, status, by)
+            .signal_resolve(scope, id, status, by)
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "signal_id": id, "status": status }))
+    }
+
+    /// The caller's visibility scope: the deployment user this MCP
+    /// surface authenticates as.
+    async fn scope(&self) -> Result<Scope, McpError> {
+        let user = self
+            .store
+            .user_login(self.me.clone())
+            .await
+            .map_err(map_err)?;
+        Ok(Scope::User(user))
     }
 
     /// The judging/authoring identity: the deployment user working

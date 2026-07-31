@@ -122,7 +122,8 @@ async fn project_crud() {
     let (_, edited) = send(&app, "GET", &format!("/api/v1/projects/{id}"), None).await;
     assert_eq!(edited["description"], "the memory server");
 
-    // A project pointing at a missing group is the caller's error: 400.
+    // A project pointing at a missing group is 404 — under the ACL,
+    // missing and invisible are deliberately the same answer.
     let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     let (status, body) = send(
         &app,
@@ -131,14 +132,7 @@ async fn project_crud() {
         Some(json!({ "group_id": missing, "name": "orphan", "description": null })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "invalid");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing referenced record")
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 #[tokio::test]

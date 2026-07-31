@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id from projects where id = $1 for update",
+  "query": "select id from projects\n               where id = $1\n                 and ($2::uuid is null or group_visible(group_id, $2))\n               for update",
   "describe": {
     "columns": [
       {
@@ -11,6 +11,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -18,5 +19,5 @@
       false
     ]
   },
-  "hash": "370ed7fc1af2567499f3d278fe07892188c3387d64e589df0423beeec6072f21"
+  "hash": "4128a8ec50f7daff3c39e6694a37f637acc1304b06ac407b903e590b0defed9d"
 }

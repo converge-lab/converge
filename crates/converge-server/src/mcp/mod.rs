@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use converge_storage::{
     AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
-    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, SessionId,
-    SessionKind, Storage, StoreError,
+    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, Scope,
+    SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -41,8 +41,9 @@ use serde::{Deserialize, Serialize};
 pub fn service<S: Storage + 'static>(
     store: S,
     me: Identity,
+    expert: crate::expert::Expert<S>,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
-    let memory = Memory::new(store, me);
+    let memory = Memory::new(store, me, expert);
     // Stateless + plain-JSON POST responses: nothing to orphan on
     // restart, and simple JSON survives proxies better than SSE.
     let mut config = StreamableHttpServerConfig::default();
@@ -62,6 +63,7 @@ pub struct Memory<S> {
     tool_router: ToolRouter<Self>,
     store: S,
     me: Identity,
+    expert: crate::expert::Expert<S>,
 }
 
 // ---- tool wire types (ids as strings; instants never accepted) -----------
@@ -141,6 +143,34 @@ pub struct DecisionSearch {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct SignalList {
+    /// Signals touching this project on either end.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Signals touching this decision on either end.
+    #[serde(default)]
+    pub decision_id: Option<String>,
+    /// proposed | confirmed | dismissed.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// watch | coordinate | conflict.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// Newest first; omit for everything.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SignalResolve {
+    /// The signal to judge (see `signal_list`).
+    pub signal_id: String,
+    /// The verdict: `confirmed` (it holds — act on it) or `dismissed`
+    /// (wrong or not worth acting on; it will NOT be raised again).
+    pub status: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectList {}
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -210,11 +240,12 @@ pub struct ProjectDismiss {
 
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
-    pub fn new(store: S, me: Identity) -> Self {
+    pub fn new(store: S, me: Identity, expert: crate::expert::Expert<S>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store,
             me,
+            expert,
         }
     }
 
@@ -224,14 +255,15 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(_req): Parameters<ProjectList>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let groups = self
             .store
-            .group_list(Pagination::default())
+            .group_list(scope, Pagination::default())
             .await
             .map_err(map_err)?;
         let projects = self
             .store
-            .project_list(Default::default(), Pagination::default())
+            .project_list(scope, Default::default(), Pagination::default())
             .await
             .map_err(map_err)?;
         let map: Vec<_> = groups
@@ -267,14 +299,15 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(req): Parameters<ProjectMatch>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let groups = self
             .store
-            .group_list(Pagination::default())
+            .group_list(scope, Pagination::default())
             .await
             .map_err(map_err)?;
         let projects = self
             .store
-            .project_list(Default::default(), Pagination::default())
+            .project_list(scope, Default::default(), Pagination::default())
             .await
             .map_err(map_err)?;
 
@@ -340,12 +373,13 @@ impl<S: Storage + 'static> Memory<S> {
         &self,
         Parameters(req): Parameters<ProjectBind>,
     ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope().await?;
         let (id, name) = match (req.project_id.as_deref(), req.name) {
             (Some(id), None) => {
                 let id: ProjectId = parse_id(id, "project_id")?;
                 let project = self
                     .store
-                    .project_get(id)
+                    .project_get(scope, id)
                     .await
                     .map_err(map_err)?
                     .ok_or_else(|| McpError::invalid_params("unknown project_id", None))?;
@@ -354,7 +388,7 @@ impl<S: Storage + 'static> Memory<S> {
             (None, Some(name)) => {
                 let groups = self
                     .store
-                    .group_list(Pagination::default())
+                    .group_list(scope, Pagination::default())
                     .await
                     .map_err(map_err)?;
                 let group = match (req.group_id.as_deref(), groups.len()) {
@@ -373,11 +407,14 @@ impl<S: Storage + 'static> Memory<S> {
                 };
                 let id = self
                     .store
-                    .project_add(NewProject {
-                        group_id: group,
-                        name: name.clone(),
-                        description: None,
-                    })
+                    .project_add(
+                        scope,
+                        NewProject {
+                            group_id: group,
+                            name: name.clone(),
+                            description: None,
+                        },
+                    )
                     .await
                     .map_err(map_err)?;
                 (id, name)
@@ -425,12 +462,15 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let id = self
             .store
-            .session_ensure(NewSession {
-                project_id,
-                kind,
-                external: req.external,
-                title: req.title,
-            })
+            .session_ensure(
+                self.scope().await?,
+                NewSession {
+                    project_id,
+                    kind,
+                    external: req.external,
+                    title: req.title,
+                },
+            )
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "session_id": id }))
@@ -459,7 +499,7 @@ impl<S: Storage + 'static> Memory<S> {
             .collect();
         let ids = self
             .store
-            .message_add(session, messages)
+            .message_add(self.scope().await?, session, messages)
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "message_ids": ids }))
@@ -490,51 +530,40 @@ impl<S: Storage + 'static> Memory<S> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Authorship: the deployment user working through the calling
-        // agent. Client info is the best identity the transport offers;
-        // stateless requests may not carry it — then the generic tool
-        // agent stands in.
-        let user = self
-            .store
-            .user_login(self.me.clone())
-            .await
-            .map_err(map_err)?;
-        let client = context
-            .peer
-            .peer_info()
-            .map(|info| info.client_info.name.clone())
-            .unwrap_or_else(|| "mcp".into());
-        let agent = self
-            .store
-            .agent_ensure(NewAgent {
-                kind: AgentKind::Tool,
-                name: client,
-            })
-            .await
-            .map_err(map_err)?;
+        // agent (see `caller`); the same user is the write's scope.
+        let author = self.caller(&context).await?;
+        let scope = match author {
+            Author::UserViaAgent { user, .. } | Author::User(user) => Scope::User(user),
+            Author::Agent(_) => Scope::System,
+        };
 
         let id = self
             .store
-            .decision_add(NewDecision {
-                project_id,
-                status,
-                title: req.title,
-                summary: req.summary,
-                context: req.context,
-                consequences: req.consequences,
-                alternatives: req
-                    .alternatives
-                    .into_iter()
-                    .map(|a| converge_storage::Alternative {
-                        option: a.option,
-                        why_rejected: a.why_rejected,
-                    })
-                    .collect(),
-                authors: vec![Author::UserViaAgent { user, agent }],
-                supersedes,
-                evidence,
-            })
+            .decision_add(
+                scope,
+                NewDecision {
+                    project_id,
+                    status,
+                    title: req.title,
+                    summary: req.summary,
+                    context: req.context,
+                    consequences: req.consequences,
+                    alternatives: req
+                        .alternatives
+                        .into_iter()
+                        .map(|a| converge_storage::Alternative {
+                            option: a.option,
+                            why_rejected: a.why_rejected,
+                        })
+                        .collect(),
+                    authors: vec![author],
+                    supersedes,
+                    evidence,
+                },
+            )
             .await
             .map_err(map_err)?;
+        self.expert.detect(id);
         json_result(&serde_json::json!({ "decision_id": id }))
     }
 
@@ -545,15 +574,16 @@ impl<S: Storage + 'static> Memory<S> {
         Parameters(req): Parameters<DecisionGet>,
     ) -> Result<CallToolResult, McpError> {
         let id: DecisionId = parse_id(&req.decision_id, "decision_id")?;
+        let scope = self.scope().await?;
         let decision = self
             .store
-            .decision_get(id)
+            .decision_get(scope, id)
             .await
             .map_err(map_err)?
             .ok_or_else(|| McpError::invalid_params("decision not found", None))?;
         let edges = self
             .store
-            .decision_edges(id)
+            .decision_edges(scope, id)
             .await
             .map_err(map_err)?
             .unwrap_or_default();
@@ -585,7 +615,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_list(filter, page)
+            .decision_list(self.scope().await?, filter, page)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -634,7 +664,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_search(&req.query, filter, req.limit)
+            .decision_search(self.scope().await?, &req.query, filter, req.limit)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -650,6 +680,120 @@ impl<S: Storage + 'static> Memory<S> {
             })
             .collect();
         json_result(&items)
+    }
+
+    #[tool(description = "List signals — observations that one decision \
+        affects others (tier: watch < coordinate < conflict; status: \
+        proposed = awaiting judgment). project_id/decision_id match either \
+        end. Surface proposed signals to the user, then `signal_resolve` \
+        with their verdict.")]
+    async fn signal_list(
+        &self,
+        Parameters(req): Parameters<SignalList>,
+    ) -> Result<CallToolResult, McpError> {
+        let filter = SignalFilter {
+            project: req
+                .project_id
+                .as_deref()
+                .map(|s| parse_id::<ProjectId>(s, "project_id"))
+                .transpose()?,
+            decision: req
+                .decision_id
+                .as_deref()
+                .map(|s| parse_id::<DecisionId>(s, "decision_id"))
+                .transpose()?,
+            status: req.status.as_deref().map(parse_signal_status).transpose()?,
+            tier: req.tier.as_deref().map(parse_tier).transpose()?,
+        };
+        let signals = self
+            .store
+            .signal_list(
+                self.scope().await?,
+                filter,
+                Pagination {
+                    limit: req.limit,
+                    cursor: None,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        let items: Vec<_> = signals
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "signal_id": s.id,
+                    "source": s.source,
+                    "targets": s.targets,
+                    "kind": s.kind,
+                    "tier": s.tier,
+                    "status": s.status,
+                    "title": s.title,
+                    "text": s.text,
+                    "consequence": s.consequence,
+                    "recommendation": s.recommendation,
+                })
+            })
+            .collect();
+        json_result(&items)
+    }
+
+    #[tool(description = "Resolve a signal with the user's verdict: \
+        `confirmed` (the observation holds — act on it) or `dismissed` \
+        (wrong or not worth acting on — it will not be raised again). \
+        Ask the user before resolving; never judge on their behalf.")]
+    async fn signal_resolve(
+        &self,
+        Parameters(req): Parameters<SignalResolve>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let id: SignalId = parse_id(&req.signal_id, "signal_id")?;
+        let status = parse_signal_status(&req.status)?;
+        let by = self.caller(&context).await?;
+        let scope = match by {
+            Author::UserViaAgent { user, .. } | Author::User(user) => Scope::User(user),
+            Author::Agent(_) => Scope::System,
+        };
+        self.store
+            .signal_resolve(scope, id, status, by)
+            .await
+            .map_err(map_err)?;
+        json_result(&serde_json::json!({ "signal_id": id, "status": status }))
+    }
+
+    /// The caller's visibility scope: the deployment user this MCP
+    /// surface authenticates as.
+    async fn scope(&self) -> Result<Scope, McpError> {
+        let user = self
+            .store
+            .user_login(self.me.clone())
+            .await
+            .map_err(map_err)?;
+        Ok(Scope::User(user))
+    }
+
+    /// The judging/authoring identity: the deployment user working
+    /// through the calling agent (client info when the transport carries
+    /// it, the generic tool agent otherwise).
+    async fn caller(&self, context: &RequestContext<RoleServer>) -> Result<Author, McpError> {
+        let user = self
+            .store
+            .user_login(self.me.clone())
+            .await
+            .map_err(map_err)?;
+        let client = context
+            .peer
+            .peer_info()
+            .map(|info| info.client_info.name.clone())
+            .unwrap_or_else(|| "mcp".into());
+        let agent = self
+            .store
+            .agent_ensure(NewAgent {
+                kind: AgentKind::Tool,
+                name: client,
+            })
+            .await
+            .map_err(map_err)?;
+        Ok(Author::UserViaAgent { user, agent })
     }
 }
 
@@ -711,6 +855,30 @@ fn parse_status(s: &str) -> Result<DecisionStatus, McpError> {
         "rejected" => Ok(DecisionStatus::Rejected),
         other => Err(McpError::invalid_params(
             format!("invalid status: {other}"),
+            None,
+        )),
+    }
+}
+
+fn parse_signal_status(s: &str) -> Result<SignalStatus, McpError> {
+    match s {
+        "proposed" => Ok(SignalStatus::Proposed),
+        "confirmed" => Ok(SignalStatus::Confirmed),
+        "dismissed" => Ok(SignalStatus::Dismissed),
+        other => Err(McpError::invalid_params(
+            format!("invalid status: {other} (proposed | confirmed | dismissed)"),
+            None,
+        )),
+    }
+}
+
+fn parse_tier(s: &str) -> Result<Tier, McpError> {
+    match s {
+        "watch" => Ok(Tier::Watch),
+        "coordinate" => Ok(Tier::Coordinate),
+        "conflict" => Ok(Tier::Conflict),
+        other => Err(McpError::invalid_params(
+            format!("invalid tier: {other} (watch | coordinate | conflict)"),
             None,
         )),
     }

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select s.id from sessions s\n               join projects p on p.id = s.project_id\n               where s.id = $1\n                 and ($2::uuid is null or group_visible(p.group_id, $2))\n               for update of s",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9f63898b3f47f6784d20a5b92005824d67e9a747c62a39773f6ba234baed4914"
+}

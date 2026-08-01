@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into groups (id, name, description, kind) values ($1, $2, $3, $4)",
+  "query": "insert into groups (id, name, description, kind, owner_id)\n               values ($1, $2, $3, $4, $5)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -18,10 +18,11 @@
               ]
             }
           }
-        }
+        },
+        "Uuid"
       ]
     },
     "nullable": []
   },
-  "hash": "f0b34cdc61a37bf51d4a83c9097f6e7383758e5913fd5a8729eb2e0fdc980f6b"
+  "hash": "05f24d7ebd0602c5858d3dc7d5efa1dc2429e7e68007a42bcda92f2917817a4a"
 }

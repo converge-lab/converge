@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, source, kind, tier as \"tier: _\", status as \"status: _\",\n                      title, text, consequence, recommendation,\n                      produced_user, produced_agent, resolved_user, resolved_agent,\n                      captured_at\n               from signals where id = $1",
+  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               join decisions d on d.id = s.source\n               join projects p on p.id = d.project_id\n               where s.id = $1\n                 and ($2::uuid is null or group_visible(p.group_id, $2))",
   "describe": {
     "columns": [
       {
@@ -98,6 +98,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -118,5 +119,5 @@
       false
     ]
   },
-  "hash": "cdb7b93ebf5c9d42fb63dbcd6b474533db2648c7c749bab4b574827aef14a761"
+  "hash": "09b04e050e852939df7b93791432347112741a4ac44a5c5d0626b2faaa27136c"
 }

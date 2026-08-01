@@ -26,6 +26,7 @@ pub mod agent;
 pub mod decision;
 pub mod group;
 pub mod ids;
+pub mod membership;
 pub mod message;
 pub mod project;
 pub mod session;
@@ -42,12 +43,39 @@ pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{
     AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, SignalId, TokenId, UserId,
 };
+pub use membership::{Member, Memberships};
 pub use message::{Message, Messages, NewMessage};
 pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
 pub use session::{NewSession, Session, SessionFilter, SessionKind, Sessions};
 pub use signal::{NewSignal, Signal, SignalFilter, SignalStatus, Signals, Tier};
 pub use token::{Minted, NewToken, Token, Tokens};
 pub use user::{AuthInfo, Identity, User, Users};
+
+/// Who is asking — the visibility scope every read and validated write
+/// carries. `User` enforces the ACL (visibility = group owner OR
+/// member); `System` is the trusted internal caller (boot, the expert's
+/// group-scoped retrieval, invite claiming) and sees everything.
+///
+/// An explicit parameter, not ambient state: every callsite names its
+/// authority, and a handler that forgets to thread the caller fails to
+/// compile instead of leaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    System,
+    User(UserId),
+}
+
+impl Scope {
+    /// The enforcing user, if any — `None` for `System`. Backends bind
+    /// this as one nullable parameter: `NULL` disables the visibility
+    /// predicate.
+    pub fn user(self) -> Option<UserId> {
+        match self {
+            Scope::System => None,
+            Scope::User(id) => Some(id),
+        }
+    }
+}
 
 /// Cursor pagination for list reads, generic over the listed resource's id.
 /// Lists are newest-first; `cursor` is the last id of the previous page and
@@ -127,6 +155,7 @@ pub trait Storage:
     + Sessions
     + Messages
     + Signals
+    + Memberships
     + Clone
     + Send
     + Sync
@@ -143,6 +172,7 @@ impl<
         + Sessions
         + Messages
         + Signals
+        + Memberships
         + Clone
         + Send
         + Sync,

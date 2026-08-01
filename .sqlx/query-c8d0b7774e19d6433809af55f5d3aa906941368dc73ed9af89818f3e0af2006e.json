@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into sessions (id, project_id, kind, external, title)\n               values ($1, $2, $3, $4, $5)\n               on conflict (kind, external) do update set title = excluded.title\n               returning id",
+  "query": "insert into sessions (id, project_id, kind, external, title)\n               values ($1, $2, $3, $4, $5)\n               on conflict (kind, external) do update set title = excluded.title\n               where ($6::uuid is null\n                      or group_visible((select p.group_id from projects p\n                                        where p.id = sessions.project_id), $6))\n               returning id",
   "describe": {
     "columns": [
       {
@@ -27,12 +27,13 @@
           }
         },
         "Text",
-        "Text"
+        "Text",
+        "Uuid"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "b028235a4b0919313e1dd53b099b1f910f3d96a741e9019b65a381d0ddd62a8b"
+  "hash": "c8d0b7774e19d6433809af55f5d3aa906941368dc73ed9af89818f3e0af2006e"
 }

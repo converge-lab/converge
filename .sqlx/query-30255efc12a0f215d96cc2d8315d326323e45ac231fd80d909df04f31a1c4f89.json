@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where ($1::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $1)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $1))\n                 and ($2::uuid is null\n                      or s.source = $2\n                      or exists (select 1 from signal_targets t\n                                 where t.signal_id = s.id and t.target = $2))\n                 and ($3::signal_status is null or s.status = $3)\n                 and ($4::signal_tier is null or s.tier = $4)\n                 and ($6::uuid is null or s.id < $6)\n               order by s.id desc\n               limit $5",
+  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where ($1::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $1)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $1))\n                 and ($2::uuid is null\n                      or s.source = $2\n                      or exists (select 1 from signal_targets t\n                                 where t.signal_id = s.id and t.target = $2))\n                 and ($3::signal_status is null or s.status = $3)\n                 and ($4::signal_tier is null or s.tier = $4)\n                 and ($6::uuid is null or s.id < $6)\n                 and ($7::uuid is null\n                      or group_visible((select p.group_id from decisions d\n                                        join projects p on p.id = d.project_id\n                                        where d.id = s.source), $7))\n               order by s.id desc\n               limit $5",
   "describe": {
     "columns": [
       {
@@ -125,6 +125,7 @@
           }
         },
         "Int8",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -145,5 +146,5 @@
       false
     ]
   },
-  "hash": "99617ba75a09deaecfa078ebd705fdecbf013e3deee7710a5069026dba50638f"
+  "hash": "30255efc12a0f215d96cc2d8315d326323e45ac231fd80d909df04f31a1c4f89"
 }

@@ -42,6 +42,12 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
+        // No expert jobs: an inert detector (never writes, never spawns).
+        let expert = converge_server::Expert::new(
+            store.clone(),
+            converge_expert::Registry::default(),
+            converge_storage::AgentId::new(),
+        );
         axum::serve(
             listener,
             app(
@@ -51,6 +57,7 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
                 None,
                 None,
                 None,
+                expert,
             ),
         )
         .await

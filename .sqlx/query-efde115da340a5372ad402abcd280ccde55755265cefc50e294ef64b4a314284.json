@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id as \"id!\", project_id as \"project_id!\", status as \"status!: _\",\n                      title as \"title!\", summary as \"summary!\", context, consequences,\n                      alternatives as \"alternatives!\", captured_at as \"captured_at!\"\n               from (\n                   select d.id, d.project_id, p.group_id,\n                          case when exists (select 1 from decision_supersedes s\n                                            where s.supersedes_id = d.id)\n                               then 'superseded'::decision_status\n                               else d.status\n                          end as status,\n                          d.title, d.summary, d.context, d.consequences,\n                          d.alternatives, d.captured_at, d.search\n                   from decisions d\n                   join projects p on p.id = d.project_id\n               ) d\n               where d.search @@ websearch_to_tsquery('english', $1)\n                 and ($2::uuid is null or d.project_id = $2)\n                 and ($3::uuid is null or d.group_id = $3)\n                 and ($4::decision_status is null or d.status = $4)\n               order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,\n                        d.id desc\n               limit $5",
+  "query": "select id as \"id!\", project_id as \"project_id!\", status as \"status!: _\",\n                      title as \"title!\", summary as \"summary!\", context, consequences,\n                      alternatives as \"alternatives!\", captured_at as \"captured_at!\"\n               from (\n                   select d.id, d.project_id, p.group_id,\n                          case when exists (select 1 from decision_supersedes s\n                                            where s.supersedes_id = d.id)\n                               then 'superseded'::decision_status\n                               else d.status\n                          end as status,\n                          d.title, d.summary, d.context, d.consequences,\n                          d.alternatives, d.captured_at, d.search\n                   from decisions d\n                   join projects p on p.id = d.project_id\n               ) d\n               where d.search @@ websearch_to_tsquery('english', $1)\n                 and ($2::uuid is null or d.project_id = $2)\n                 and ($3::uuid is null or d.group_id = $3)\n                 and ($4::decision_status is null or d.status = $4)\n                 and ($6::uuid is null or group_visible(d.group_id, $6))\n               order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,\n                        d.id desc\n               limit $5",
   "describe": {
     "columns": [
       {
@@ -81,7 +81,8 @@
             }
           }
         },
-        "Int8"
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -96,5 +97,5 @@
       false
     ]
   },
-  "hash": "2d17540e2f792cb7bd9f280b47d0ad1d5e4954014c768ac4fc37e3b153d0112a"
+  "hash": "efde115da340a5372ad402abcd280ccde55755265cefc50e294ef64b4a314284"
 }

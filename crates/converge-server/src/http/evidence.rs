@@ -8,17 +8,19 @@
 //! — the one list in the API that isn't newest-first. A decision's cited
 //! excerpts live at `/decisions/{id}/sources`.
 
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    DecisionId, Message, MessageId, NewMessage, NewSession, Page, Pagination, Session,
+    DecisionId, Message, MessageId, NewMessage, NewSession, Page, Pagination, Scope, Session,
     SessionFilter, SessionId, Source, Storage, StoreError,
 };
 use serde_json::{Value, json};
 
 use super::error::Result;
+use crate::auth::Caller;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -35,37 +37,46 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
 /// way — the caller asked for the session to exist, and now it does.
 async fn ensure<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Json(new): Json<NewSession>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let id = store.session_ensure(new).await?;
+    let id = store.session_ensure(Scope::User(caller.user), new).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
 async fn list<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Query(filter): Query<SessionFilter>,
     Query(page): Query<Pagination<SessionId>>,
 ) -> Result<Json<Page<Session>>> {
-    let items = store.session_list(filter, page.clone()).await?;
+    let items = store
+        .session_list(Scope::User(caller.user), filter, page.clone())
+        .await?;
     Ok(Json(Page::new(items, &page, |s| s.id.to_string())))
 }
 
 async fn fetch<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<SessionId>,
 ) -> Result<Json<Session>> {
     Ok(Json(
-        store.session_get(id).await?.ok_or(StoreError::NotFound)?,
+        store
+            .session_get(Scope::User(caller.user), id)
+            .await?
+            .ok_or(StoreError::NotFound)?,
     ))
 }
 
 /// Append a batch to the stream; answers the new message ids, in order.
 async fn append<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<SessionId>,
     Json(new): Json<Vec<NewMessage>>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let ids = store.message_add(id, new).await?;
+    let ids = store.message_add(Scope::User(caller.user), id, new).await?;
     Ok((StatusCode::CREATED, Json(json!({ "ids": ids }))))
 }
 
@@ -73,11 +84,16 @@ async fn append<S: Storage>(
 /// it. The bound session must exist — unknown is 404, not `[]`.
 async fn stream<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<SessionId>,
     Query(page): Query<Pagination<MessageId>>,
 ) -> Result<Json<Page<Message>>> {
-    store.session_get(id).await?.ok_or(StoreError::NotFound)?;
-    let items = store.message_list(id, page.clone()).await?;
+    let scope = Scope::User(caller.user);
+    store
+        .session_get(scope, id)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+    let items = store.message_list(scope, id, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |m| m.id.to_string())))
 }
 
@@ -85,11 +101,12 @@ async fn stream<S: Storage>(
 /// at read time from the stored anchors.
 async fn sources<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<DecisionId>,
 ) -> Result<Json<Vec<Source>>> {
     Ok(Json(
         store
-            .decision_sources(id)
+            .decision_sources(Scope::User(caller.user), id)
             .await?
             .ok_or(StoreError::NotFound)?,
     ))

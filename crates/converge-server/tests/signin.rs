@@ -108,6 +108,12 @@ async fn server(
         public_url: "http://127.0.0.1:8080".into(),
         allowed,
     });
+    // No expert jobs: an inert detector (never writes, never spawns).
+    let expert = converge_server::Expert::new(
+        store.clone(),
+        converge_expert::Registry::default(),
+        converge_storage::AgentId::new(),
+    );
     let app = converge_server::app(
         store,
         me,
@@ -115,6 +121,7 @@ async fn server(
         Some(oidc),
         None,
         None,
+        expert,
     );
     (node, app)
 }

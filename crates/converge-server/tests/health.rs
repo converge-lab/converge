@@ -31,6 +31,14 @@ async fn healthz() {
         handle: "admin".into(),
         name: "Admin".into(),
     };
+    // No expert jobs: an inert detector (never writes, never spawns).
+    let expert = |s: &PgStorage| {
+        converge_server::Expert::new(
+            s.clone(),
+            converge_expert::Registry::default(),
+            converge_storage::AgentId::new(),
+        )
+    };
     let response = app(
         store.clone(),
         me.clone(),
@@ -38,6 +46,7 @@ async fn healthz() {
         None,
         None,
         None,
+        expert(&store),
     )
     .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
     .await
@@ -46,13 +55,15 @@ async fn healthz() {
 
     // Auth is always on: no token and bad tokens are 401 everywhere but
     // healthz; unknown paths under the gate answer 401 before 404.
+    let gated = PgStorage::connect(&url).await.unwrap();
     let gate = app(
-        PgStorage::connect(&url).await.unwrap(),
+        gated.clone(),
         me.clone(),
         Sessions::new(Some("test-session-secret")),
         None,
         None,
         None,
+        expert(&gated),
     );
     for (uri, token) in [
         ("/api/v1/groups", None),
@@ -81,12 +92,13 @@ async fn healthz() {
     std::fs::create_dir_all(&dist).unwrap();
     std::fs::write(dist.join("index.html"), "<title>Converge</title>").unwrap();
     let web = app(
-        store,
+        store.clone(),
         me,
         Sessions::new(Some("test-session-secret")),
         None,
         None,
         Some(&dist),
+        expert(&store),
     );
     for uri in ["/", "/anything-else"] {
         let response = web

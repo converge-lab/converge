@@ -17,7 +17,9 @@ use clap::{Parser, Subcommand};
 use config::ConfigService;
 use converge_server::auth::Sessions;
 use converge_server::{app, auth};
-use converge_storage::{Identity, Pagination, Storage, TokenId};
+use converge_storage::{
+    AgentKind, Agents, Identity, Memberships, NewAgent, Pagination, Storage, TokenId, Users,
+};
 use converge_storage_postgres::PgStorage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -109,12 +111,11 @@ async fn main() -> anyhow::Result<()> {
     let _guard = telemetry::init(&config.log)?;
     info!(sources = ?config.sources, "configuration layers (weakest first, env on top)");
 
-    // Build the expert registry even though nothing consumes it yet: a
-    // bad binding or key command must fail the boot, not the first
-    // signal. The signal pipeline picks it up when it lands.
-    let expert = converge_expert::Registry::new(&config.expert)
+    // Build the expert registry at boot: a bad binding or key command
+    // must fail here, not on the first signal.
+    let registry = converge_expert::Registry::new(&config.expert)
         .context("build the expert registry ([expert] config)")?;
-    for (job, client) in expert.jobs() {
+    for (job, client) in registry.jobs() {
         info!(job, model = client.describe(), "expert job configured");
     }
 
@@ -123,7 +124,24 @@ async fn main() -> anyhow::Result<()> {
     if store.ensure_default_workspace().await? {
         info!("created the default personal workspace (My workspace)");
     }
+    // The ACL backfill: pre-ownership groups (including a fresh default
+    // workspace) belong to the deployment user. Idempotent, every boot.
+    let owner = store.user_login(me.clone()).await?;
+    let adopted = store.adopt(owner).await?;
+    if adopted > 0 {
+        info!(adopted, owner = %owner, "adopted ownerless groups");
+    }
     auth::hint(&store, me.clone()).await?;
+
+    // The expert service: the `expert` agent is what its writes stamp as
+    // produced_by (ensured by natural key — stable across restarts).
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "expert".into(),
+        })
+        .await?;
+    let expert = converge_server::Expert::new(store.clone(), registry, agent);
 
     if let Some(assets) = &config.web.assets {
         info!(assets = %assets.display(), "serving web assets");
@@ -148,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
             oidc,
             config.auth.public_url.clone(),
             config.web.assets.as_deref(),
+            expert,
         ),
     )
     .with_graceful_shutdown(shutdown())

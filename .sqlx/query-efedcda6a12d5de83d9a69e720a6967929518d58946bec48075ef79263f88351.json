@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, name, description, kind as \"kind: _\", created_at\n               from groups\n               where ($1::uuid is null or id < $1)\n               order by id desc\n               limit $2",
+  "query": "select id, name, description, kind as \"kind: _\", owner_id, created_at\n               from groups\n               where id = $1\n                 and ($2::uuid is null or group_visible(id, $2))",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,11 @@
       },
       {
         "ordinal": 4,
+        "name": "owner_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
@@ -42,7 +47,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -50,8 +55,9 @@
       false,
       true,
       false,
+      true,
       false
     ]
   },
-  "hash": "7493400e19afb4eb0bd07e42c6ccf4d202801f57b5457c4d52504940b25d9cb4"
+  "hash": "efedcda6a12d5de83d9a69e720a6967929518d58946bec48075ef79263f88351"
 }

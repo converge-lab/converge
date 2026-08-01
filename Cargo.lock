@@ -698,6 +698,7 @@ name = "converge-client"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "converge-expert",
  "converge-server",
  "converge-storage",
  "converge-storage-postgres",

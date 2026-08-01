@@ -5,8 +5,8 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ids::GroupId;
-use crate::{Pagination, StoreError};
+use crate::ids::{GroupId, UserId};
+use crate::{Pagination, Scope, StoreError};
 
 /// Whether the group is a team space or a single person's space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +23,8 @@ pub struct Group {
     pub name: String,
     pub description: Option<String>,
     pub kind: GroupKind,
+    /// Exactly one owner — implicitly a member, manages membership.
+    pub owner: UserId,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -46,22 +48,36 @@ pub enum GroupEdit {
 }
 
 /// Storage operations on groups.
+///
+/// Reads are scope-filtered (visibility = owner OR member); an invisible
+/// group is `None`/absent, indistinguishable from nonexistent. `group_edit`
+/// is owner-only.
 pub trait Groups {
-    fn group_add(&self, new: NewGroup) -> impl Future<Output = Result<GroupId, StoreError>> + Send;
+    /// Create a group owned by `owner` — the caller, not body data.
+    fn group_add(
+        &self,
+        owner: UserId,
+        new: NewGroup,
+    ) -> impl Future<Output = Result<GroupId, StoreError>> + Send;
 
     fn group_get(
         &self,
+        scope: Scope,
         id: GroupId,
     ) -> impl Future<Output = Result<Option<Group>, StoreError>> + Send;
 
-    /// Groups, newest first.
+    /// Visible groups, newest first.
     fn group_list(
         &self,
+        scope: Scope,
         page: Pagination<GroupId>,
     ) -> impl Future<Output = Result<Vec<Group>, StoreError>> + Send;
 
+    /// Owner-only: a visible non-owner caller gets `Invalid`, an
+    /// outsider `NotFound`.
     fn group_edit(
         &self,
+        scope: Scope,
         id: GroupId,
         edits: Vec<GroupEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::store;
+use common::{newest_first, store};
 use converge_storage::{
     Alternative, Author, DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, Decisions,
     GroupId, GroupKind, Groups, Identity, NewDecision, NewGroup, NewProject, Pagination, ProjectId,
@@ -172,8 +172,12 @@ async fn list_filters() {
         .decision_add(Scope::System, decision(b, "three"))
         .await
         .unwrap();
+    // Ordered expectations are computed (`common::newest_first`): the
+    // list contract is `order by id desc`, which tracks creation order
+    // only to the ULID's millisecond.
+    let by_id = newest_first(&[d1, d2, d3]);
 
-    // No filter: everything, newest first (ULID = time order).
+    // No filter: everything, id-descending.
     let all = store
         .decision_list(
             Scope::System,
@@ -182,10 +186,7 @@ async fn list_filters() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        all.iter().map(|d| d.id).collect::<Vec<_>>(),
-        vec![d3, d2, d1]
-    );
+    assert_eq!(all.iter().map(|d| d.id).collect::<Vec<_>>(), by_id);
 
     let of_a = store
         .decision_list(
@@ -198,7 +199,10 @@ async fn list_filters() {
         )
         .await
         .unwrap();
-    assert_eq!(of_a.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d2, d1]);
+    assert_eq!(
+        of_a.iter().map(|d| d.id).collect::<Vec<_>>(),
+        newest_first(&[d1, d2])
+    );
 
     let of_group_b = store
         .decision_list(
@@ -240,24 +244,23 @@ async fn list_filters() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        latest.iter().map(|d| d.id).collect::<Vec<_>>(),
-        vec![d3, d2]
-    );
+    assert_eq!(latest.iter().map(|d| d.id).collect::<Vec<_>>(), by_id[..2]);
 
-    // Cursor paging: strictly older than the cursor, newest first.
+    // Cursor paging: strictly older (by id) than the cursor, descending —
+    // the expected page is computed from the same total order.
+    let cursor = by_id[1];
     let paged = store
         .decision_list(
             Scope::System,
             DecisionFilter::default(),
             Pagination {
                 limit: Some(2),
-                cursor: Some(d2),
+                cursor: Some(cursor),
             },
         )
         .await
         .unwrap();
-    assert_eq!(paged.iter().map(|d| d.id).collect::<Vec<_>>(), vec![d1]);
+    assert_eq!(paged.iter().map(|d| d.id).collect::<Vec<_>>(), by_id[2..]);
 }
 
 #[tokio::test]

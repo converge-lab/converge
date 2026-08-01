@@ -1,10 +1,16 @@
 //! PostgreSQL backend for Converge — implements [`converge_storage::Storage`].
 //!
 //! Ids are ULIDs stored as native `uuid` (same 128 bits, converted at this
-//! boundary); the timestamp-first ULID layout keeps `order by id` = capture
-//! order. Queries are compile-time checked (`sqlx::query!`) against the
-//! committed `.sqlx/` cache — regenerate it with `cargo xtask prepare` after
-//! changing any query.
+//! boundary); the timestamp-first ULID layout keeps `order by id` ≈ capture
+//! order at millisecond resolution — same-millisecond ids order by their
+//! random tails. That is fine everywhere it can happen: `order by id` stays
+//! a total order (cursors never skip or repeat), conversation order rides
+//! the explicit `seq`, and concurrent writes have no meaningful creation
+//! order to preserve. If a future feature needs strict insertion order,
+//! the ladder is a process-wide monotonic ULID generator, then a
+//! DB-assigned sequence. Queries are compile-time checked (`sqlx::query!`)
+//! against the committed `.sqlx/` cache — regenerate it with
+//! `cargo xtask prepare` after changing any query.
 
 mod wire;
 

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::store;
+use common::{newest_first, store};
 use converge_storage::{
     GroupEdit, GroupId, GroupKind, Groups, Identity, NewGroup, NewProject, Pagination, ProjectEdit,
     ProjectFilter, ProjectId, Projects, Scope, StoreError, UserId, Users,
@@ -62,12 +62,13 @@ async fn group_round_trip() {
         .group_list(Scope::System, Pagination::default())
         .await
         .unwrap();
-    // Newest first (ULID = time order).
+    // Id-descending (computed — see `common::newest_first`).
     assert_eq!(
         all.iter().map(|g| g.id).collect::<Vec<_>>(),
-        vec![personal, id]
+        newest_first(&[id, personal])
     );
-    assert_eq!(all[0].kind, GroupKind::Personal);
+    let kind_of = |gid| all.iter().find(|g| g.id == gid).unwrap().kind;
+    assert_eq!(kind_of(personal), GroupKind::Personal);
 
     store
         .group_edit(
@@ -116,9 +117,6 @@ async fn project_round_trip() {
         .await
         .unwrap();
 
-    // This test asserts newest-first ordering, and same-millisecond ULIDs
-    // order by their random tails — space the creations out one tick.
-    let tick = || std::thread::sleep(std::time::Duration::from_millis(2));
     let p1 = store
         .project_add(
             Scope::System,
@@ -130,7 +128,6 @@ async fn project_round_trip() {
         )
         .await
         .unwrap();
-    tick();
     let p2 = store
         .project_add(
             Scope::System,
@@ -142,7 +139,6 @@ async fn project_round_trip() {
         )
         .await
         .unwrap();
-    tick();
     let p3 = store
         .project_add(
             Scope::System,
@@ -154,13 +150,17 @@ async fn project_round_trip() {
         )
         .await
         .unwrap();
+    // Ordered expectations are computed (`common::newest_first`): the
+    // list contract is `order by id desc`, creation-ordered only to the
+    // ULID's millisecond.
+    let by_id = newest_first(&[p1, p2, p3]);
 
     let got = store.project_get(Scope::System, p1).await.unwrap().unwrap();
     assert_eq!(got.group_id, home);
     assert_eq!(got.name, "api");
     assert_eq!(got.description.as_deref(), Some("the api"));
 
-    // Group filter; newest first.
+    // Group filter; id-descending.
     let of_home = store
         .project_list(
             Scope::System,
@@ -171,7 +171,7 @@ async fn project_round_trip() {
         .unwrap();
     assert_eq!(
         of_home.iter().map(|p| p.id).collect::<Vec<_>>(),
-        vec![p2, p1]
+        newest_first(&[p1, p2])
     );
 
     let latest = store
@@ -185,21 +185,22 @@ async fn project_round_trip() {
         )
         .await
         .unwrap();
-    assert_eq!(latest.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p3]);
+    assert_eq!(latest.iter().map(|p| p.id).collect::<Vec<_>>(), by_id[..1]);
 
-    // Cursor paging: ids strictly older than the cursor, newest first.
+    // Cursor paging: ids strictly older (by id) than the cursor,
+    // descending — the expected page comes from the same total order.
     let paged = store
         .project_list(
             Scope::System,
             ProjectFilter::default(),
             Pagination {
                 limit: Some(2),
-                cursor: Some(p3),
+                cursor: Some(by_id[0]),
             },
         )
         .await
         .unwrap();
-    assert_eq!(paged.iter().map(|p| p.id).collect::<Vec<_>>(), vec![p2, p1]);
+    assert_eq!(paged.iter().map(|p| p.id).collect::<Vec<_>>(), by_id[1..]);
 
     store
         .project_edit(

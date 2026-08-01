@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::store;
+use common::{newest_first, store};
 use converge_storage::{
     Author, DecisionId, DecisionStatus, Decisions, GroupId, GroupKind, Groups, Identity,
     NewDecision, NewGroup, NewProject, NewSignal, Pagination, ProjectId, Projects, Scope,
@@ -119,7 +119,7 @@ async fn round_trip_and_invariants() {
     // Stable but unspecified order (same-millisecond ULIDs don't sort
     // by creation) — compare as a set.
     let mut want = vec![b, c];
-    want.sort_by_key(|d| d.ulid());
+    want.sort_unstable();
     assert_eq!(got.targets, want);
     assert_eq!(got.kind, "duplication");
     assert_eq!(got.tier, Tier::Watch);
@@ -330,7 +330,7 @@ async fn list_filters_match_either_end() {
             ..Default::default()
         })
         .await,
-        vec![s2, s1] // newest first
+        newest_first(&[s1, s2]) // id-descending (computed — see common)
     );
 
     // Decision matches either end.
@@ -340,7 +340,7 @@ async fn list_filters_match_either_end() {
             ..Default::default()
         })
         .await,
-        vec![s2, s1]
+        newest_first(&[s1, s2])
     );
     assert_eq!(
         list(SignalFilter {

@@ -165,17 +165,32 @@ async fn pagination() {
     .await;
     let items = rest["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["name"], "a");
     assert!(rest["next_cursor"].is_null());
 
-    // No pages overlap and nothing is lost.
-    assert_ne!(items[0]["id"], first["items"][0]["id"]);
-    assert_ne!(items[0]["id"], first["items"][1]["id"]);
-
-    // Unpaginated read: everything, no cursor.
+    // No pages overlap and nothing is lost: the two pages together are
+    // exactly the unpaginated read. (Which name lands on which page is
+    // id order, not creation order — same-millisecond ids don't track
+    // creation, so the split is not asserted.)
     let (_, all) = send(&app, "GET", "/api/v1/groups", None).await;
     assert_eq!(all["items"].as_array().unwrap().len(), 3);
     assert!(all["next_cursor"].is_null());
+    let mut walked: Vec<&str> = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(items)
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    walked.sort_unstable();
+    walked.dedup();
+    let mut everything: Vec<&str> = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    everything.sort_unstable();
+    assert_eq!(walked, everything);
 }
 
 #[tokio::test]

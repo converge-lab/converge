@@ -7,7 +7,11 @@ use ulid::Ulid;
 
 macro_rules! id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        // Ord: ids are time-ordered by construction (ULID), and lists
+        // sort by them — comparability is part of their meaning.
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
         pub struct $name(pub Ulid);
 
         impl $name {

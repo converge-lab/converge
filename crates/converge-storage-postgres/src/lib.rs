@@ -12,11 +12,12 @@ use std::collections::HashMap;
 
 use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
-    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, Message,
-    MessageId, Messages, NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession,
-    NewSignal, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Projects, Related,
-    Session, SessionFilter, SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus,
-    Signals, Source, StoreError, Token, TokenId, Tokens, User, UserId, Users,
+    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, Member,
+    Memberships, Message, MessageId, Messages, NewAgent, NewDecision, NewGroup, NewMessage,
+    NewProject, NewSession, NewSignal, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
+    Projects, Related, Scope, Session, SessionFilter, SessionId, Sessions, Signal, SignalFilter,
+    SignalId, SignalStatus, Signals, Source, StoreError, Token, TokenId, Tokens, User, UserId,
+    Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -30,6 +31,12 @@ use wire::Tier as PgTier;
 /// Superseded is derived from inbound edges — storing it is a caller error.
 const SUPERSEDED_IS_DERIVED: &str =
     "`superseded` is derived from supersedes edges; add an edge instead of setting the status";
+
+/// [`Scope`] as the nullable SQL parameter every scoped query binds:
+/// `NULL` (System) short-circuits the `group_visible(…)` predicate.
+fn viewer(scope: Scope) -> Option<Uuid> {
+    scope.user().map(|u| Uuid::from(u.ulid()))
+}
 
 /// The embedded schema migrations (`./migrations`).
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
@@ -172,15 +179,35 @@ impl Users for PgStorage {
         .map(User::from))
     }
 
-    async fn user_list(&self, page: Pagination<UserId>) -> Result<Vec<User>, StoreError> {
+    async fn user_lookup(&self, handle: &str) -> Result<Vec<User>, StoreError> {
+        Ok(sqlx::query_as!(
+            wire::UserRow,
+            "select id, provider, subject, handle, name from users where handle = $1 order by id",
+            handle,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(User::from)
+        .collect())
+    }
+
+    async fn user_list(
+        &self,
+        scope: Scope,
+        page: Pagination<UserId>,
+    ) -> Result<Vec<User>, StoreError> {
         Ok(sqlx::query_as!(
             wire::UserRow,
             r#"select id, provider, subject, handle, name from users
                where ($1::uuid is null or id < $1)
+                 and ($3::uuid is null or id = $3 or shares_group(id, $3))
                order by id desc
                limit $2"#,
             page.cursor.map(|c| Uuid::from(c.ulid())),
             page.limit.map(i64::from),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -312,15 +339,17 @@ impl Agents for PgStorage {
 }
 
 impl Groups for PgStorage {
-    async fn group_add(&self, new: NewGroup) -> Result<GroupId, StoreError> {
+    async fn group_add(&self, owner: UserId, new: NewGroup) -> Result<GroupId, StoreError> {
         let id = GroupId::new();
         let kind = PgGroupKind::from(new.kind);
         sqlx::query!(
-            "insert into groups (id, name, description, kind) values ($1, $2, $3, $4)",
+            r#"insert into groups (id, name, description, kind, owner_id)
+               values ($1, $2, $3, $4, $5)"#,
             Uuid::from(id.ulid()),
             new.name,
             new.description,
             kind as PgGroupKind,
+            Uuid::from(owner.ulid()),
         )
         .execute(&self.pool)
         .await
@@ -328,47 +357,77 @@ impl Groups for PgStorage {
         Ok(id)
     }
 
-    async fn group_get(&self, id: GroupId) -> Result<Option<Group>, StoreError> {
-        Ok(sqlx::query_as!(
+    async fn group_get(&self, scope: Scope, id: GroupId) -> Result<Option<Group>, StoreError> {
+        sqlx::query_as!(
             wire::GroupRow,
-            r#"select id, name, description, kind as "kind: _", created_at
-               from groups where id = $1"#,
+            r#"select id, name, description, kind as "kind: _", owner_id, created_at
+               from groups
+               where id = $1
+                 and ($2::uuid is null or group_visible(id, $2))"#,
             Uuid::from(id.ulid()),
+            viewer(scope),
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?
-        .map(Group::from))
+        .map(Group::try_from)
+        .transpose()
     }
 
-    async fn group_list(&self, page: Pagination<GroupId>) -> Result<Vec<Group>, StoreError> {
-        Ok(sqlx::query_as!(
+    async fn group_list(
+        &self,
+        scope: Scope,
+        page: Pagination<GroupId>,
+    ) -> Result<Vec<Group>, StoreError> {
+        sqlx::query_as!(
             wire::GroupRow,
-            r#"select id, name, description, kind as "kind: _", created_at
+            r#"select id, name, description, kind as "kind: _", owner_id, created_at
                from groups
                where ($1::uuid is null or id < $1)
+                 and ($3::uuid is null or group_visible(id, $3))
                order by id desc
                limit $2"#,
             page.cursor.map(|c| Uuid::from(c.ulid())),
             page.limit.map(i64::from),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
         .map_err(db_err)?
         .into_iter()
-        .map(Group::from)
-        .collect())
+        .map(Group::try_from)
+        .collect()
     }
 
-    async fn group_edit(&self, id: GroupId, edits: Vec<GroupEdit>) -> Result<(), StoreError> {
+    async fn group_edit(
+        &self,
+        scope: Scope,
+        id: GroupId,
+        edits: Vec<GroupEdit>,
+    ) -> Result<(), StoreError> {
         let uuid = Uuid::from(id.ulid());
         let mut tx = self.pool.begin().await.map_err(db_err)?;
-        let held = sqlx::query!("select id from groups where id = $1 for update", uuid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-        if held.is_none() {
+        let held = sqlx::query!(
+            r#"select owner_id from groups
+               where id = $1
+                 and ($2::uuid is null or group_visible(id, $2))
+               for update"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let Some(held) = held else {
             return Err(StoreError::NotFound);
+        };
+        // Owner-only: a member sees the group but doesn't manage it.
+        if let Scope::User(caller) = scope
+            && held.owner_id != Some(Uuid::from(caller.ulid()))
+        {
+            return Err(StoreError::Invalid(
+                "only the group owner can edit the group".into(),
+            ));
         }
         for edit in edits {
             match edit {
@@ -393,8 +452,152 @@ impl Groups for PgStorage {
     }
 }
 
+impl PgStorage {
+    /// The owner gate for membership management: the group must be
+    /// visible (`NotFound` otherwise) and the caller its owner
+    /// (`Invalid` otherwise); `System` passes. Returns the owner.
+    async fn owner_gate(&self, scope: Scope, group: GroupId) -> Result<UserId, StoreError> {
+        let row = sqlx::query!(
+            r#"select owner_id from groups
+               where id = $1 and ($2::uuid is null or group_visible(id, $2))"#,
+            Uuid::from(group.ulid()),
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or(StoreError::NotFound)?;
+        let owner = row
+            .owner_id
+            .ok_or_else(|| StoreError::Backend("unowned group".into()))?;
+        if let Scope::User(caller) = scope
+            && owner != Uuid::from(caller.ulid())
+        {
+            return Err(StoreError::Invalid(
+                "only the group owner can manage membership".into(),
+            ));
+        }
+        Ok(wire::id(owner))
+    }
+
+    /// Membership reads need the group visible, nothing more.
+    async fn visible_gate(&self, scope: Scope, group: GroupId) -> Result<(), StoreError> {
+        let seen = sqlx::query_scalar!(
+            r#"select ($2::uuid is null or group_visible(id, $2)) as "seen!"
+               from groups where id = $1"#,
+            Uuid::from(group.ulid()),
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        match seen {
+            Some(true) => Ok(()),
+            _ => Err(StoreError::NotFound),
+        }
+    }
+}
+
+impl Memberships for PgStorage {
+    async fn member_add(
+        &self,
+        scope: Scope,
+        group: GroupId,
+        user: UserId,
+    ) -> Result<(), StoreError> {
+        let owner = self.owner_gate(scope, group).await?;
+        if user == owner {
+            return Err(StoreError::Invalid(
+                "the owner is already a member — ownership contains membership".into(),
+            ));
+        }
+        let invited_by = match scope {
+            Scope::User(caller) => caller,
+            Scope::System => owner,
+        };
+        sqlx::query!(
+            r#"insert into memberships (group_id, user_id, invited_by)
+               values ($1, $2, $3)
+               on conflict do nothing"#,
+            Uuid::from(group.ulid()),
+            Uuid::from(user.ulid()),
+            Uuid::from(invited_by.ulid()),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn member_list(&self, scope: Scope, group: GroupId) -> Result<Vec<Member>, StoreError> {
+        self.visible_gate(scope, group).await?;
+        Ok(sqlx::query!(
+            r#"select m.user_id, u.handle, u.name, m.invited_by, m.created_at
+               from memberships m
+               join users u on u.id = m.user_id
+               where m.group_id = $1
+               order by m.created_at, m.user_id"#,
+            Uuid::from(group.ulid()),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(|r| Member {
+            user_id: wire::id(r.user_id),
+            handle: r.handle,
+            name: r.name,
+            invited_by: wire::id(r.invited_by),
+            since: r.created_at,
+        })
+        .collect())
+    }
+
+    async fn member_remove(
+        &self,
+        scope: Scope,
+        group: GroupId,
+        user: UserId,
+    ) -> Result<(), StoreError> {
+        // The owner removes anyone; a member removes themself (leaving).
+        // The owner has no membership row, so removing them is NotFound
+        // by construction.
+        match scope {
+            Scope::System => {}
+            Scope::User(caller) if caller == user => self.visible_gate(scope, group).await?,
+            Scope::User(_) => {
+                self.owner_gate(scope, group).await?;
+            }
+        }
+        let result = sqlx::query!(
+            "delete from memberships where group_id = $1 and user_id = $2",
+            Uuid::from(group.ulid()),
+            Uuid::from(user.ulid()),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        match result.rows_affected() {
+            0 => Err(StoreError::NotFound),
+            _ => Ok(()),
+        }
+    }
+
+    async fn adopt(&self, owner: UserId) -> Result<u64, StoreError> {
+        let result = sqlx::query!(
+            "update groups set owner_id = $1 where owner_id is null",
+            Uuid::from(owner.ulid()),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(result.rows_affected())
+    }
+}
+
 impl Projects for PgStorage {
-    async fn project_add(&self, new: NewProject) -> Result<ProjectId, StoreError> {
+    async fn project_add(&self, scope: Scope, new: NewProject) -> Result<ProjectId, StoreError> {
+        self.visible_gate(scope, new.group_id).await?;
         let id = ProjectId::new();
         sqlx::query!(
             "insert into projects (id, group_id, name, description) values ($1, $2, $3, $4)",
@@ -409,11 +612,19 @@ impl Projects for PgStorage {
         Ok(id)
     }
 
-    async fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
+    async fn project_get(
+        &self,
+        scope: Scope,
+        id: ProjectId,
+    ) -> Result<Option<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            "select id, group_id, name, description, created_at from projects where id = $1",
+            r#"select id, group_id, name, description, created_at
+               from projects
+               where id = $1
+                 and ($2::uuid is null or group_visible(group_id, $2))"#,
             Uuid::from(id.ulid()),
+            viewer(scope),
         )
         .fetch_optional(&self.pool)
         .await
@@ -423,6 +634,7 @@ impl Projects for PgStorage {
 
     async fn project_list(
         &self,
+        scope: Scope,
         filter: ProjectFilter,
         page: Pagination<ProjectId>,
     ) -> Result<Vec<Project>, StoreError> {
@@ -432,11 +644,13 @@ impl Projects for PgStorage {
                from projects
                where ($1::uuid is null or group_id = $1)
                  and ($3::uuid is null or id < $3)
+                 and ($4::uuid is null or group_visible(group_id, $4))
                order by id desc
                limit $2"#,
             filter.group.map(|g| Uuid::from(g.ulid())),
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -446,13 +660,25 @@ impl Projects for PgStorage {
         .collect())
     }
 
-    async fn project_edit(&self, id: ProjectId, edits: Vec<ProjectEdit>) -> Result<(), StoreError> {
+    async fn project_edit(
+        &self,
+        scope: Scope,
+        id: ProjectId,
+        edits: Vec<ProjectEdit>,
+    ) -> Result<(), StoreError> {
         let uuid = Uuid::from(id.ulid());
         let mut tx = self.pool.begin().await.map_err(db_err)?;
-        let held = sqlx::query!("select id from projects where id = $1 for update", uuid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
+        let held = sqlx::query!(
+            r#"select id from projects
+               where id = $1
+                 and ($2::uuid is null or group_visible(group_id, $2))
+               for update"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
         if held.is_none() {
             return Err(StoreError::NotFound);
         }
@@ -480,35 +706,61 @@ impl Projects for PgStorage {
 }
 
 impl Sessions for PgStorage {
-    async fn session_ensure(&self, new: NewSession) -> Result<SessionId, StoreError> {
+    async fn session_ensure(&self, scope: Scope, new: NewSession) -> Result<SessionId, StoreError> {
         // `(kind, external)` decides identity; the title refreshes (titles
         // evolve as conversations grow) while the project binding stays as
         // first created — evidence doesn't silently re-home. On conflict
-        // the freshly minted id is discarded.
+        // the freshly minted id is discarded — but only when the existing
+        // session is visible: refreshing the title of another group's
+        // session would be a cross-group write, so an invisible collision
+        // is a plain Conflict instead.
+        let project = self
+            .project_get(scope, new.project_id)
+            .await?
+            .ok_or(StoreError::NotFound)?;
         let kind = PgSessionKind::from(new.kind);
         let row = sqlx::query!(
             r#"insert into sessions (id, project_id, kind, external, title)
                values ($1, $2, $3, $4, $5)
                on conflict (kind, external) do update set title = excluded.title
+               where ($6::uuid is null
+                      or group_visible((select p.group_id from projects p
+                                        where p.id = sessions.project_id), $6))
                returning id"#,
             Uuid::from(SessionId::new().ulid()),
-            Uuid::from(new.project_id.ulid()),
+            Uuid::from(project.id.ulid()),
             kind as PgSessionKind,
             new.external,
             new.title,
+            viewer(scope),
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(db_err)?;
-        Ok(wire::id(row.id))
+        match row {
+            Some(row) => Ok(wire::id(row.id)),
+            // The conflict arbiter matched but its WHERE refused: the
+            // identity is claimed by a session the caller cannot see.
+            None => Err(StoreError::Conflict(
+                "this session identity is already recorded outside your groups".into(),
+            )),
+        }
     }
 
-    async fn session_get(&self, id: SessionId) -> Result<Option<Session>, StoreError> {
+    async fn session_get(
+        &self,
+        scope: Scope,
+        id: SessionId,
+    ) -> Result<Option<Session>, StoreError> {
         Ok(sqlx::query_as!(
             wire::SessionRow,
-            r#"select id, project_id, kind as "kind: _", external, title, captured_at
-               from sessions where id = $1"#,
+            r#"select s.id, s.project_id, s.kind as "kind: _", s.external, s.title, s.captured_at
+               from sessions s
+               join projects p on p.id = s.project_id
+               where s.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
             Uuid::from(id.ulid()),
+            viewer(scope),
         )
         .fetch_optional(&self.pool)
         .await
@@ -518,23 +770,27 @@ impl Sessions for PgStorage {
 
     async fn session_list(
         &self,
+        scope: Scope,
         filter: SessionFilter,
         page: Pagination<SessionId>,
     ) -> Result<Vec<Session>, StoreError> {
         let kind = filter.kind.map(PgSessionKind::from);
         Ok(sqlx::query_as!(
             wire::SessionRow,
-            r#"select id, project_id, kind as "kind: _", external, title, captured_at
-               from sessions
-               where ($1::uuid is null or project_id = $1)
-                 and ($2::session_kind is null or kind = $2)
-                 and ($4::uuid is null or id < $4)
-               order by id desc
+            r#"select s.id, s.project_id, s.kind as "kind: _", s.external, s.title, s.captured_at
+               from sessions s
+               join projects p on p.id = s.project_id
+               where ($1::uuid is null or s.project_id = $1)
+                 and ($2::session_kind is null or s.kind = $2)
+                 and ($4::uuid is null or s.id < $4)
+                 and ($5::uuid is null or group_visible(p.group_id, $5))
+               order by s.id desc
                limit $3"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
             kind as Option<PgSessionKind>,
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -548,17 +804,27 @@ impl Sessions for PgStorage {
 impl Messages for PgStorage {
     async fn message_add(
         &self,
+        scope: Scope,
         session: SessionId,
         new: Vec<NewMessage>,
     ) -> Result<Vec<MessageId>, StoreError> {
         let session = Uuid::from(session.ulid());
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         // The session's row lock serializes appends: concurrent batches
-        // can't interleave or collide on seq. Missing session → NotFound.
-        let held = sqlx::query!("select id from sessions where id = $1 for update", session)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
+        // can't interleave or collide on seq. Missing — or invisible —
+        // session → NotFound.
+        let held = sqlx::query!(
+            r#"select s.id from sessions s
+               join projects p on p.id = s.project_id
+               where s.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))
+               for update of s"#,
+            session,
+            viewer(scope),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
         if held.is_none() {
             return Err(StoreError::NotFound);
         }
@@ -596,23 +862,30 @@ impl Messages for PgStorage {
 
     async fn message_list(
         &self,
+        scope: Scope,
         session: SessionId,
         page: Pagination<MessageId>,
     ) -> Result<Vec<Message>, StoreError> {
         // Conversation order — oldest first, the one forward-reading list;
-        // the cursor returns rows strictly *after* it.
+        // the cursor returns rows strictly *after* it. An invisible
+        // session reads as empty, same as an unknown one.
         Ok(sqlx::query_as!(
             wire::MessageRow,
-            r#"select id, session_id, seq, speaker, body, sent_at, captured_at
-               from messages
-               where session_id = $1
+            r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
+               from messages m
+               where m.session_id = $1
                  and ($2::uuid is null
-                      or seq > (select seq from messages where id = $2 and session_id = $1))
-               order by seq
+                      or m.seq > (select seq from messages where id = $2 and session_id = $1))
+                 and ($4::uuid is null
+                      or group_visible((select p.group_id from sessions s
+                                        join projects p on p.id = s.project_id
+                                        where s.id = m.session_id), $4))
+               order by m.seq
                limit $3"#,
             Uuid::from(session.ulid()),
             page.cursor.map(|c| Uuid::from(c.ulid())),
             page.limit.map(i64::from),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -624,12 +897,72 @@ impl Messages for PgStorage {
 }
 
 impl Decisions for PgStorage {
-    async fn decision_add(&self, new: NewDecision) -> Result<DecisionId, StoreError> {
+    async fn decision_add(&self, scope: Scope, new: NewDecision) -> Result<DecisionId, StoreError> {
         if new.status == DecisionStatus::Superseded {
             return Err(StoreError::Invalid(SUPERSEDED_IS_DERIVED.into()));
         }
         let alternatives = serde_json::to_value(&new.alternatives)
             .map_err(|e| StoreError::Invalid(format!("alternatives: {e}")))?;
+        // The project must be visible to the writer, and every reference
+        // (supersedes, evidence) must live in the SAME group — edges never
+        // leave a group, so no read can ever surface an invisible endpoint.
+        let group = sqlx::query_scalar!(
+            r#"select p.group_id from projects p
+               where p.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
+            Uuid::from(new.project_id.ulid()),
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| StoreError::Invalid("missing referenced record: project".into()))?;
+        if !new.supersedes.is_empty() {
+            let mut targets: Vec<Uuid> = new
+                .supersedes
+                .iter()
+                .map(|d| Uuid::from(d.ulid()))
+                .collect();
+            targets.sort();
+            targets.dedup();
+            let sound = sqlx::query_scalar!(
+                r#"select count(*) as "n!" from decisions d
+                   join projects p on p.id = d.project_id
+                   where d.id = any($1) and p.group_id = $2"#,
+                &targets[..],
+                group,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+            if sound as usize != targets.len() {
+                return Err(StoreError::Invalid(
+                    "supersedes must reference decisions in the same group".into(),
+                ));
+            }
+        }
+        if !new.evidence.is_empty() {
+            let mut anchors: Vec<Uuid> =
+                new.evidence.iter().map(|m| Uuid::from(m.ulid())).collect();
+            anchors.sort();
+            anchors.dedup();
+            let sound = sqlx::query_scalar!(
+                r#"select count(*) as "n!" from messages m
+                   join sessions s on s.id = m.session_id
+                   join projects p on p.id = s.project_id
+                   where m.id = any($1) and p.group_id = $2"#,
+                &anchors[..],
+                group,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+            if sound as usize != anchors.len() {
+                return Err(StoreError::Invalid(
+                    "evidence must reference messages in the same group".into(),
+                ));
+            }
+        }
         let id = DecisionId::new();
         let status = PgStatus::from(new.status);
         let mut tx = self.pool.begin().await.map_err(db_err)?;
@@ -700,19 +1033,26 @@ impl Decisions for PgStorage {
         Ok(id)
     }
 
-    async fn decision_get(&self, id: DecisionId) -> Result<Option<Decision>, StoreError> {
+    async fn decision_get(
+        &self,
+        scope: Scope,
+        id: DecisionId,
+    ) -> Result<Option<Decision>, StoreError> {
         let row = sqlx::query_as!(
             wire::DecisionRow,
-            r#"select id, project_id,
+            r#"select d.id, d.project_id,
                       case when exists (select 1 from decision_supersedes s
                                         where s.supersedes_id = d.id)
                            then 'superseded'::decision_status
                            else d.status
                       end as "status!: _",
-                      title, summary, context, consequences, alternatives, captured_at
+                      d.title, d.summary, d.context, d.consequences, d.alternatives, d.captured_at
                from decisions d
-               where d.id = $1"#,
+               join projects p on p.id = d.project_id
+               where d.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
             Uuid::from(id.ulid()),
+            viewer(scope),
         )
         .fetch_optional(&self.pool)
         .await
@@ -735,6 +1075,7 @@ impl Decisions for PgStorage {
 
     async fn decision_list(
         &self,
+        scope: Scope,
         filter: DecisionFilter,
         page: Pagination<DecisionId>,
     ) -> Result<Vec<Decision>, StoreError> {
@@ -763,6 +1104,7 @@ impl Decisions for PgStorage {
                  and ($2::uuid is null or d.group_id = $2)
                  and ($3::decision_status is null or d.status = $3)
                  and ($5::uuid is null or d.id < $5)
+                 and ($6::uuid is null or group_visible(d.group_id, $6))
                order by d.id desc
                limit $4"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
@@ -770,6 +1112,7 @@ impl Decisions for PgStorage {
             status as Option<PgStatus>,
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -790,6 +1133,7 @@ impl Decisions for PgStorage {
 
     async fn decision_search(
         &self,
+        scope: Scope,
         query: &str,
         filter: DecisionFilter,
         limit: Option<u32>,
@@ -823,6 +1167,7 @@ impl Decisions for PgStorage {
                  and ($2::uuid is null or d.project_id = $2)
                  and ($3::uuid is null or d.group_id = $3)
                  and ($4::decision_status is null or d.status = $4)
+                 and ($6::uuid is null or group_visible(d.group_id, $6))
                order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,
                         d.id desc
                limit $5"#,
@@ -831,6 +1176,7 @@ impl Decisions for PgStorage {
             filter.group.map(|g| Uuid::from(g.ulid())),
             status as Option<PgStatus>,
             limit.map(i64::from),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -865,34 +1211,55 @@ impl Decisions for PgStorage {
 
     async fn decision_edit(
         &self,
+        scope: Scope,
         id: DecisionId,
         edits: Vec<DecisionEdit>,
     ) -> Result<(), StoreError> {
         let uuid = Uuid::from(id.ulid());
         let mut tx = self.pool.begin().await.map_err(db_err)?;
-        // Lock the row for the batch; a missing decision is NotFound.
-        let held = sqlx::query!("select id from decisions where id = $1 for update", uuid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-        if held.is_none() {
+        // Lock the row for the batch; a missing — or invisible — decision
+        // is NotFound. The group rides along for edge-edit validation.
+        let held = sqlx::query!(
+            r#"select d.id, p.group_id from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))
+               for update of d"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let Some(held) = held else {
             return Err(StoreError::NotFound);
-        }
+        };
         for edit in edits {
-            apply(&mut tx, uuid, edit).await?;
+            apply(&mut tx, uuid, held.group_id, edit).await?;
         }
         tx.commit().await.map_err(db_err)
     }
 
-    async fn decision_sources(&self, id: DecisionId) -> Result<Option<Vec<Source>>, StoreError> {
+    async fn decision_sources(
+        &self,
+        scope: Scope,
+        id: DecisionId,
+    ) -> Result<Option<Vec<Source>>, StoreError> {
         /// How many messages of context to carry on each side of an anchor.
         const CONTEXT: i32 = 2;
 
         let uuid = Uuid::from(id.ulid());
-        let exists = sqlx::query!("select id from decisions where id = $1", uuid)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db_err)?;
+        let exists = sqlx::query!(
+            r#"select d.id from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
         if exists.is_none() {
             return Ok(None);
         }
@@ -980,12 +1347,25 @@ impl Decisions for PgStorage {
         Ok(Some(sources))
     }
 
-    async fn decision_edges(&self, id: DecisionId) -> Result<Option<Edges>, StoreError> {
+    async fn decision_edges(
+        &self,
+        scope: Scope,
+        id: DecisionId,
+    ) -> Result<Option<Edges>, StoreError> {
         let uuid = Uuid::from(id.ulid());
-        let exists = sqlx::query!("select id from decisions where id = $1", uuid)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db_err)?;
+        // Edge endpoints are same-group by construction (validated at
+        // every write), so gating the root decision covers them all.
+        let exists = sqlx::query!(
+            r#"select d.id from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
         if exists.is_none() {
             return Ok(None);
         }
@@ -1074,7 +1454,7 @@ impl PgStorage {
 }
 
 impl Signals for PgStorage {
-    async fn signal_add(&self, new: NewSignal) -> Result<SignalId, StoreError> {
+    async fn signal_add(&self, scope: Scope, new: NewSignal) -> Result<SignalId, StoreError> {
         let kind = new.kind.trim();
         if kind.is_empty() {
             return Err(StoreError::Invalid("kind must not be empty".into()));
@@ -1091,6 +1471,36 @@ impl Signals for PgStorage {
         if targets.contains(&source) {
             return Err(StoreError::Invalid(
                 "a signal cannot target its own source".into(),
+            ));
+        }
+        // The source must be visible to the writer, and every target in
+        // the source's group — signals never cross groups (the expert's
+        // retrieval is group-scoped; this makes it structural).
+        let group = sqlx::query_scalar!(
+            r#"select p.group_id from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
+            source,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| StoreError::Invalid("missing referenced record: source".into()))?;
+        let sound = sqlx::query_scalar!(
+            r#"select count(*) as "n!" from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = any($1) and p.group_id = $2"#,
+            &targets[..],
+            group,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        if sound as usize != targets.len() {
+            return Err(StoreError::Invalid(
+                "targets must be decisions in the source's group".into(),
             ));
         }
         let (produced_user, produced_agent) = wire::split(&new.produced_by);
@@ -1158,15 +1568,20 @@ impl Signals for PgStorage {
         Ok(id)
     }
 
-    async fn signal_get(&self, id: SignalId) -> Result<Option<Signal>, StoreError> {
+    async fn signal_get(&self, scope: Scope, id: SignalId) -> Result<Option<Signal>, StoreError> {
         let row = sqlx::query_as!(
             wire::SignalRow,
-            r#"select id, source, kind, tier as "tier: _", status as "status: _",
-                      title, text, consequence, recommendation,
-                      produced_user, produced_agent, resolved_user, resolved_agent,
-                      captured_at
-               from signals where id = $1"#,
+            r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
+                      s.title, s.text, s.consequence, s.recommendation,
+                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,
+                      s.captured_at
+               from signals s
+               join decisions d on d.id = s.source
+               join projects p on p.id = d.project_id
+               where s.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))"#,
             Uuid::from(id.ulid()),
+            viewer(scope),
         )
         .fetch_optional(&self.pool)
         .await
@@ -1184,13 +1599,15 @@ impl Signals for PgStorage {
 
     async fn signal_list(
         &self,
+        scope: Scope,
         filter: SignalFilter,
         page: Pagination<SignalId>,
     ) -> Result<Vec<Signal>, StoreError> {
         let status = filter.status.map(PgSignalStatus::from);
         let tier = filter.tier.map(PgTier::from);
         // Project and decision filters match either end: the source
-        // decision's project, or any target's.
+        // decision's project, or any target's. Visibility needs only the
+        // source's group — targets are same-group by construction.
         let mut signals = sqlx::query_as!(
             wire::SignalRow,
             r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
@@ -1211,6 +1628,10 @@ impl Signals for PgStorage {
                  and ($3::signal_status is null or s.status = $3)
                  and ($4::signal_tier is null or s.tier = $4)
                  and ($6::uuid is null or s.id < $6)
+                 and ($7::uuid is null
+                      or group_visible((select p.group_id from decisions d
+                                        join projects p on p.id = d.project_id
+                                        where d.id = s.source), $7))
                order by s.id desc
                limit $5"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
@@ -1219,6 +1640,7 @@ impl Signals for PgStorage {
             tier as Option<PgTier>,
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
+            viewer(scope),
         )
         .fetch_all(&self.pool)
         .await
@@ -1238,6 +1660,7 @@ impl Signals for PgStorage {
 
     async fn signal_resolve(
         &self,
+        scope: Scope,
         id: SignalId,
         status: SignalStatus,
         by: Author,
@@ -1251,11 +1674,16 @@ impl Signals for PgStorage {
         let result = sqlx::query!(
             r#"update signals
                set status = $2, resolved_user = $3, resolved_agent = $4
-               where id = $1"#,
+               where id = $1
+                 and ($5::uuid is null
+                      or group_visible((select p.group_id from decisions d
+                                        join projects p on p.id = d.project_id
+                                        where d.id = signals.source), $5))"#,
             Uuid::from(id.ulid()),
             PgSignalStatus::from(status) as PgSignalStatus,
             user,
             agent,
+            viewer(scope),
         )
         .execute(&self.pool)
         .await
@@ -1267,11 +1695,41 @@ impl Signals for PgStorage {
     }
 }
 
+/// A decision referenced by an edge edit must live in `group` — edges
+/// never leave a group (see `Decisions::decision_add`).
+async fn same_group(
+    tx: &mut sqlx::PgTransaction<'_>,
+    target: Uuid,
+    group: Uuid,
+    what: &str,
+) -> Result<(), StoreError> {
+    let sound = sqlx::query_scalar!(
+        r#"select exists (
+               select 1 from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $1 and p.group_id = $2
+           ) as "sound!""#,
+        target,
+        group,
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    if !sound {
+        return Err(StoreError::Invalid(format!(
+            "{what} must reference a decision in the same group"
+        )));
+    }
+    Ok(())
+}
+
 /// Apply one [`DecisionEdit`] to the locked row, inside the caller's
 /// transaction — one static, compile-checked statement per variant.
+/// `group` is the decision's group, for edge validation.
 async fn apply(
     tx: &mut sqlx::PgTransaction<'_>,
     id: Uuid,
+    group: Uuid,
     edit: DecisionEdit,
 ) -> Result<(), StoreError> {
     match edit {
@@ -1333,6 +1791,7 @@ async fn apply(
         }
         DecisionEdit::AddSupersedes(target) => {
             let target = no_self_loop(id, target, "supersede")?;
+            same_group(tx, target, group, "supersedes").await?;
             sqlx::query!(
                 "insert into decision_supersedes (decision_id, supersedes_id)
                  values ($1, $2) on conflict do nothing",
@@ -1353,6 +1812,7 @@ async fn apply(
         }
         DecisionEdit::AddRelated { to, why } => {
             let to = no_self_loop(id, to, "cross-reference")?;
+            same_group(tx, to, group, "a cross-reference").await?;
             sqlx::query!(
                 "insert into decision_related (decision_id, ref_id, why)
                  values ($1, $2, $3)
@@ -1374,12 +1834,31 @@ async fn apply(
             .await
         }
         DecisionEdit::AddEvidence(message) => {
+            let message = Uuid::from(message.ulid());
+            let sound = sqlx::query_scalar!(
+                r#"select exists (
+                       select 1 from messages m
+                       join sessions s on s.id = m.session_id
+                       join projects p on p.id = s.project_id
+                       where m.id = $1 and p.group_id = $2
+                   ) as "sound!""#,
+                message,
+                group,
+            )
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db_err)?;
+            if !sound {
+                return Err(StoreError::Invalid(
+                    "evidence must reference a message in the same group".into(),
+                ));
+            }
             sqlx::query!(
                 r#"insert into evidence (decision_id, message_id)
                    values ($1, $2)
                    on conflict do nothing"#,
                 id,
-                Uuid::from(message.ulid()),
+                message,
             )
             .execute(&mut **tx)
             .await

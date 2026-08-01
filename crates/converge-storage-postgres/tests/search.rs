@@ -4,26 +4,42 @@ mod common;
 
 use common::store;
 use converge_storage::{
-    DecisionFilter, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, NewDecision,
-    NewGroup, NewProject, ProjectId, Projects, StoreError,
+    DecisionFilter, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity,
+    NewDecision, NewGroup, NewProject, ProjectId, Projects, Scope, StoreError, Users,
 };
 use converge_storage_postgres::PgStorage;
 
 async fn project(store: &PgStorage) -> ProjectId {
-    let group = store
-        .group_add(NewGroup {
-            name: "g".into(),
-            description: None,
-            kind: GroupKind::Shared,
+    // A bootstrap user to own the group (pre-ACL tests run as `Scope::System`).
+    let owner = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "test".into(),
+            handle: "test".into(),
+            name: "Test".into(),
         })
         .await
         .unwrap();
+    let group = store
+        .group_add(
+            owner,
+            NewGroup {
+                name: "g".into(),
+                description: None,
+                kind: GroupKind::Shared,
+            },
+        )
+        .await
+        .unwrap();
     store
-        .project_add(NewProject {
-            group_id: group,
-            name: "p".into(),
-            description: None,
-        })
+        .project_add(
+            Scope::System,
+            NewProject {
+                group_id: group,
+                name: "p".into(),
+                description: None,
+            },
+        )
         .await
         .unwrap()
 }
@@ -36,18 +52,21 @@ async fn decision(
     context: Option<&str>,
 ) -> DecisionId {
     store
-        .decision_add(NewDecision {
-            project_id,
-            status: DecisionStatus::Accepted,
-            title: title.into(),
-            summary: summary.into(),
-            context: context.map(Into::into),
-            consequences: None,
-            alternatives: vec![],
-            authors: vec![],
-            supersedes: vec![],
-            evidence: vec![],
-        })
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id,
+                status: DecisionStatus::Accepted,
+                title: title.into(),
+                summary: summary.into(),
+                context: context.map(Into::into),
+                consequences: None,
+                alternatives: vec![],
+                authors: vec![],
+                supersedes: vec![],
+                evidence: vec![],
+            },
+        )
         .await
         .unwrap()
 }
@@ -77,7 +96,7 @@ async fn ranked_stemmed_and_filtered() {
 
     // Stemmed ("caching" ~ "cache"), weighted: title first, context last.
     let hits = store
-        .decision_search("caching", DecisionFilter::default(), None)
+        .decision_search(Scope::System, "caching", DecisionFilter::default(), None)
         .await
         .unwrap();
     assert_eq!(ids(&hits), vec![in_title, in_summary, in_context]);
@@ -85,6 +104,7 @@ async fn ranked_stemmed_and_filtered() {
     // The filter composes: p2 narrows to the context hit.
     let hits = store
         .decision_search(
+            Scope::System,
             "caching",
             DecisionFilter {
                 project: Some(p2),
@@ -98,19 +118,29 @@ async fn ranked_stemmed_and_filtered() {
 
     // Websearch syntax: exclusion and quoted phrases.
     let hits = store
-        .decision_search("cache -invalidation", DecisionFilter::default(), None)
+        .decision_search(
+            Scope::System,
+            "cache -invalidation",
+            DecisionFilter::default(),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(ids(&hits), vec![in_summary, in_context]);
     let hits = store
-        .decision_search("\"cache invalidation\"", DecisionFilter::default(), None)
+        .decision_search(
+            Scope::System,
+            "\"cache invalidation\"",
+            DecisionFilter::default(),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(ids(&hits), vec![in_title]);
 
     // The limit caps ranked results from the top.
     let hits = store
-        .decision_search("caching", DecisionFilter::default(), Some(1))
+        .decision_search(Scope::System, "caching", DecisionFilter::default(), Some(1))
         .await
         .unwrap();
     assert_eq!(ids(&hits), vec![in_title]);
@@ -118,18 +148,18 @@ async fn ranked_stemmed_and_filtered() {
     // No terms is an error, not an empty page; no *matches* is fine.
     assert!(matches!(
         store
-            .decision_search("  ", DecisionFilter::default(), None)
+            .decision_search(Scope::System, "  ", DecisionFilter::default(), None)
             .await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
         store
-            .decision_search("-", DecisionFilter::default(), None)
+            .decision_search(Scope::System, "-", DecisionFilter::default(), None)
             .await,
         Err(StoreError::Invalid(_))
     ));
     let hits = store
-        .decision_search("zeppelin", DecisionFilter::default(), None)
+        .decision_search(Scope::System, "zeppelin", DecisionFilter::default(), None)
         .await
         .unwrap();
     assert!(hits.is_empty());

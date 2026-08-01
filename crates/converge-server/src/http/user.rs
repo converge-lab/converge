@@ -9,7 +9,7 @@ use axum::Extension;
 use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use converge_storage::{Page, Pagination, Storage, StoreError, User, UserId};
+use converge_storage::{Page, Pagination, Scope, Storage, StoreError, User, UserId};
 
 use super::error::Result;
 use crate::auth::Caller;
@@ -22,9 +22,12 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
 
 async fn list<S: Storage>(
     State(store): State<S>,
+    Extension(caller): Extension<Caller>,
     Query(page): Query<Pagination<UserId>>,
 ) -> Result<Json<Page<User>>> {
-    let items = store.user_list(page.clone()).await?;
+    let items = store
+        .user_list(Scope::User(caller.user), page.clone())
+        .await?;
     Ok(Json(Page::new(items, &page, |u| u.id.to_string())))
 }
 

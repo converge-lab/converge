@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update groups set owner_id = $1 where owner_id is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e649bdbfb9b9d4957d50e27035c816ba27367781ef84800bde0f56e247d3197"
+}

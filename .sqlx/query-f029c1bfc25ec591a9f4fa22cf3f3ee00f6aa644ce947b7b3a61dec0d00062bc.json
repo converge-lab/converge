@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, provider, subject, handle, name from users\n               where ($1::uuid is null or id < $1)\n               order by id desc\n               limit $2",
+  "query": "select id, group_id, name, description, created_at\n               from projects\n               where id = $1\n                 and ($2::uuid is null or group_visible(group_id, $2))",
   "describe": {
     "columns": [
       {
@@ -10,38 +10,38 @@
       },
       {
         "ordinal": 1,
-        "name": "provider",
-        "type_info": "Text"
+        "name": "group_id",
+        "type_info": "Uuid"
       },
       {
         "ordinal": 2,
-        "name": "subject",
+        "name": "name",
         "type_info": "Text"
       },
       {
         "ordinal": 3,
-        "name": "handle",
+        "name": "description",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
-        "name": "name",
-        "type_info": "Text"
+        "name": "created_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
       false,
       false,
       false,
-      false,
+      true,
       false
     ]
   },
-  "hash": "7fff0fdb9639387b9c80e59b0556754524d8c49b1156f1884ecb66379b65920a"
+  "hash": "f029c1bfc25ec591a9f4fa22cf3f3ee00f6aa644ce947b7b3a61dec0d00062bc"
 }

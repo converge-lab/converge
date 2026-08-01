@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select d.id, p.group_id from decisions d\n               join projects p on p.id = d.project_id\n               where d.id = $1\n                 and ($2::uuid is null or group_visible(p.group_id, $2))\n               for update of d",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "14f1955dfece39a3fa300bcdda4b965bdc2b639673011308a31e81e362d8c909"
+}

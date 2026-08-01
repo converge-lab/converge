@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 
 use crate::decision::Author;
 use crate::ids::{DecisionId, ProjectId, SignalId};
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// The response tier — how urgently the affected side should react; the
 /// severity-of-inaction ladder, lowest first. Fixed (responses are
@@ -119,17 +119,21 @@ pub trait Signals {
     /// is a `Conflict`: dismissed observations are not re-raised.
     fn signal_add(
         &self,
+        scope: Scope,
         new: NewSignal,
     ) -> impl Future<Output = Result<SignalId, StoreError>> + Send;
 
     fn signal_get(
         &self,
+        scope: Scope,
         id: SignalId,
     ) -> impl Future<Output = Result<Option<Signal>, StoreError>> + Send;
 
-    /// Signals, newest first.
+    /// Signals, newest first. Visibility follows the source decision's
+    /// group (source and targets never span groups — validated at add).
     fn signal_list(
         &self,
+        scope: Scope,
         filter: SignalFilter,
         page: Pagination<SignalId>,
     ) -> impl Future<Output = Result<Vec<Signal>, StoreError>> + Send;
@@ -140,6 +144,7 @@ pub trait Signals {
     /// `proposed`.
     fn signal_resolve(
         &self,
+        scope: Scope,
         id: SignalId,
         status: SignalStatus,
         by: Author,

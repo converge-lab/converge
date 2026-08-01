@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::ids::{GroupId, ProjectId};
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// A project.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,26 +43,32 @@ pub struct ProjectFilter {
     pub group: Option<GroupId>,
 }
 
-/// Storage operations on projects.
+/// Storage operations on projects. Reads are scope-filtered through the
+/// owning group; writes require the target group to be visible (an
+/// invisible group is `NotFound`).
 pub trait Projects {
     fn project_add(
         &self,
+        scope: Scope,
         new: NewProject,
     ) -> impl Future<Output = Result<ProjectId, StoreError>> + Send;
 
     fn project_get(
         &self,
+        scope: Scope,
         id: ProjectId,
     ) -> impl Future<Output = Result<Option<Project>, StoreError>> + Send;
 
     fn project_list(
         &self,
+        scope: Scope,
         filter: ProjectFilter,
         page: Pagination<ProjectId>,
     ) -> impl Future<Output = Result<Vec<Project>, StoreError>> + Send;
 
     fn project_edit(
         &self,
+        scope: Scope,
         id: ProjectId,
         edits: Vec<ProjectEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;

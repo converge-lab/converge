@@ -2,7 +2,7 @@
 //! decision and a set of **retrieved candidates**, judge which of them
 //! the new decision materially affects, and draft the signals.
 //!
-//! This is a pure function over a [`Client`](crate::Client): no storage,
+//! This is a pure function over a [`Client`]: no storage,
 //! no side effects. The caller (the server's production pass) retrieves
 //! the candidates (full-text similarity + graph neighbourhood, under a
 //! token budget), runs [`discover`], stamps authorship, and writes the
@@ -33,17 +33,23 @@ pub struct Entry {
 }
 
 /// Input of the job.
+///
+/// Field order is cache layout (serde serializes in declaration order):
+/// the slowly-changing material first, the per-call subject **last**, so
+/// recurring candidates form a reusable prefix for providers with prefix
+/// caching (llama.cpp slots, Anthropic cache_control, OpenAI automatic).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
-    /// The newly recorded decision under analysis.
-    pub decision: Entry,
     /// Existing decisions retrieved as possibly related — the only
     /// decisions a draft may target.
     pub candidates: Vec<Entry>,
-    /// Observations already recorded against the decisions above (every
-    /// status — a dismissed signal is context the model must not re-raise
-    /// unless the new decision materially changes the relationship).
+    /// Observations already recorded against the decisions involved
+    /// (every status — a dismissed signal is context the model must not
+    /// re-raise unless the new decision materially changes the
+    /// relationship).
     pub signals: Vec<Signal>,
+    /// The newly recorded decision under analysis.
+    pub decision: Entry,
 }
 
 /// One drafted signal: [`converge_storage::NewSignal`] minus what the

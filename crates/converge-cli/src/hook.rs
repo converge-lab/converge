@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use converge_client::{DecisionFilter, Pagination, ProjectId};
+use converge_client::{DecisionFilter, Pagination, ProjectId, SignalFilter, SignalStatus};
 use serde_json::{Value, json};
 
 use crate::config::Config;
@@ -108,18 +108,24 @@ links, a new name creates), then `project_bind` with the pick, or \
 Do NOT write `.converge` yourself — the hooks do it. Start with step 1 \
 right away.";
 
-/// The bound block: binding + a compact decision index, fetched
-/// best-effort (a hook must not fail the session because the server is
-/// down — the binding itself is local knowledge).
+/// The bound block: binding + a compact decision index + unjudged
+/// signals, fetched best-effort (a hook must not fail the session
+/// because the server is down — the binding itself is local knowledge).
+/// What the bound block fetches: the project name, the decision index
+/// lines, and the proposed-signal lines. `None` = the server answered
+/// but doesn't know the project for this account.
+type Index = Option<(String, Vec<String>, Vec<String>)>;
+
 async fn bound(project: ProjectId) -> String {
-    let fetched: Result<(String, Vec<String>)> = async {
+    let fetched: Result<Index> = async {
         let config = Config::load()?;
         let client = config.client()?;
-        let name = client
-            .project_get(project)
-            .await?
-            .map(|p| p.name)
-            .unwrap_or_else(|| project.to_string());
+        // ACL: an invisible project answers exactly like a missing one —
+        // don't dress that up as an empty decision index.
+        let Some(found) = client.project_get(project).await? else {
+            return Ok(None);
+        };
+        let name = found.name;
         let decisions = client
             .decision_list(
                 &DecisionFilter {
@@ -142,7 +148,32 @@ async fn bound(project: ProjectId) -> String {
                 )
             })
             .collect();
-        Ok((name, decisions))
+        let signals = client
+            .signal_list(
+                &SignalFilter {
+                    project: Some(project),
+                    status: Some(SignalStatus::Proposed),
+                    ..Default::default()
+                },
+                &Pagination {
+                    limit: Some(10),
+                    cursor: None,
+                },
+            )
+            .await?
+            .items
+            .iter()
+            .map(|s| {
+                format!(
+                    "- [{}/{}] {} ({})",
+                    format!("{:?}", s.tier).to_lowercase(),
+                    s.kind,
+                    s.title,
+                    s.id
+                )
+            })
+            .collect();
+        Ok(Some((name, decisions, signals)))
     }
     .await;
 
@@ -153,23 +184,46 @@ async fn bound(project: ProjectId) -> String {
         None => None,
     };
     let block = match fetched {
-        Ok((name, decisions)) if decisions.is_empty() => format!(
-            "## Converge memory — project \"{name}\" ({project})\n\
-             This working tree is bound to converge project `{project}`; \
-             project memory is active. No decisions are recorded yet — use \
-             `decision_add` when a design decision lands, and record the \
-             conversation (`session_ensure` + `message_add`) so decisions \
-             can cite their evidence."
+        Ok(None) => format!(
+            "## Converge memory — project {project}\n\
+             This working tree is bound to converge project `{project}`, \
+             but the server doesn't know it for this account — the project \
+             was deleted, or this token's user isn't a member of its \
+             group. Ask a group owner to add you, or re-bind with \
+             `project_match`."
         ),
-        Ok((name, decisions)) => format!(
-            "## Converge memory — project \"{name}\" ({project})\n\
-             This working tree is bound to converge project `{project}`; \
-             project memory is active. Decisions below are in force — \
-             `decision_get` for the full record before re-deciding a \
-             settled topic; `decision_add` (with `supersedes`/`evidence`) \
-             when a new decision lands.\n\nDecisions:\n{}",
-            decisions.join("\n")
-        ),
+        Ok(Some((name, decisions, signals))) => {
+            let mut block = if decisions.is_empty() {
+                format!(
+                    "## Converge memory — project \"{name}\" ({project})\n\
+                     This working tree is bound to converge project `{project}`; \
+                     project memory is active. No decisions are recorded yet — use \
+                     `decision_add` when a design decision lands, and record the \
+                     conversation (`session_ensure` + `message_add`) so decisions \
+                     can cite their evidence."
+                )
+            } else {
+                format!(
+                    "## Converge memory — project \"{name}\" ({project})\n\
+                     This working tree is bound to converge project `{project}`; \
+                     project memory is active. Decisions below are in force — \
+                     `decision_get` for the full record before re-deciding a \
+                     settled topic; `decision_add` (with `supersedes`/`evidence`) \
+                     when a new decision lands.\n\nDecisions:\n{}",
+                    decisions.join("\n")
+                )
+            };
+            if !signals.is_empty() {
+                block.push_str(&format!(
+                    "\n\nProposed signals (unjudged observations touching this \
+                     project — raise conflict-tier ones with the user \
+                     proactively; `signal_list` for the full record, then \
+                     `signal_resolve` with THEIR verdict, never your own):\n{}",
+                    signals.join("\n")
+                ));
+            }
+            block
+        }
         Err(_) => format!(
             "## Converge memory — project {project}\n\
              This working tree is bound to converge project `{project}`, \

@@ -5,8 +5,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use converge_server::auth::Sessions;
-use converge_server::{app, auth};
-use converge_storage::{Identity, Tokens, Users};
+use converge_server::{Expert, app, auth};
+use converge_storage::{AgentKind, Agents, Identity, NewAgent, Tokens, Users};
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -44,6 +44,16 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
         .token_add(admin, "test".into(), auth::hash(TOKEN))
         .await
         .unwrap();
+    // No expert jobs configured: detection is a no-op in the harness (the
+    // dedicated suite builds its own registry against a stub endpoint).
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "expert".into(),
+        })
+        .await
+        .unwrap();
+    let expert = Expert::new(store.clone(), converge_expert::Registry::default(), agent);
     (
         node,
         store.clone(),
@@ -54,16 +64,31 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
             None,
             None,
             None,
+            expert,
         ),
     )
 }
 
-/// Send one request; return status and parsed JSON body (`null` when empty).
+/// Send one request as the admin; return status and parsed JSON body
+/// (`null` when empty).
 // Not every suite that pulls in the harness uses the authed helper (the
 // session suite sends raw requests on purpose).
 #[allow(dead_code)]
 pub async fn send(
     app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    send_as(app, TOKEN, method, uri, body).await
+}
+
+/// [`send`], but presenting a specific bearer token — the ACL suite
+/// speaks as several users.
+#[allow(dead_code)]
+pub async fn send_as(
+    app: &Router,
+    token: &str,
     method: &str,
     uri: &str,
     body: Option<Value>,
@@ -76,7 +101,7 @@ pub async fn send(
         // a Host header (DNS-rebinding protection); harmless for REST.
         .header(header::ACCEPT, "application/json, text/event-stream")
         .header(header::HOST, "127.0.0.1")
-        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
     let request = match body {
         Some(v) => request.body(Body::from(v.to_string())).unwrap(),
         None => request.body(Body::empty()).unwrap(),

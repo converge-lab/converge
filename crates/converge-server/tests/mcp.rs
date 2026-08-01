@@ -80,6 +80,8 @@ async fn tool_round_trip() {
             "project_list",
             "project_match",
             "session_ensure",
+            "signal_list",
+            "signal_resolve",
         ]
     );
 

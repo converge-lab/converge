@@ -12,7 +12,7 @@ use std::future::Future;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::UserId;
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// A person, as stored and served.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,9 +62,21 @@ pub trait Users {
     fn user_get(&self, id: UserId)
     -> impl Future<Output = Result<Option<User>, StoreError>> + Send;
 
-    /// Users, newest first.
+    /// Everyone currently using `handle` — the member-add resolution
+    /// (handles are mutable and only provider-unique, so this returns a
+    /// list; callers treat >1 as ambiguous). Deliberately unscoped: an
+    /// owner adds people they don't yet share a group with.
+    fn user_lookup(
+        &self,
+        handle: &str,
+    ) -> impl Future<Output = Result<Vec<User>, StoreError>> + Send;
+
+    /// Users, newest first. `Scope::User` sees only people sharing a
+    /// group with them (plus themself) — a SaaS deployment's user table
+    /// is not a directory.
     fn user_list(
         &self,
+        scope: Scope,
         page: Pagination<UserId>,
     ) -> impl Future<Output = Result<Vec<User>, StoreError>> + Send;
 }

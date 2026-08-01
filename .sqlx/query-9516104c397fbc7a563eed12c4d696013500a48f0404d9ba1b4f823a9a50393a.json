@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, group_id, name, description, created_at\n               from projects\n               where ($1::uuid is null or group_id = $1)\n                 and ($3::uuid is null or id < $3)\n               order by id desc\n               limit $2",
+  "query": "select id, provider, subject, handle, name from users\n               where ($1::uuid is null or id < $1)\n                 and ($3::uuid is null or id = $3 or shares_group(id, $3))\n               order by id desc\n               limit $2",
   "describe": {
     "columns": [
       {
@@ -10,23 +10,23 @@
       },
       {
         "ordinal": 1,
-        "name": "group_id",
-        "type_info": "Uuid"
+        "name": "provider",
+        "type_info": "Text"
       },
       {
         "ordinal": 2,
-        "name": "name",
+        "name": "subject",
         "type_info": "Text"
       },
       {
         "ordinal": 3,
-        "name": "description",
+        "name": "handle",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
-        "name": "created_at",
-        "type_info": "Timestamptz"
+        "name": "name",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -40,9 +40,9 @@
       false,
       false,
       false,
-      true,
+      false,
       false
     ]
   },
-  "hash": "754dd50e0f839add984807f0a3b8f8753f3cb5716cb8014f869530a1b7d365ad"
+  "hash": "9516104c397fbc7a563eed12c4d696013500a48f0404d9ba1b4f823a9a50393a"
 }

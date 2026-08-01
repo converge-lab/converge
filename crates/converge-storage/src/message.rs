@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::ids::{MessageId, SessionId};
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// A message, as stored and served.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +51,7 @@ pub trait Messages {
     /// `NotFound`.
     fn message_add(
         &self,
+        scope: Scope,
         session: SessionId,
         new: Vec<NewMessage>,
     ) -> impl Future<Output = Result<Vec<MessageId>, StoreError>> + Send;
@@ -60,6 +61,7 @@ pub trait Messages {
     /// messages strictly *after* it.
     fn message_list(
         &self,
+        scope: Scope,
         session: SessionId,
         page: Pagination<MessageId>,
     ) -> impl Future<Output = Result<Vec<Message>, StoreError>> + Send;

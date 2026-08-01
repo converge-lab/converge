@@ -1,0 +1,223 @@
+//! The detection pass end to end against a stub model endpoint: seed two
+//! projects over REST, run the pass, watch the draft become a stored
+//! signal with expert authorship — and the re-raise ban make the pass
+//! idempotent (testcontainers — needs Docker).
+
+mod common;
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::State;
+use axum::routing::post;
+use common::{send, server};
+use converge_expert::{Config, Registry};
+use converge_server::Expert;
+use converge_storage::{AgentKind, Agents, NewAgent};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+
+/// A chat-completions stub that answers with `reply` and records the
+/// request bodies it saw.
+async fn stub(reply: Value) -> (std::net::SocketAddr, Arc<Mutex<Vec<Value>>>) {
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(
+                |State(seen): State<Arc<Mutex<Vec<Value>>>>, body: String| async move {
+                    seen.lock().await.push(serde_json::from_str(&body).unwrap());
+                    axum::Json(json!({
+                        "id": "cmpl-1", "object": "chat.completion", "created": 0,
+                        "model": "stub",
+                        "choices": [{
+                            "index": 0,
+                            "message": { "role": "assistant", "content": reply.to_string() },
+                            "finish_reason": "stop",
+                        }],
+                        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                    }))
+                },
+            ),
+        )
+        .with_state(Arc::clone(&seen));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, seen)
+}
+
+fn registry(addr: std::net::SocketAddr) -> Registry {
+    let config: Config = serde_json::from_value(json!({
+        "models": { "stub": {
+            "provider": "openai", "model": "stub",
+            "base_url": format!("http://{addr}/v1/"),
+        }},
+        "jobs": { "signals": "stub" },
+    }))
+    .unwrap();
+    Registry::new(&config).unwrap()
+}
+
+#[tokio::test]
+async fn detection_writes_stamped_signals_once() {
+    let (_pg, store, app) = server().await;
+
+    // Two projects; the subject in one, the expected target in the other,
+    // plus a same-project decoy retrieval must filter out.
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "team", "kind": "shared" })),
+    )
+    .await;
+    async fn project(app: &Router, group: &Value, name: &str) -> String {
+        let (_, p) = send(
+            app,
+            "POST",
+            "/api/v1/projects",
+            Some(json!({ "group_id": group["id"], "name": name })),
+        )
+        .await;
+        p["id"].as_str().unwrap().to_string()
+    }
+    async fn decision(app: &Router, project: &str, title: &str) -> String {
+        let (_, d) = send(
+            app,
+            "POST",
+            "/api/v1/decisions",
+            Some(json!({
+                "project_id": project, "status": "accepted",
+                "title": title, "summary": "",
+                "context": null, "consequences": null,
+            })),
+        )
+        .await;
+        d["id"].as_str().unwrap().to_string()
+    }
+    let web = project(&app, &group, "web-app").await;
+    let srv = project(&app, &group, "server").await;
+    let target = decision(&app, &srv, "Send only ids and revisions over SSE").await;
+    let decoy = decision(&app, &web, "Cache SSE events in memory").await;
+    let subject = decision(&app, &web, "Update the cache with full SSE payloads").await;
+
+    let (addr, seen) = stub(json!({
+        "signals": [{
+            "targets": [target],
+            "kind": "contract_divergence",
+            "tier": "conflict",
+            "title": "SSE payload contract divergence",
+            "text": "full payloads contradict the ids-only contract",
+            "consequence": "the cache strategy breaks",
+            "recommendation": "align the SSE payload",
+        }],
+    }))
+    .await;
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "expert".into(),
+        })
+        .await
+        .unwrap();
+    let expert = Expert::new(store.clone(), registry(addr), agent);
+
+    // The pass: one draft becomes one stored signal, expert-stamped.
+    let written = expert.run(subject.parse().unwrap()).await.unwrap();
+    assert_eq!(written, 1);
+    let (_, page) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{target}/signals"),
+        None,
+    )
+    .await;
+    let signal = &page["items"][0];
+    assert_eq!(signal["source"], json!(subject));
+    assert_eq!(signal["targets"], json!([target]));
+    assert_eq!(signal["tier"], "conflict");
+    assert_eq!(signal["status"], "proposed");
+    assert_eq!(signal["produced_by"]["agent"], json!(agent.to_string()));
+
+    // What the model saw: cross-project candidates only — the decoy
+    // shares the subject's project and must have been filtered out.
+    {
+        let seen = seen.lock().await;
+        assert_eq!(seen.len(), 1);
+        let user = seen[0]["messages"][1]["content"].as_str().unwrap();
+        let request: Value = serde_json::from_str(user).unwrap();
+        let candidates = request["candidates"].as_array().unwrap();
+        assert!(!candidates.is_empty());
+        assert!(
+            candidates.iter().all(|c| c["project"] == "server"),
+            "same-project decoy {decoy} leaked into the candidates: {candidates:?}"
+        );
+        // Cache layout: the volatile subject serializes last *on the
+        // wire* (the parsed Value alphabetizes keys — check the string).
+        let subject_at = user.find("\"decision\":").unwrap();
+        assert!(user.find("\"candidates\":").unwrap() < subject_at);
+        assert!(user.find("\"signals\":").unwrap() < subject_at);
+    }
+
+    // Idempotent: the re-raise ban absorbs the duplicate draft.
+    let written = expert.run(subject.parse().unwrap()).await.unwrap();
+    assert_eq!(written, 0);
+    let (_, page) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{target}/signals"),
+        None,
+    )
+    .await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+
+    // No job binding: the pass is a no-op that never calls the model.
+    let inert = Expert::new(store.clone(), Registry::default(), agent);
+    assert_eq!(inert.run(subject.parse().unwrap()).await.unwrap(), 0);
+    assert_eq!(seen.lock().await.len(), 2);
+
+    // The MCP loop closes the delivery: the agent lists the proposed
+    // signal and resolves it with the user's verdict.
+    let mcp = |tool: &str, arguments: Value| {
+        let app = app.clone();
+        let (tool, arguments) = (tool.to_string(), arguments);
+        async move {
+            let (_, body) = send(
+                &app,
+                "POST",
+                "/mcp",
+                Some(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": { "name": tool, "arguments": arguments },
+                })),
+            )
+            .await;
+            let text = body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("no text content: {body}"));
+            serde_json::from_str::<Value>(text).unwrap()
+        }
+    };
+    let listed = mcp(
+        "signal_list",
+        json!({ "decision_id": target, "status": "proposed" }),
+    )
+    .await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["tier"], "conflict");
+    let sid = listed[0]["signal_id"].as_str().unwrap().to_string();
+
+    let resolved = mcp(
+        "signal_resolve",
+        json!({ "signal_id": sid, "status": "confirmed" }),
+    )
+    .await;
+    assert_eq!(resolved["status"], "confirmed");
+    let (_, got) = send(&app, "GET", &format!("/api/v1/signals/{sid}"), None).await;
+    assert_eq!(got["status"], "confirmed");
+    assert!(
+        got["resolved_by"]["user_via_agent"]["user"].is_string(),
+        "the verdict is stamped as the user through the calling agent: {got}"
+    );
+}

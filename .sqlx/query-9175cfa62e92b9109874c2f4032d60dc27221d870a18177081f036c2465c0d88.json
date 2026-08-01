@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                       select 1 from messages m\n                       join sessions s on s.id = m.session_id\n                       join projects p on p.id = s.project_id\n                       where m.id = $1 and p.group_id = $2\n                   ) as \"sound!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sound!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9175cfa62e92b9109874c2f4032d60dc27221d870a18177081f036c2465c0d88"
+}

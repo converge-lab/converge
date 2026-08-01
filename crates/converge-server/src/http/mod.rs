@@ -45,6 +45,7 @@ pub fn app<S: Storage + 'static>(
     oidc: Option<Oidc>,
     public: Option<String>,
     web: Option<&Path>,
+    expert: crate::expert::Expert<S>,
 ) -> Router {
     let issuer = oauth::Issuer {
         store: store.clone(),
@@ -57,13 +58,13 @@ pub fn app<S: Storage + 'static>(
     let protected = Router::new()
         .merge(group::routes().with_state(store.clone()))
         .merge(project::routes().with_state(store.clone()))
-        .merge(decision::routes().with_state(store.clone()))
+        .merge(decision::routes().with_state((store.clone(), expert.clone())))
         .merge(evidence::routes().with_state(store.clone()))
         .merge(signal::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))
-        .nest_service("/mcp", crate::mcp::service(store.clone(), me))
+        .nest_service("/mcp", crate::mcp::service(store.clone(), me, expert))
         .layer(middleware::from_fn_with_state(
             (store.clone(), sessions.clone()),
             crate::auth::require::<S>,

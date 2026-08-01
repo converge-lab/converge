@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update signals\n               set status = $2, resolved_user = $3, resolved_agent = $4\n               where id = $1\n                 and ($5::uuid is null\n                      or group_visible((select p.group_id from decisions d\n                                        join projects p on p.id = d.project_id\n                                        where d.id = signals.source), $5))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "signal_status",
+            "kind": {
+              "Enum": [
+                "proposed",
+                "confirmed",
+                "dismissed"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c01b4cbc5df9613c988d086e85eee6b6b31f7303c7631cdddc7ed237480d5175"
+}

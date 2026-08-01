@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::ids::{ProjectId, SessionId};
-use crate::{Pagination, StoreError};
+use crate::{Pagination, Scope, StoreError};
 
 /// Where a conversation happened — the four source shapes the product
 /// renders.
@@ -64,17 +64,20 @@ pub trait Sessions {
     /// doesn't silently re-home.
     fn session_ensure(
         &self,
+        scope: Scope,
         new: NewSession,
     ) -> impl Future<Output = Result<SessionId, StoreError>> + Send;
 
     fn session_get(
         &self,
+        scope: Scope,
         id: SessionId,
     ) -> impl Future<Output = Result<Option<Session>, StoreError>> + Send;
 
     /// Sessions, newest first.
     fn session_list(
         &self,
+        scope: Scope,
         filter: SessionFilter,
         page: Pagination<SessionId>,
     ) -> impl Future<Output = Result<Vec<Session>, StoreError>> + Send;

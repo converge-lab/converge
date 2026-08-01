@@ -7,25 +7,41 @@ use common::store;
 use converge_storage::{
     AgentId, AgentKind, Agents, Author, DecisionFilter, DecisionStatus, Decisions, GroupKind,
     Groups, Identity, NewAgent, NewDecision, NewGroup, NewProject, Pagination, ProjectId, Projects,
-    StoreError, UserId, Users,
+    Scope, StoreError, UserId, Users,
 };
 use converge_storage_postgres::PgStorage;
 
 async fn project(store: &PgStorage) -> ProjectId {
-    let group = store
-        .group_add(NewGroup {
-            name: "g".into(),
-            description: None,
-            kind: GroupKind::Shared,
+    // A bootstrap user to own the group (pre-ACL tests run as `Scope::System`).
+    let owner = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "test".into(),
+            handle: "test".into(),
+            name: "Test".into(),
         })
         .await
         .unwrap();
+    let group = store
+        .group_add(
+            owner,
+            NewGroup {
+                name: "g".into(),
+                description: None,
+                kind: GroupKind::Shared,
+            },
+        )
+        .await
+        .unwrap();
     store
-        .project_add(NewProject {
-            group_id: group,
-            name: "p".into(),
-            description: None,
-        })
+        .project_add(
+            Scope::System,
+            NewProject {
+                group_id: group,
+                name: "p".into(),
+                description: None,
+            },
+        )
         .await
         .unwrap()
 }
@@ -120,7 +136,10 @@ async fn ensure_by_natural_key() {
 
     // Lists all three (same-millisecond ULIDs order by their random tails,
     // so no order assertion between near-simultaneous creations).
-    let users = store.user_list(Pagination::default()).await.unwrap();
+    let users = store
+        .user_list(Scope::System, Pagination::default())
+        .await
+        .unwrap();
     let ids: Vec<_> = users.iter().map(|u| u.id).collect();
     assert_eq!(ids.len(), 3);
     for expected in [first, other, local] {
@@ -159,13 +178,17 @@ async fn authorship_round_trip() {
         Author::UserViaAgent { user, agent },
     ];
     let id = store
-        .decision_add(decision(project_id, authors.clone()))
+        .decision_add(Scope::System, decision(project_id, authors.clone()))
         .await
         .unwrap();
 
     // All three variants survive the round trip (as a set — order is
     // unspecified).
-    let got = store.decision_get(id).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.authors.len(), 3);
     for author in &authors {
         assert!(got.authors.contains(author), "missing {author:?}");
@@ -177,7 +200,7 @@ async fn authorship_round_trip() {
         ..Default::default()
     };
     let listed = store
-        .decision_list(filter, Pagination::default())
+        .decision_list(Scope::System, filter, Pagination::default())
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
@@ -185,13 +208,17 @@ async fn authorship_round_trip() {
 
     // Duplicates collapse on write: authorship is a set.
     let dup = store
-        .decision_add(decision(
-            project_id,
-            vec![Author::User(user), Author::User(user)],
-        ))
+        .decision_add(
+            Scope::System,
+            decision(project_id, vec![Author::User(user), Author::User(user)]),
+        )
         .await
         .unwrap();
-    let got = store.decision_get(dup).await.unwrap().unwrap();
+    let got = store
+        .decision_get(Scope::System, dup)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.authors, vec![Author::User(user)]);
 }
 
@@ -202,7 +229,7 @@ async fn unknown_author_rejected() {
 
     let unknown = decision(project_id, vec![Author::User(UserId::new())]);
     assert!(matches!(
-        store.decision_add(unknown).await,
+        store.decision_add(Scope::System, unknown).await,
         Err(StoreError::Invalid(_))
     ));
 
@@ -213,7 +240,7 @@ async fn unknown_author_rejected() {
     };
     assert!(
         store
-            .decision_list(filter, Pagination::default())
+            .decision_list(Scope::System, filter, Pagination::default())
             .await
             .unwrap()
             .is_empty()

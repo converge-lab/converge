@@ -1,19 +1,24 @@
 //! `/api/v1/decisions` — CRUD, the atomic edit batch, and the graph edges,
 //! over the [`Decisions`] trait.
 
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
     Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, GroupId, NewDecision, Page,
-    Pagination, ProjectId, Storage, StoreError,
+    Pagination, ProjectId, Scope, Storage, StoreError,
 };
 use serde_json::{Value, json};
 
 use super::error::Result;
+use crate::auth::Caller;
+use crate::expert::Expert;
 
-pub fn routes<S: Storage + 'static>() -> Router<S> {
+/// Decision routes carry the expert beside the store: `add` fires the
+/// signal-detection pass post-commit (the write never waits on it).
+pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
     Router::new()
         .route("/api/v1/decisions", post(add::<S>).get(list::<S>))
         .route("/api/v1/decisions/{id}", get(fetch::<S>).patch(edit::<S>))
@@ -22,11 +27,13 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
         .route("/api/v1/groups/{id}/decisions", get(by_group::<S>))
 }
 
-async fn add<S: Storage>(
-    State(store): State<S>,
+async fn add<S: Storage + 'static>(
+    State((store, expert)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Json(new): Json<NewDecision>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let id = store.decision_add(new).await?;
+    let id = store.decision_add(Scope::User(caller.user), new).await?;
+    expert.detect(id);
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
@@ -43,11 +50,13 @@ struct Q {
 /// unpaged). Status matches the *derived* status — `superseded` finds
 /// decisions with inbound edges.
 async fn list<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Query(filter): Query<DecisionFilter>,
     Query(q): Query<Q>,
     Query(page): Query<Pagination<DecisionId>>,
 ) -> Result<Json<Page<Decision>>> {
+    let scope = Scope::User(caller.user);
     if let Some(query) = q.q.as_deref() {
         if page.cursor.is_some() {
             return Err(StoreError::Invalid(
@@ -55,13 +64,15 @@ async fn list<S: Storage>(
             )
             .into());
         }
-        let items = store.decision_search(query, filter, page.limit).await?;
+        let items = store
+            .decision_search(scope, query, filter, page.limit)
+            .await?;
         return Ok(Json(Page {
             items,
             next_cursor: None,
         }));
     }
-    let items = store.decision_list(filter, page.clone()).await?;
+    let items = store.decision_list(scope, filter, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }
 
@@ -69,7 +80,8 @@ async fn list<S: Storage>(
 /// form stays `/decisions?project=`). The bound parent must exist — an
 /// unknown project is 404, not `[]`.
 async fn by_project<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<ProjectId>,
     Query(mut filter): Query<DecisionFilter>,
     Query(page): Query<Pagination<DecisionId>>,
@@ -80,9 +92,13 @@ async fn by_project<S: Storage>(
         )
         .into());
     }
-    store.project_get(id).await?.ok_or(StoreError::NotFound)?;
+    let scope = Scope::User(caller.user);
+    store
+        .project_get(scope, id)
+        .await?
+        .ok_or(StoreError::NotFound)?;
     filter.project = Some(id);
-    let items = store.decision_list(filter, page.clone()).await?;
+    let items = store.decision_list(scope, filter, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }
 
@@ -91,7 +107,8 @@ async fn by_project<S: Storage>(
 /// re-bind, so it stays allowed (a project outside the group just yields
 /// nothing). The bound group must exist — unknown is 404, not `[]`.
 async fn by_group<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<GroupId>,
     Query(mut filter): Query<DecisionFilter>,
     Query(page): Query<Pagination<DecisionId>>,
@@ -102,38 +119,50 @@ async fn by_group<S: Storage>(
         )
         .into());
     }
-    store.group_get(id).await?.ok_or(StoreError::NotFound)?;
+    let scope = Scope::User(caller.user);
+    store
+        .group_get(scope, id)
+        .await?
+        .ok_or(StoreError::NotFound)?;
     filter.group = Some(id);
-    let items = store.decision_list(filter, page.clone()).await?;
+    let items = store.decision_list(scope, filter, page.clone()).await?;
     Ok(Json(Page::new(items, &page, |d| d.id.to_string())))
 }
 
 async fn fetch<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<DecisionId>,
 ) -> Result<Json<Decision>> {
     Ok(Json(
-        store.decision_get(id).await?.ok_or(StoreError::NotFound)?,
+        store
+            .decision_get(Scope::User(caller.user), id)
+            .await?
+            .ok_or(StoreError::NotFound)?,
     ))
 }
 
 async fn edit<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<DecisionId>,
     Json(edits): Json<Vec<DecisionEdit>>,
 ) -> Result<StatusCode> {
-    store.decision_edit(id, edits).await?;
+    store
+        .decision_edit(Scope::User(caller.user), id, edits)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The direct graph neighbourhood of one decision, both directions.
 async fn edges<S: Storage>(
-    State(store): State<S>,
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
     Path(id): Path<DecisionId>,
 ) -> Result<Json<Edges>> {
     Ok(Json(
         store
-            .decision_edges(id)
+            .decision_edges(Scope::User(caller.user), id)
             .await?
             .ok_or(StoreError::NotFound)?,
     ))

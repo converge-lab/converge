@@ -632,6 +632,37 @@ pub fn chain_of(id: &str) -> Vec<Rc<Dec>> {
     q_chain(&ds(), id)
 }
 
+/// The embedded build's search analog: case-insensitive substring over
+/// title/summary/context, narrowed by project and status like the API
+/// path. Order stays the dataset's (newest first) — no ranking offline.
+#[cfg(not(feature = "api"))]
+pub fn search_local(needle: &str, project: &str, status: &str) -> Vec<Rc<Dec>> {
+    ds().decisions
+        .iter()
+        .filter(|d| project == "all" || d.project_id == project)
+        .filter(|d| status == "all" || status_slug(d.status) == status)
+        .filter(|d| {
+            d.title.to_lowercase().contains(needle)
+                || d.summary.to_lowercase().contains(needle)
+                || d.context
+                    .as_deref()
+                    .is_some_and(|c| c.to_lowercase().contains(needle))
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(not(feature = "api"))]
+fn status_slug(s: Status) -> &'static str {
+    match s {
+        Status::Accepted => "accepted",
+        Status::Draft => "draft",
+        Status::Proposed => "proposed",
+        Status::Superseded => "superseded",
+        Status::Rejected => "rejected",
+    }
+}
+
 pub fn signals_for(dec_id: &str) -> Vec<Rc<Sig>> {
     ds().signals
         .iter()

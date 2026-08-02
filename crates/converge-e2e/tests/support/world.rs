@@ -2,8 +2,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use testcontainers_modules::postgres::Postgres;
+use testcontainers_modules::testcontainers::bollard::{
+    Docker, container::PathStatResponse, errors::Error as BollardError,
+    query_parameters::ContainerArchiveInfoOptionsBuilder,
+};
 use testcontainers_modules::testcontainers::core::{
-    BuildImageOptions, CmdWaitFor, ExecCommand, WaitFor,
+    BuildImageOptions, CmdWaitFor, ExecCommand, WaitFor, client::docker_client_instance,
 };
 use testcontainers_modules::testcontainers::runners::{AsyncBuilder, AsyncRunner};
 use testcontainers_modules::testcontainers::{
@@ -11,6 +15,9 @@ use testcontainers_modules::testcontainers::{
 };
 use tokio::sync::OnceCell;
 use uuid::Uuid;
+
+// Docker reports the mode using Go's os.FileMode bit layout.
+const MODE_SYMLINK: u32 = 1 << 27;
 
 pub trait Agent {
     fn image_name(&self) -> &'static str;
@@ -98,6 +105,7 @@ pub struct TestWorld<A> {
     // Drop the server before the agent whose network namespace it uses.
     server: Option<RunningServer>,
     agent_container: ContainerAsync<GenericImage>,
+    docker: Docker,
     _agent: A,
 }
 
@@ -128,6 +136,82 @@ impl<A> TestWorld<A> {
         env: &[(&str, &str)],
     ) -> Result<CommandOutput> {
         command_output(&self.agent_container, command, env).await
+    }
+
+    pub async fn pipe(&self, commands: &[&[&str]]) -> Result<CommandOutput> {
+        if commands.len() < 2 {
+            bail!("a pipeline requires at least two commands");
+        }
+
+        let mut script = String::new();
+        let mut arguments = Vec::new();
+        let mut parameter = 1;
+
+        for (command_index, command) in commands.iter().enumerate() {
+            if command.is_empty() {
+                bail!("pipeline command {command_index} is empty");
+            }
+            if command_index > 0 {
+                script.push_str(" | ");
+            }
+
+            for (argument_index, argument) in command.iter().enumerate() {
+                if argument_index > 0 {
+                    script.push(' ');
+                }
+                script.push_str(&format!(r#""${{{parameter}}}""#));
+                arguments.push((*argument).to_owned());
+                parameter += 1;
+            }
+        }
+
+        let mut invocation = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            script,
+            "converge-e2e-pipe".to_owned(),
+        ];
+        invocation.extend(arguments);
+        let invocation = invocation.iter().map(String::as_str).collect::<Vec<_>>();
+
+        self.exec(&invocation).await
+    }
+
+    pub async fn exists(&self, path: &str) -> Result<bool> {
+        Ok(self.path_metadata(path).await?.is_some())
+    }
+
+    pub async fn read_link(&self, path: &str) -> Result<String> {
+        let metadata = self.required_path_metadata(path).await?;
+        if metadata.file_mode & MODE_SYMLINK == 0 {
+            bail!("read link in container: {path} is not a symbolic link");
+        }
+
+        Ok(metadata.link_target)
+    }
+
+    async fn path_metadata(&self, path: &str) -> Result<Option<PathStatResponse>> {
+        let options = ContainerArchiveInfoOptionsBuilder::default()
+            .path(path)
+            .build();
+
+        match self
+            .docker
+            .get_container_archive_info(self.agent_container.id(), Some(options))
+            .await
+        {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(BollardError::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("read container metadata: {path}")),
+        }
+    }
+
+    async fn required_path_metadata(&self, path: &str) -> Result<PathStatResponse> {
+        self.path_metadata(path)
+            .await?
+            .with_context(|| format!("path does not exist in container: {path}"))
     }
 }
 
@@ -253,9 +337,14 @@ impl<A: Agent> TestWorldBuilder<A> {
             _ => unreachable!("Postgres is created exactly when a server is configured"),
         };
 
+        let docker = docker_client_instance()
+            .await
+            .context("connect to Docker for container filesystem access")?;
+
         Ok(TestWorld {
             server: running_server,
             agent_container,
+            docker,
             _agent: agent,
         })
     }

@@ -4,7 +4,10 @@ use super::world::Agent;
 use testcontainers_modules::testcontainers::GenericImage;
 use tokio::sync::OnceCell;
 
-pub const CLAUDE_CODE_VERSION: &str = "2.1.220";
+pub const CLAUDE_CODE_VERSION: &str = env!(
+    "CONVERGE_E2E_CLAUDE_CODE_VERSION",
+    "CONVERGE_E2E_CLAUDE_CODE_VERSION must be set when compiling converge-e2e"
+);
 static IMAGE: OnceCell<GenericImage> = OnceCell::const_new();
 
 #[derive(Debug, Clone, Copy)]

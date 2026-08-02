@@ -6,7 +6,7 @@ COPY .sqlx .sqlx
 COPY crates crates
 
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p converge-cli -p converge-server
+RUN cargo build --release -p converge-server
 
 FROM node:22-bookworm-slim
 
@@ -17,7 +17,8 @@ ENV DISABLE_AUTOUPDATER=1 \
     PATH=/home/e2e/.npm-global/bin:${PATH}
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates coreutils curl git gzip tar \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /bin/sh e2e \
     && mkdir /workspace \
@@ -28,7 +29,6 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force
 
 USER root
-COPY --from=converge-builder /src/target/release/converge /usr/local/bin/converge
 COPY --from=converge-builder /src/target/release/converge-server /usr/local/bin/converge-server
 
 USER e2e

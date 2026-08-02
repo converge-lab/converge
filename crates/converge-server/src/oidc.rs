@@ -165,7 +165,7 @@ impl Oidc {
         let endpoints = self.endpoints().await?;
         let flow = Flow {
             state: random(),
-            verifier: random(),
+            verifier: verifier(),
         };
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(flow.verifier.as_bytes()));
         let scope = match self.settings.provider.as_str() {
@@ -260,11 +260,21 @@ impl Oidc {
     }
 }
 
-/// 128 bits of hex — state and verifier material.
+/// 128 bits of hex — CSRF state material.
 fn random() -> String {
     let mut bytes = [0u8; 16];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A PKCE code verifier: 32 random bytes, base64url — 43 characters,
+/// the RFC 7636 minimum. Providers that enforce PKCE (GitHub does, once
+/// authorize carries a challenge) reject shorter verifiers at the code
+/// exchange with an opaque 400.
+fn verifier() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[cfg(test)]
@@ -290,6 +300,16 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("redirect_uri=https%3A%2F%2Fconverge.example.com%2Fauth%2Fcallback"));
         assert!(!url.contains(&flow.verifier), "verifier must never leave");
+        // RFC 7636 §4.1: 43–128 chars — GitHub enforces this at the
+        // exchange and answers an opaque 400 for anything shorter.
+        assert!(
+            (43..=128).contains(&flow.verifier.len()),
+            "PKCE verifier length {} outside RFC bounds",
+            flow.verifier.len()
+        );
+        // The flow cookie is dot-delimited — the verifier alphabet must
+        // never contain one.
+        assert!(!flow.verifier.contains('.'));
     }
 
     #[tokio::test]

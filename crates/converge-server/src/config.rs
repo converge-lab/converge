@@ -181,7 +181,12 @@ impl Config {
             .add_source(
                 Environment::with_prefix("CONVERGE")
                     .prefix_separator("_")
-                    .separator("__"),
+                    .separator("__")
+                    // List-valued keys need explicit parsing on the env
+                    // layer (comma-separated); file layers are untouched.
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("auth.oidc.allowed"),
             )
             .build()?
             .try_deserialize()?;
@@ -247,5 +252,45 @@ mod tests {
     #[test]
     fn missing_database_url_fails() {
         assert!(from_layers(&[""]).is_err());
+    }
+
+    /// The env layer parses `auth.oidc.allowed` as a comma list — the
+    /// env-only deployment path must be able to set the allowlist.
+    #[test]
+    fn env_layer_parses_the_allowed_list() {
+        let cfg: Config = config::Config::builder()
+            .add_source(File::from_str(
+                r#"database_url = "postgres://x""#,
+                FileFormat::Toml,
+            ))
+            .add_source(
+                Environment::with_prefix("CONVTEST")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true)
+                    .list_separator(",")
+                    .with_list_parse_key("auth.oidc.allowed")
+                    .source(Some(
+                        [
+                            ("CONVTEST_AUTH__OIDC__PROVIDER", "github"),
+                            ("CONVTEST_AUTH__OIDC__CLIENT_ID", "id"),
+                            ("CONVTEST_AUTH__OIDC__CLIENT_SECRET", "secret"),
+                            ("CONVTEST_AUTH__OIDC__PUBLIC_URL", "https://x"),
+                            ("CONVTEST_AUTH__OIDC__ALLOWED", "alice,bob"),
+                        ]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    )),
+            )
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let oidc = cfg.auth.oidc.expect("oidc configured from env");
+        assert_eq!(
+            oidc.allowed.as_deref(),
+            Some(&["alice".into(), "bob".into()][..])
+        );
     }
 }

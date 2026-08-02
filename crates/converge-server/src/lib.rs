@@ -12,5 +12,5 @@ pub mod mcp;
 pub mod oauth;
 pub mod oidc;
 
-pub use expert::Expert;
+pub use expert::{Backfill, Expert};
 pub use http::app;

@@ -220,4 +220,32 @@ async fn detection_writes_stamped_signals_once() {
         got["resolved_by"]["user_via_agent"]["user"].is_string(),
         "the verdict is stamped as the user through the calling agent: {got}"
     );
+
+    // Backfill sweeps the whole corpus through the same pass. The stub
+    // proposes the same target for every subject, so: subject's pair is
+    // already observed (re-raise ban absorbs it), target-as-subject
+    // self-targets (storage rejects the draft, non-fatally), and
+    // decoy-as-subject is a genuinely new pair — exactly one write.
+    let stats = expert
+        .backfill(converge_storage::DecisionFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(stats.examined, 3, "target, decoy, subject");
+    assert_eq!(stats.written, 1, "only the decoy→target pair is new");
+    assert_eq!(
+        stats.failed, 0,
+        "rejected drafts are absorbed, not failures"
+    );
+    // And a second sweep is fully absorbed — idempotence.
+    let stats = expert
+        .backfill(converge_storage::DecisionFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(stats.written, 0);
+    // Without a job binding backfill is a no-op that examines nothing.
+    let stats = inert
+        .backfill(converge_storage::DecisionFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(stats, converge_server::Backfill::default());
 }

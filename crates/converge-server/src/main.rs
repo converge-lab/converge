@@ -51,6 +51,18 @@ enum ExpertCmd {
         /// Check this job only.
         job: Option<String>,
     },
+    /// Run signal detection over every existing decision — the day-one
+    /// pass for a deployment that already has memory. Idempotent: the
+    /// re-raise ban absorbs already-judged pairs. Run it while the
+    /// server is up or down; it only needs the database and the model.
+    Backfill {
+        /// Narrow to one project's decisions.
+        #[arg(long)]
+        project: Option<String>,
+        /// Narrow to one group's decisions.
+        #[arg(long)]
+        group: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,6 +112,13 @@ async fn main() -> anyhow::Result<()> {
 
     if let Some(Cmd::Expert(ExpertCmd::Check { job })) = &cli.command {
         return check(&config.expert, job.as_deref()).await;
+    }
+
+    if let Some(Cmd::Expert(ExpertCmd::Backfill { project, group })) = &cli.command {
+        // Backfill is long-running and reports through tracing — it
+        // needs the subscriber the serve path installs.
+        let _guard = telemetry::init(&config.log)?;
+        return backfill(&config, project.as_deref(), group.as_deref()).await;
     }
 
     if let Some(Cmd::Token(cmd)) = cli.command {
@@ -226,6 +245,56 @@ async fn check(config: &converge_expert::Config, only: Option<&str>) -> anyhow::
     if failed {
         anyhow::bail!("expert check failed");
     }
+    Ok(())
+}
+
+/// `expert backfill`: the detection pass over the existing corpus.
+/// Everything reports through tracing (per-decision raises at info,
+/// failures at warn, the summary at info). Exits nonzero only when
+/// nothing could run at all — per-decision failures are counted and
+/// non-fatal.
+async fn backfill(
+    config: &config::Config,
+    project: Option<&str>,
+    group: Option<&str>,
+) -> anyhow::Result<()> {
+    use converge_storage::{DecisionFilter, GroupId, ProjectId};
+
+    let registry = converge_expert::Registry::new(&config.expert)
+        .context("build the expert registry ([expert] config)")?;
+    if registry.job("signals").is_none() {
+        anyhow::bail!("no `signals` job configured under [expert.jobs] — nothing to backfill with");
+    }
+    let filter = DecisionFilter {
+        project: project
+            .map(|p| p.parse::<ProjectId>())
+            .transpose()
+            .context("--project is not a valid id")?,
+        group: group
+            .map(|g| g.parse::<GroupId>())
+            .transpose()
+            .context("--group is not a valid id")?,
+        status: None,
+    };
+
+    let store = PgStorage::connect(&config.database_url).await?;
+    store.migrate().await?;
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "expert".into(),
+        })
+        .await?;
+    let expert = converge_server::Expert::new(store, registry, agent);
+
+    info!("backfilling signal detection (sequential, one model call at a time)");
+    let stats = expert.backfill(filter).await?;
+    info!(
+        examined = stats.examined,
+        written = stats.written,
+        failed = stats.failed,
+        "backfill complete"
+    );
     Ok(())
 }
 

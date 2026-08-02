@@ -42,6 +42,17 @@ const STOP: &[&str] = &[
     "its", "has", "have", "when", "then", "than", "them", "each", "every", "will", "should",
 ];
 
+/// What a backfill pass did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Backfill {
+    /// Decisions the pass examined.
+    pub examined: usize,
+    /// Signals written across all of them.
+    pub written: usize,
+    /// Decisions whose pass failed (logged, not fatal).
+    pub failed: usize,
+}
+
 /// The service. Cheap to clone (the registry shares clients, storage
 /// shares its pool).
 #[derive(Clone)]
@@ -79,6 +90,41 @@ impl<S: Storage + 'static> Expert<S> {
                 Err(error) => warn!(%decision, %error, "signal detection failed"),
             }
         });
+    }
+
+    /// Run detection over every existing decision (optionally narrowed)
+    /// — the day-one story for a deployment that already has memory.
+    /// Sequential (one model call in flight), oldest first, fail-open
+    /// per decision: a failed pass is counted and logged, never fatal.
+    /// The re-raise ban absorbs re-running over already-judged pairs, so
+    /// backfill is idempotent.
+    pub async fn backfill(&self, filter: DecisionFilter) -> Result<Backfill, StoreError> {
+        let mut stats = Backfill::default();
+        if self.registry.job("signals").is_none() {
+            return Ok(stats);
+        }
+        let mut decisions = self
+            .store
+            .decision_list(Scope::System, filter, Pagination::default())
+            .await?;
+        // Newest-first from storage; judge in capture order.
+        decisions.reverse();
+        for decision in decisions {
+            stats.examined += 1;
+            match self.run(decision.id).await {
+                Ok(written) => {
+                    stats.written += written;
+                    if written > 0 {
+                        info!(decision = %decision.id, written, title = %decision.title, "backfill: signals raised");
+                    }
+                }
+                Err(error) => {
+                    stats.failed += 1;
+                    warn!(decision = %decision.id, %error, "backfill: pass failed — continuing");
+                }
+            }
+        }
+        Ok(stats)
     }
 
     /// The detection pass itself, awaitable — public so tests (and a

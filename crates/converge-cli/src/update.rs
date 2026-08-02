@@ -20,11 +20,10 @@ use anyhow::{Context, Result, bail};
 use minisign_verify::{PublicKey, Signature};
 use sha2::{Digest, Sha256};
 
-/// The release-signing public key (minisign, one base64 line). The
-/// placeholder is replaced when the project's key is generated (see
-/// RELEASING.md); until then `CONVERGE_UPDATE_PUBKEY` overrides — which
-/// is also the test seam.
-const PUBKEY: &str = "__MINISIGN_PUBKEY__";
+/// The release-signing public key (minisign, one base64 line; key id
+/// CC7B17D2B5E41A4A, committed as `minisign.pub`). `CONVERGE_UPDATE_PUBKEY`
+/// overrides — the test seam and the key-rotation escape hatch.
+const PUBKEY: &str = "RWRKGuS10hd7zJFgRh360sV7125wY9FsBVfrW1mCjmcEaSGwb4D3YNFn";
 
 const REPO: &str = "converge-lab/converge";
 
@@ -274,9 +273,9 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_key_refuses_without_override() {
-        // The baked-in key is still the placeholder in this tree.
+    fn baked_key_parses_without_override() {
+        // The real release key is baked in — it must parse as minisign.
         unsafe { std::env::remove_var("CONVERGE_UPDATE_PUBKEY") };
-        assert!(key().is_err());
+        assert!(key().is_ok());
     }
 }

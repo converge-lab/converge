@@ -18,9 +18,10 @@
 set -eu
 
 REPO="converge-lab/converge"
-# The release-signing public key (minisign). Verified best-effort here;
-# authoritative verification is `converge update`'s embedded copy.
-PUBKEY="__MINISIGN_PUBKEY__"
+# The release-signing public key (minisign, key id CC7B17D2B5E41A4A).
+# Verified best-effort here; authoritative verification is `converge
+# update`'s embedded copy.
+PUBKEY="RWRKGuS10hd7zJFgRh360sV7125wY9FsBVfrW1mCjmcEaSGwb4D3YNFn"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }

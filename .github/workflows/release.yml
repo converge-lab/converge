@@ -58,6 +58,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - uses: actions/download-artifact@v5
         with:
@@ -65,9 +66,9 @@ jobs:
       - name: Manifest
         run: sha256sum converge-*.tar.gz > SHA256SUMS
       - name: Sign manifest
-        # The unencrypted minisign secret key lives in the repo secret
-        # (CI-custody tradeoff, documented in RELEASING.md); the public
-        # half is committed as minisign.pub and embedded in installers.
+        # The unencrypted minisign secret key lives in the `release`
+        # environment's secret (CI-custody tradeoff, see RELEASING.md);
+        # the public half is committed and embedded in installers.
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: |

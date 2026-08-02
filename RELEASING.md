@@ -23,12 +23,15 @@ cargo install rsign2
 rsign generate --unencrypted -p minisign.pub -s minisign.key
 ```
 
-- The secret must be **unencrypted**: CI signs unattended, so the key's
-  protection *is* the repository secret store. Anyone who can write repo
-  secrets can sign — acceptable for now; move to offline signing if the
-  project's threat model grows.
-- Put the content of `minisign.key` into the `MINISIGN_SECRET_KEY`
-  repository secret, then delete the local file.
+- The secret must be **unencrypted**: CI signs unattended. (The key
+  file's `untrusted comment:` header says "encrypted" either way — it's
+  boilerplate; the KDF fields in the blob are what differ. Test:
+  `rsign sign` must NOT prompt for a password.)
+- Put the whole content of `minisign.key` (both lines) into the
+  `MINISIGN_SECRET_KEY` secret of the `release` environment (the
+  publish job declares `environment: release`), then delete the local
+  key file. How that environment is protected is deployment policy,
+  not part of this document.
 - Commit `minisign.pub`, then bake its **key line** (the second line of
   the file) into two places, replacing `__MINISIGN_PUBKEY__`:
   - `install.sh` — bootstrap verification, and

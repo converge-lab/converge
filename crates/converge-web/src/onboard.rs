@@ -12,17 +12,31 @@ use crate::modals::{ModalKind, open};
 
 #[component]
 pub fn Onboarding() -> impl IntoView {
+    // Zero groups (a fresh user or deployment) vs an empty group: the
+    // same guide, but "new project" only makes sense inside a group.
+    let fresh = data::groups().is_empty();
     let group = data::group_name();
+    let (title, sub) = if fresh {
+        (
+            "Welcome to converge",
+            "Decision memory starts with a group — a team's shared space. \
+             Create one, or have your agent do it."
+                .to_string(),
+        )
+    } else {
+        (
+            "Nothing here yet",
+            format!(
+                "{group} is empty. Create a home for your team's decisions — or have your agent do it.",
+            ),
+        )
+    };
     view! {
         <div class="cv-onboard-wrap">
             <div class="cv-onboard">
                 <Logo variant=LogoVariant::Mark class="cv-onboard__mark" />
-                <h1 class="cv-heading cv-fs-3xl">"Nothing here yet"</h1>
-                <p class="cv-onboard__sub">
-                    {format!(
-                        "{group} is empty. Create a home for your team's decisions — or have your agent do it.",
-                    )}
-                </p>
+                <h1 class="cv-heading cv-fs-3xl">{title}</h1>
+                <p class="cv-onboard__sub">{sub}</p>
                 <div class="cv-onboard__cards">
                     <OnboardCard
                         glyph=Glyph::Shared
@@ -30,12 +44,17 @@ pub fn Onboarding() -> impl IntoView {
                         desc="Shared decision memory for a team of services."
                         on_click=Callback::new(|_| open(ModalKind::NewGroup))
                     />
-                    <OnboardCard
-                        glyph=Glyph::Dashboard
-                        title="New project"
-                        desc=format!("A single service's decision log, in {group}.")
-                        on_click=Callback::new(|_| open(ModalKind::NewProject))
-                    />
+                    {(!fresh)
+                        .then(|| {
+                            view! {
+                                <OnboardCard
+                                    glyph=Glyph::Dashboard
+                                    title="New project"
+                                    desc=format!("A single service's decision log, in {group}.")
+                                    on_click=Callback::new(|_| open(ModalKind::NewProject))
+                                />
+                            }
+                        })}
                 </div>
                 <div class="cv-onboard__or">"or connect your agent"</div>
                 <div class="cv-onboard__agent">

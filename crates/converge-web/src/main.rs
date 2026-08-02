@@ -270,10 +270,9 @@ fn App() -> impl IntoView {
         }
         match store.dataset().get() {
             None => Phase::Loading,
-            // A fresh load with no groups: every accessor below assumes at
-            // least one, so gate with an honest empty state. Mutations only
-            // ever add groups, so Ready never regresses to Empty.
-            Some(dataset) if dataset.groups.is_empty() => Phase::Empty,
+            // Zero groups renders the full shell too: the dashboard's
+            // Onboarding state is the start guide (the group accessors
+            // degrade to a stub group until the first create).
             Some(_) => Phase::Ready,
         }
     });
@@ -282,7 +281,6 @@ fn App() -> impl IntoView {
             Phase::Unauthorized => return login().into_any(),
             Phase::Failed(msg) => return boot_error(msg).into_any(),
             Phase::Loading => return boot_loading().into_any(),
-            Phase::Empty => return boot_empty().into_any(),
             Phase::Ready => {}
         }
         view! {
@@ -367,7 +365,6 @@ enum Phase {
     Loading,
     Unauthorized,
     Failed(String),
-    Empty,
     Ready,
 }
 
@@ -497,24 +494,6 @@ fn login() -> impl IntoView + use<> {
                             }
                         })
                 }}
-            </div>
-        </div>
-    }
-}
-
-/// Fresh deployment, nothing recorded yet. Creating groups lives on the
-/// API/MCP surfaces for now — say so instead of rendering a shell that
-/// assumes data.
-fn boot_empty() -> impl IntoView {
-    view! {
-        <div class="cv-boot">
-            <div class="cv-boot__msg cv-text-center">
-                <div class="cv-fs-xl cv-fw-semibold cv-mb-8">"Nothing here yet"</div>
-                <div class="cv-fs-md cv-fg-muted cv-lh-normal">
-                    "Decision memory is empty. Create a group and project over the API, "
-                    "or connect an agent to " <span class="cv-mono">"/mcp"</span>
-                    " and record the first decision."
-                </div>
             </div>
         </div>
     }

@@ -20,6 +20,6 @@ pub mod validate;
 pub mod wire;
 
 pub use assemble::{Assembled, assemble};
-pub use enums::{GroupKind, Risk, SourceKind, Status};
+pub use enums::{GroupKind, Risk, SignalStatus, SourceKind, Status};
 pub use rows::{EMBEDDED, Seed};
 pub use validate::validate;

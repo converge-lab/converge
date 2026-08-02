@@ -127,9 +127,12 @@ pub use api::client;
 mod api {
     use super::{DataSource, LoadError, Loading, build_dataset};
     use crate::seed::{self, wire};
-    use converge_client::{Client, DecisionFilter, Pagination, ProjectFilter, StoreError};
+    use converge_client::{
+        Client, DecisionFilter, Pagination, ProjectFilter, SignalFilter, StoreError,
+    };
     use converge_ui::domain::initials;
     use leptos::prelude::window;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use time::format_description::well_known::Rfc3339;
 
@@ -188,10 +191,16 @@ mod api {
                     .decision_list(&DecisionFilter::default(), &Pagination::default())
                     .await
                     .map_err(oops("load decisions"))?;
+                let signals = client
+                    .signal_list(&SignalFilter::default(), &Pagination::default())
+                    .await
+                    .map_err(oops("load signals"))?;
 
-                // M4 residue from the fixture seed. Its ids don't intersect
-                // real data, so these features read as empty until their
-                // endpoints exist — honest, and contained here.
+                // Remaining residue from the fixture seed (unread, extras,
+                // expert context — the acks slice's territory). Its ids
+                // don't intersect real data, so these features read as
+                // empty until their endpoints exist — honest, and
+                // contained here.
                 let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
                 let mock = seed::assemble(&seed);
 
@@ -247,13 +256,71 @@ mod api {
                         email: String::new(),
                     },
                     user_colors: mock.user_colors,
-                    signals: mock.signals,
+                    signals: signals
+                        .items
+                        .iter()
+                        .map(|s| signal(s, &decisions.items))
+                        .collect(),
                     decision_extras: extras,
                     unread: mock.unread,
                     agent_context: mock.agent_context,
                 };
                 Ok(Rc::new(build_dataset(assembled)))
             })
+        }
+    }
+
+    /// A signal → the read-model shape. `from` is the source decision's
+    /// project id (group filtering keys on it); `to` is the affected
+    /// side: one project id when the targets agree, a count otherwise.
+    /// `sources` carries every involved decision id, so the detail
+    /// screen deep-links both ends and `signals_for` matches either.
+    fn signal(
+        s: &converge_client::Signal,
+        decisions: &[converge_client::Decision],
+    ) -> wire::mock::Signal {
+        let project_of: HashMap<String, String> = decisions
+            .iter()
+            .map(|d| (d.id.to_string(), d.project_id.to_string()))
+            .collect();
+        let from = project_of
+            .get(&s.source.to_string())
+            .cloned()
+            .unwrap_or_default();
+        let mut affected: Vec<String> = s
+            .targets
+            .iter()
+            .filter_map(|t| project_of.get(&t.to_string()).cloned())
+            .collect();
+        affected.sort();
+        affected.dedup();
+        let to = match affected.len() {
+            0 => String::new(),
+            1 => affected.remove(0),
+            n => format!("{n} projects"),
+        };
+        let mut sources = vec![s.source.to_string()];
+        sources.extend(s.targets.iter().map(|t| t.to_string()));
+        wire::mock::Signal {
+            id: s.id.to_string(),
+            from,
+            to,
+            dec_id: s.source.to_string(),
+            title: s.title.clone(),
+            text: s.text.clone(),
+            consequence: s.consequence.clone().unwrap_or_default(),
+            recommended: s.recommendation.clone().unwrap_or_default(),
+            risk: match s.tier {
+                converge_client::Tier::Conflict => seed::Risk::WillBreak,
+                converge_client::Tier::Coordinate => seed::Risk::Coordinate,
+                converge_client::Tier::Watch => seed::Risk::Watch,
+            },
+            status: match s.status {
+                converge_client::SignalStatus::Proposed => seed::SignalStatus::Proposed,
+                converge_client::SignalStatus::Confirmed => seed::SignalStatus::Confirmed,
+                converge_client::SignalStatus::Dismissed => seed::SignalStatus::Dismissed,
+            },
+            sources,
         }
     }
 

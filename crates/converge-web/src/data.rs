@@ -81,10 +81,13 @@ pub struct Dec {
     pub sources: Vec<Src>,
 }
 
-/// A cross-project signal (mock-backed for now).
+/// A cross-project signal.
 pub struct Sig {
     pub id: String,
+    /// The source decision's project id.
     pub from: String,
+    /// Affected-side display text (a project id on the API path — resolved
+    /// to a name at render time; free text in the fixture).
     pub to: String,
     pub dec_id: String,
     pub title: String,
@@ -92,6 +95,7 @@ pub struct Sig {
     pub consequence: String,
     pub recommended: String,
     pub risk: domain::Risk,
+    pub status: crate::seed::SignalStatus,
     pub sources: Vec<String>,
 }
 
@@ -119,6 +123,8 @@ pub struct ProjectInfo {
 /// The signed-in account.
 #[derive(Clone)]
 pub struct Account {
+    /// The principal's user id — signal resolutions stamp it.
+    pub user_id: String,
     pub initial: String,
     pub name: String,
     pub role: String,
@@ -308,6 +314,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                 consequence: s.consequence.clone(),
                 recommended: s.recommended.clone(),
                 risk: risk_of(s.risk),
+                status: s.status,
                 sources: s.sources.clone(),
             })
         })
@@ -339,6 +346,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
         agent_context: a.agent_context,
         unread: a.unread,
         account: Account {
+            user_id: a.me.user_id.clone(),
             initial: a.me.initial.clone(),
             name: a.me.name.clone(),
             role: a.me.role.clone(),
@@ -587,9 +595,11 @@ pub fn group_signals() -> Vec<Rc<Sig>> {
     let Some(group) = q_group(&d, group_idx()) else {
         return Vec::new();
     };
+    // Dismissed signals are the don't-re-raise memory — kept, not shown.
     d.signals
         .iter()
         .filter(|s| group.project_ids.contains(&s.from))
+        .filter(|s| s.status != crate::seed::SignalStatus::Dismissed)
         .cloned()
         .collect()
 }
@@ -626,8 +636,44 @@ pub fn signals_for(dec_id: &str) -> Vec<Rc<Sig>> {
     ds().signals
         .iter()
         .filter(|s| s.dec_id == dec_id || s.sources.iter().any(|x| x == dec_id))
+        .filter(|s| s.status != crate::seed::SignalStatus::Dismissed)
         .cloned()
         .collect()
+}
+
+/// Reflect a confirmed resolution: flip the signal's status in place.
+/// Dismissed signals drop out of every list (the queries filter them);
+/// the record itself stays — parity with the server's re-raise ban.
+pub fn resolve_signal_local(store: AppStore, id: &str, status: crate::seed::SignalStatus) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    ds.signals = ds
+        .signals
+        .iter()
+        .map(|s| {
+            if s.id == id {
+                Rc::new(Sig {
+                    id: s.id.clone(),
+                    from: s.from.clone(),
+                    to: s.to.clone(),
+                    dec_id: s.dec_id.clone(),
+                    title: s.title.clone(),
+                    text: s.text.clone(),
+                    consequence: s.consequence.clone(),
+                    recommended: s.recommended.clone(),
+                    risk: s.risk,
+                    status,
+                    sources: s.sources.clone(),
+                })
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    store.dataset().set(Some(Rc::new(ds)));
 }
 
 /// True if a decision sits in its own project's forwarded expert context.
@@ -710,8 +756,10 @@ pub fn to_source_view(s: &Src) -> SourceView {
 
 pub fn to_signal(s: &Sig) -> Signal {
     Signal {
-        from: s.from.clone(),
-        to: s.to.clone(),
+        // `from` is a project id; `to` may be one (API path) or display
+        // text (fixture) — proj_name falls through to the input either way.
+        from: proj_name(&s.from),
+        to: proj_name(&s.to),
         risk: s.risk,
         title: s.title.clone(),
         text: s.text.clone(),
@@ -720,8 +768,8 @@ pub fn to_signal(s: &Sig) -> Signal {
 
 pub fn to_signal_detail(s: &Sig) -> SignalDetail {
     SignalDetail {
-        from: s.from.clone(),
-        to: s.to.clone(),
+        from: proj_name(&s.from),
+        to: proj_name(&s.to),
         risk: s.risk,
         title: s.title.clone(),
         consequence: s.consequence.clone(),

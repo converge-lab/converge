@@ -110,7 +110,7 @@ pub struct Decision {
 
 /// Not-yet-relational shapes, served under `/mock/*` (D4).
 pub mod mock {
-    use crate::seed::enums::{Risk, SourceKind};
+    use crate::seed::enums::{Risk, SignalStatus, SourceKind};
     use serde::{Deserialize, Serialize};
 
     /// `mock.me` as stored in the seed: resolved into [`Me`] at serve time.
@@ -137,6 +137,7 @@ pub mod mock {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct Signal {
         pub id: String,
+        /// The source decision's project id (group filtering keys on it).
         pub from: String,
         /// Display text, not necessarily a project id (e.g. "all 6 services").
         pub to: String,
@@ -146,6 +147,9 @@ pub mod mock {
         pub consequence: String,
         pub recommended: String,
         pub risk: Risk,
+        /// Lifecycle; the fixture seed's signals are all proposed.
+        #[serde(default)]
+        pub status: SignalStatus,
         #[serde(default)]
         pub sources: Vec<String>,
     }

@@ -30,13 +30,25 @@ pub enum AgentKind {
     Tool,
 }
 
-/// Severity of a cross-project signal (mock namespace; no table yet).
+/// Severity of a cross-project signal (the server's `conflict` tier
+/// renders as `WillBreak`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
     WillBreak,
     Coordinate,
     Watch,
+}
+
+/// Lifecycle of a signal: born proposed, judged into confirmed or
+/// dismissed. Defaults to proposed so the fixture seed stays terse.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalStatus {
+    #[default]
+    Proposed,
+    Confirmed,
+    Dismissed,
 }
 
 /// Kind of anchored evidence (mock namespace; no table yet).

@@ -1,11 +1,23 @@
 //! The Signals screens — the cross-project signals list and a SignalDetail.
 
 use crate::data;
+use crate::mutate;
 use crate::route::Route;
-use converge_ui::atoms::{Badge, Glyph, Icon, SectionLabel};
+use crate::seed::SignalStatus;
+use converge_ui::atoms::{Badge, Button, ButtonVariant, Glyph, Icon, SectionLabel};
 use converge_ui::domain::Tone;
 use converge_ui::molecules::{DecisionMiniRow, LegendItem, SignalCard, SignalView};
 use leptos::prelude::*;
+
+/// The lifecycle badge: proposed = awaiting the team's verdict.
+fn status_badge(status: SignalStatus) -> impl IntoView {
+    let (label, tone) = match status {
+        SignalStatus::Proposed => ("Proposed", Tone::Signal),
+        SignalStatus::Confirmed => ("Confirmed", Tone::Primary),
+        SignalStatus::Dismissed => ("Dismissed", Tone::Neutral),
+    };
+    view! { <Badge label=label tone=tone subtle=true /> }
+}
 
 #[component]
 pub fn Signals(go: Callback<Route>) -> impl IntoView {
@@ -56,6 +68,9 @@ pub fn SignalDetail(go: Callback<Route>, id: String) -> impl IntoView {
     };
     let detail = data::to_signal_detail(&sig);
     let risk = detail.risk;
+    let status = sig.status;
+    let confirm_id = sig.id.clone();
+    let dismiss_id = sig.id.clone();
     // Pair each source id with its rendered ref so the row can deep-link.
     let sources: Vec<(String, _)> = sig
         .sources
@@ -72,6 +87,7 @@ pub fn SignalDetail(go: Callback<Route>, id: String) -> impl IntoView {
                 <span class="cv-fg-faint">"→"</span>
                 <span class="cv-mono cv-fs-lg">{detail.to}</span>
                 <Badge label=risk.label() tone=risk.tone() />
+                {status_badge(status)}
             </div>
             <h1 class="cv-heading cv-fs-4xl cv-lh-tight cv-mb-22">
                 {detail.title}
@@ -94,6 +110,32 @@ pub fn SignalDetail(go: Callback<Route>, id: String) -> impl IntoView {
                     <div class="cv-recommend__body">{detail.recommended}</div>
                 </div>
             </div>
+
+            // The verdict is the user's, recorded once: confirm (it
+            // holds — act on it) or dismiss (it will not be raised
+            // again — dismissal is remembered server-side).
+            {(status == SignalStatus::Proposed)
+                .then(|| {
+                    view! {
+                        <div class="cv-row cv-gap-10 cv-mb-28">
+                            <Button
+                                label="Confirm signal"
+                                tone=Tone::Primary
+                                on_click=Callback::new(move |_| {
+                                    mutate::resolve_signal(confirm_id.clone(), true)
+                                })
+                            />
+                            <Button
+                                label="Dismiss"
+                                variant=ButtonVariant::Outline
+                                on_click=Callback::new(move |_| {
+                                    mutate::resolve_signal(dismiss_id.clone(), false);
+                                    go.run(Route::Signals);
+                                })
+                            />
+                        </div>
+                    }
+                })}
 
             <div>
                 <div class="cv-mb-12"><SectionLabel text="source decisions" /></div>

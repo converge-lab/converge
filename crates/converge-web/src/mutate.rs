@@ -121,6 +121,51 @@ pub fn edit_project(id: String, name: String, desc: String) {
     }
 }
 
+/// Resolve a signal with the user's verdict: confirm (it holds) or
+/// dismiss (it will not be raised again). The dataset flips only on
+/// server success; dismissal drops the signal from every list.
+pub fn resolve_signal(id: String, confirm: bool) {
+    use crate::seed::SignalStatus;
+    let store = use_store();
+    store.notice().set(None);
+    let status = if confirm {
+        SignalStatus::Confirmed
+    } else {
+        SignalStatus::Dismissed
+    };
+    #[cfg(feature = "api")]
+    {
+        use converge_client::{Author, SignalId, SignalStatus as Ws, UserId};
+        let Ok(sid) = id.parse::<SignalId>() else {
+            leptos::logging::error!("signal id is not a ULID: {id}");
+            return;
+        };
+        let me = data::account().user_id;
+        let Ok(uid) = me.parse::<UserId>() else {
+            leptos::logging::error!("account user id is not a ULID: {me}");
+            return;
+        };
+        let ws = if confirm {
+            Ws::Confirmed
+        } else {
+            Ws::Dismissed
+        };
+        leptos::task::spawn_local(async move {
+            match crate::store::client()
+                .signal_resolve(sid, ws, &Author::User(uid))
+                .await
+            {
+                Ok(()) => data::resolve_signal_local(store, &id, status),
+                Err(e) => fail(store, format!("Couldn't resolve the signal — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        data::resolve_signal_local(store, &id, status);
+    }
+}
+
 /// Slug an entered name into a unique id — embedded build only (the API mints
 /// ULIDs). Lowercase, non-alphanumeric runs collapse to `-`, trimmed; empty →
 /// `untitled`; a collision gets `-2`, `-3`, ….

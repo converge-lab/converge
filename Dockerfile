@@ -14,7 +14,13 @@ RUN cargo build --release -p converge-server
 RUN cd crates/converge-web && trunk build --release --features api
 
 FROM debian:bookworm-slim
-RUN useradd --system converge
+# ca-certificates: the expert layer makes outbound TLS (model APIs);
+# without a trust store the client panics at boot (found by the first
+# real deployment).
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system converge
 COPY --from=builder /src/target/release/converge-server /usr/local/bin/converge-server
 COPY --from=builder /src/crates/converge-web/dist /srv/converge/web
 USER converge

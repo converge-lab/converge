@@ -10,7 +10,6 @@ env:
   # Compile against the committed .sqlx cache; never reach for a live DB.
   # The `sqlx` job is the one place the cache itself is verified.
   SQLX_OFFLINE: "true"
-  CONVERGE_E2E_CLAUDE_CODE_VERSION: "2.1.220"
 
 jobs:
   check:

@@ -124,6 +124,9 @@ time = { version = "0.3", features = ["serde-well-known"] }
 # Dev / test infra
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 http-body-util = "0.1"
+# Strips the colour codes container logs arrive with. Already in the tree
+# via clap, so this costs no extra compilation.
+anstream = "1"
 
 [profile.release]
 lto = "thin"

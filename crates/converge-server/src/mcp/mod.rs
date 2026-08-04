@@ -42,6 +42,7 @@ pub fn service<S: Storage + 'static>(
     store: S,
     me: Identity,
     expert: crate::expert::Expert<S>,
+    allowed_host: Option<String>,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
     let memory = Memory::new(store, me, expert);
     // Stateless + plain-JSON POST responses: nothing to orphan on
@@ -49,6 +50,13 @@ pub fn service<S: Storage + 'static>(
     let mut config = StreamableHttpServerConfig::default();
     config.stateful_mode = false;
     config.json_response = true;
+    // The DNS-rebinding guard defaults to localhost alone, so a
+    // deployment reached under its own name — behind a proxy, or by
+    // container name — answers 403 until it says so. `auth.public_url`
+    // is where it already says it.
+    if let Some(host) = allowed_host {
+        config.allowed_hosts.push(host);
+    }
     StreamableHttpService::new(
         move || Ok(memory.clone()),
         Arc::new(LocalSessionManager::default()),

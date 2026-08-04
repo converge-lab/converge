@@ -25,6 +25,7 @@ use axum::routing::get;
 use axum::{Router, middleware};
 use converge_storage::{Identity, Storage};
 use tower_http::services::{ServeDir, ServeFile};
+use url::Url;
 
 use crate::auth::Sessions;
 use crate::oidc::Oidc;
@@ -47,6 +48,10 @@ pub fn app<S: Storage + 'static>(
     web: Option<&Path>,
     expert: crate::expert::Expert<S>,
 ) -> Router {
+    let allowed_host = public
+        .as_deref()
+        .and_then(|url| Url::parse(url).ok())
+        .and_then(|url| url.host_str().map(str::to_owned));
     let issuer = oauth::Issuer {
         store: store.clone(),
         sessions: sessions.clone(),
@@ -64,7 +69,10 @@ pub fn app<S: Storage + 'static>(
         .merge(agent::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))
-        .nest_service("/mcp", crate::mcp::service(store.clone(), me, expert))
+        .nest_service(
+            "/mcp",
+            crate::mcp::service(store.clone(), me, expert, allowed_host),
+        )
         .layer(middleware::from_fn_with_state(
             (store.clone(), sessions.clone()),
             crate::auth::require::<S>,

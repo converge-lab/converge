@@ -62,12 +62,14 @@ impl Server {
             .await
             .context("build the Converge server image")?;
 
+        let url = format!("http://{server_name}:{PORT}");
         let server = image
             .with_wait_for(WaitFor::message_on_stdout("converge-server listening"))
             .with_container_name(server_name.to_owned())
             .with_network(network.to_owned())
             .with_env_var("CONVERGE_DATABASE_URL", self.database.url(database_name))
             .with_env_var("CONVERGE_LISTEN", format!("0.0.0.0:{PORT}"))
+            .with_env_var("CONVERGE_AUTH__PUBLIC_URL", &url)
             .with_env_var("CONVERGE_USER__HANDLE", &self.user_handle)
             .with_env_var("CONVERGE_USER__NAME", &self.user_name)
             .start()
@@ -77,7 +79,7 @@ impl Server {
         Ok(RunningServer {
             server,
             database,
-            url: format!("http://{server_name}:{PORT}"),
+            url,
         })
     }
 }

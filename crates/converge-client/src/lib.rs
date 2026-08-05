@@ -13,11 +13,11 @@
 // on this crate alone and never name the storage crate.
 pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
-    DecisionFilter, DecisionId, DecisionStatus, Edges, Group, GroupEdit, GroupId, GroupKind,
-    Identity, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup, NewMessage, NewProject,
-    NewSession, NewSignal, NewToken, Page, Pagination, Project, ProjectEdit, ProjectFilter,
-    ProjectId, Related, Session, SessionFilter, SessionId, SessionKind, Signal, SignalFilter,
-    SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User, UserId,
+    DecisionFilter, DecisionId, DecisionStatus, DeviceGrant, Edges, Group, GroupEdit, GroupId,
+    GroupKind, Identity, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup, NewMessage,
+    NewProject, NewSession, NewSignal, NewToken, Page, Pagination, Project, ProjectEdit,
+    ProjectFilter, ProjectId, Related, Session, SessionFilter, SessionId, SessionKind, Signal,
+    SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -53,6 +53,11 @@ struct Created<Id> {
 #[derive(Serialize)]
 struct Login<'a> {
     token: &'a str,
+}
+
+#[derive(Serialize)]
+struct Approval {
+    approve: bool,
 }
 
 impl Client {
@@ -421,6 +426,29 @@ impl Client {
     pub async fn token_revoke(&self, id: TokenId) -> Result<(), StoreError> {
         let response = self
             .authed(self.http.delete(self.url(&format!("tokens/{id}"))))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    // Device pairing (the browser half of the device grant)
+
+    /// The pending grant behind a user code — what is asking to pair.
+    /// `None` when the code is unknown, decided, or expired.
+    pub async fn device_get(&self, user_code: &str) -> Result<Option<DeviceGrant>, StoreError> {
+        self.fetch(&format!("device/{user_code}")).await
+    }
+
+    /// Approve or deny the grant. Approving binds the polling device to
+    /// the caller's identity.
+    pub async fn device_decide(&self, user_code: &str, approve: bool) -> Result<(), StoreError> {
+        let response = self
+            .authed(self.http.post(self.url(&format!("device/{user_code}"))))
+            .json(&Approval { approve })
             .send()
             .await
             .map_err(transport)?;

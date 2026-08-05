@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::{COOKIE, Sessions};
-use crate::oauth::{Oauth, Refused, Registration};
+use crate::oauth::{DEVICE_GRANT, Oauth, Refused, Registration};
 
 /// The state these routes share. `signin` says whether an IdP is
 /// configured — it picks the login screen unauthenticated browsers bounce
@@ -66,6 +66,10 @@ pub fn routes<S: Storage + 'static>() -> Router<Issuer<S>> {
         )
         .route("/oauth/register", post(register::<S>))
         .route("/oauth/authorize", get(authorize::<S>))
+        .route(
+            "/oauth/device_authorization",
+            post(device_authorization::<S>),
+        )
         .route("/oauth/token", post(token::<S>))
 }
 
@@ -79,8 +83,9 @@ async fn server_metadata<S: Storage>(
         "authorization_endpoint": format!("{base}/oauth/authorize"),
         "token_endpoint": format!("{base}/oauth/token"),
         "registration_endpoint": format!("{base}/oauth/register"),
+        "device_authorization_endpoint": format!("{base}/oauth/device_authorization"),
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": ["authorization_code", "refresh_token", DEVICE_GRANT],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
     }))
@@ -110,7 +115,10 @@ async fn register<S: Storage>(
                 "redirect_uris": registration.redirect_uris,
                 "client_name": registration.client_name,
                 "token_endpoint_auth_method": "none",
-                "grant_types": ["authorization_code", "refresh_token"],
+                "grant_types": match registration.grant_types.is_empty() {
+                    true => vec!["authorization_code".to_string(), "refresh_token".to_string()],
+                    false => registration.grant_types.clone(),
+                },
                 "response_types": ["code"],
             })),
         )
@@ -172,6 +180,36 @@ async fn authorize<S: Storage>(
 }
 
 #[derive(Deserialize)]
+struct DeviceRequest {
+    #[serde(default)]
+    client_id: Option<String>,
+}
+
+/// `POST /oauth/device_authorization` (RFC 8628 §3.1–3.2): open a grant
+/// and point the human at the pair screen. `verification_uri_complete`
+/// carries the code, so the printed link approves in two clicks.
+async fn device_authorization<S: Storage>(
+    State(issuer): State<Issuer<S>>,
+    headers: HeaderMap,
+    Form(request): Form<DeviceRequest>,
+) -> Response {
+    let base = issuer.base(&headers);
+    let client_id = request.client_id.as_deref().unwrap_or_default();
+    match issuer.oauth.device_start(&issuer.store, client_id).await {
+        Ok(auth) => Json(json!({
+            "device_code": auth.device_code,
+            "user_code": auth.user_code,
+            "verification_uri": format!("{base}/#/pair"),
+            "verification_uri_complete": format!("{base}/#/pair/{}", auth.user_code),
+            "expires_in": auth.expires_in,
+            "interval": auth.interval,
+        }))
+        .into_response(),
+        Err(refused) => refuse(refused),
+    }
+}
+
+#[derive(Deserialize)]
 struct TokenRequest {
     grant_type: String,
     #[serde(default)]
@@ -184,6 +222,8 @@ struct TokenRequest {
     redirect_uri: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
+    device_code: Option<String>,
 }
 
 async fn token<S: Storage>(
@@ -209,6 +249,16 @@ async fn token<S: Storage>(
                 .refresh(
                     &issuer.store,
                     request.refresh_token.as_deref().unwrap_or_default(),
+                )
+                .await
+        }
+        DEVICE_GRANT => {
+            issuer
+                .oauth
+                .device_poll(
+                    &issuer.store,
+                    request.device_code.as_deref().unwrap_or_default(),
+                    request.client_id.as_deref().unwrap_or_default(),
                 )
                 .await
         }

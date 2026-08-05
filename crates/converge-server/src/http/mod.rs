@@ -7,6 +7,7 @@
 
 mod agent;
 mod decision;
+mod device;
 mod error;
 mod evidence;
 mod group;
@@ -62,6 +63,7 @@ pub fn app<S: Storage + 'static>(
         .merge(evidence::routes().with_state(store.clone()))
         .merge(signal::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
+        .merge(device::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))
         .nest_service("/mcp", crate::mcp::service(store.clone(), me, expert))

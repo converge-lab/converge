@@ -15,6 +15,9 @@ pub enum Route {
     Search,
     Expert,
     Settings,
+    /// Device pairing (RFC 8628 approval): the code may ride the URL
+    /// (`#/pair/XXXX-XXXX` from `verification_uri_complete`) or be typed.
+    Pair(Option<String>),
 }
 
 impl Route {
@@ -34,6 +37,7 @@ impl Route {
             "search" => Route::Search,
             "expert" => Route::Expert,
             "settings" => Route::Settings,
+            "pair" => Route::Pair(parts.next().filter(|c| !c.is_empty()).map(str::to_string)),
             _ => Route::Dashboard,
         }
     }
@@ -49,6 +53,8 @@ impl Route {
             Route::Search => "#/search".into(),
             Route::Expert => "#/expert".into(),
             Route::Settings => "#/settings".into(),
+            Route::Pair(None) => "#/pair".into(),
+            Route::Pair(Some(code)) => format!("#/pair/{code}"),
         }
     }
 
@@ -63,6 +69,7 @@ impl Route {
             Route::Search => "Search".into(),
             Route::Expert => "Expert model".into(),
             Route::Settings => "Settings".into(),
+            Route::Pair(_) => "Pair device".into(),
         }
     }
 }

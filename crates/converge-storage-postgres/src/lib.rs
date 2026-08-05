@@ -18,17 +18,18 @@ use std::collections::HashMap;
 
 use converge_storage::{
     Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
-    DecisionStatus, Decisions, Edges, Group, GroupEdit, GroupId, Groups, Identity, Member,
-    Memberships, Message, MessageId, Messages, NewAgent, NewDecision, NewGroup, NewMessage,
-    NewProject, NewSession, NewSignal, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
-    Projects, Related, Scope, Session, SessionFilter, SessionId, Sessions, Signal, SignalFilter,
-    SignalId, SignalStatus, Signals, Source, StoreError, Token, TokenId, Tokens, User, UserId,
-    Users,
+    DecisionStatus, Decisions, DeviceClaim, DeviceGrant, Devices, Edges, Group, GroupEdit, GroupId,
+    Groups, Identity, Member, Memberships, Message, MessageId, Messages, NewAgent, NewDecision,
+    NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal, Pagination, Project,
+    ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Scope, Session, SessionFilter,
+    SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus, Signals, Source, StoreError,
+    Token, TokenId, Tokens, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 use wire::AgentKind as PgAgentKind;
 use wire::DecisionStatus as PgStatus;
+use wire::DeviceStatus as PgDeviceStatus;
 use wire::GroupKind as PgGroupKind;
 use wire::SessionKind as PgSessionKind;
 use wire::SignalStatus as PgSignalStatus;
@@ -1698,6 +1699,124 @@ impl Signals for PgStorage {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+}
+
+impl Devices for PgStorage {
+    async fn device_start(&self, new: NewDeviceGrant) -> Result<(), StoreError> {
+        // Opportunistic sweep: expired grants are dead weight nobody will
+        // claim once the poller gives up — clear them as new ones open.
+        sqlx::query!("delete from device_grants where expires_at <= now()")
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        sqlx::query!(
+            r#"insert into device_grants
+                   (device_hash, client_hash, user_code, client_name, expires_at)
+               values ($1, $2, $3, $4, $5)"#,
+            new.device_hash,
+            new.client_hash,
+            new.user_code,
+            new.client_name,
+            new.expires_at,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn device_get(&self, user_code: &str) -> Result<Option<DeviceGrant>, StoreError> {
+        Ok(sqlx::query!(
+            r#"select user_code, client_name, expires_at from device_grants
+               where user_code = $1
+                 and status = 'pending'::device_status
+                 and expires_at > now()"#,
+            user_code,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .map(|r| DeviceGrant {
+            user_code: r.user_code,
+            client_name: r.client_name,
+            expires_at: r.expires_at,
+        }))
+    }
+
+    async fn device_decide(
+        &self,
+        user_code: &str,
+        user: UserId,
+        approve: bool,
+    ) -> Result<(), StoreError> {
+        let status = match approve {
+            true => PgDeviceStatus::Approved,
+            false => PgDeviceStatus::Denied,
+        };
+        let result = sqlx::query!(
+            r#"update device_grants
+               set status = $2, user_id = $3
+               where user_code = $1
+                 and status = 'pending'::device_status
+                 and expires_at > now()"#,
+            user_code,
+            status as PgDeviceStatus,
+            Uuid::from(user.ulid()),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        match result.rows_affected() {
+            0 => Err(StoreError::NotFound),
+            _ => Ok(()),
+        }
+    }
+
+    async fn device_claim(
+        &self,
+        device_hash: &str,
+        client_hash: &str,
+    ) -> Result<DeviceClaim, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let row = sqlx::query!(
+            r#"select client_hash, status as "status: PgDeviceStatus", user_id,
+                      expires_at > now() as "live!"
+               from device_grants where device_hash = $1 for update"#,
+            device_hash,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let Some(row) = row else {
+            return Ok(DeviceClaim::Gone);
+        };
+        // Bound to the opener: a poll with the wrong client reads as Gone
+        // and does not consume — the real client's poll is unaffected.
+        if row.client_hash != client_hash {
+            return Ok(DeviceClaim::Gone);
+        }
+        let claim = match row.status {
+            PgDeviceStatus::Pending if row.live => return Ok(DeviceClaim::Pending),
+            PgDeviceStatus::Pending => DeviceClaim::Gone,
+            PgDeviceStatus::Approved => {
+                let user = row
+                    .user_id
+                    .ok_or_else(|| StoreError::Backend("approved grant without a user".into()))?;
+                DeviceClaim::Approved(wire::id(user))
+            }
+            PgDeviceStatus::Denied => DeviceClaim::Denied,
+        };
+        // Terminal — consume the row; a device code never yields twice.
+        sqlx::query!(
+            "delete from device_grants where device_hash = $1",
+            device_hash,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(claim)
     }
 }
 

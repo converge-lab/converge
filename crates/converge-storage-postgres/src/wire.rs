@@ -471,3 +471,12 @@ impl TryFrom<DecisionRow> for Decision {
         })
     }
 }
+
+/// The `device_status` Postgres enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "device_status", rename_all = "lowercase")]
+pub(crate) enum DeviceStatus {
+    Pending,
+    Approved,
+    Denied,
+}

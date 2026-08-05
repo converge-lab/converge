@@ -22,7 +22,8 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use converge_storage::{StoreError, Tokens, UserId};
+use converge_storage::{DeviceClaim, Devices, NewDeviceGrant, StoreError, Tokens, UserId};
+use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
@@ -35,6 +36,19 @@ const CODE_TTL: Duration = Duration::minutes(10);
 /// Registered clients: effectively forever (re-registering is cheap).
 const CLIENT_TTL: Duration = Duration::days(3650);
 
+/// Device grants: long enough to walk to a browser (RFC 8628 §3.2).
+const DEVICE_TTL: Duration = Duration::minutes(15);
+
+/// The minimum seconds between device polls (RFC 8628 `interval`).
+pub const DEVICE_POLL_INTERVAL: i64 = 5;
+
+/// The device grant's `grant_type` URN (RFC 8628 §3.4).
+pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+/// User-code alphabet (RFC 8628 §6.1): no vowels, no look-alikes —
+/// mistype-resistant and never spells anything. 20^8 codes.
+const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
+
 /// A registration request (RFC 7591) — the fields we honor.
 #[derive(Deserialize)]
 pub struct Registration {
@@ -42,6 +56,10 @@ pub struct Registration {
     pub redirect_uris: Vec<String>,
     #[serde(default)]
     pub client_name: Option<String>,
+    /// RFC 7591 `grant_types`; absent means `authorization_code`. A
+    /// device-only client is the one shape that needs no redirect URIs.
+    #[serde(default)]
+    pub grant_types: Vec<String>,
 }
 
 /// What a `client_id` decodes to: the registration, signed.
@@ -93,7 +111,12 @@ impl Oauth {
 
     /// Register a client: the signed registration *is* the `client_id`.
     pub fn register(&self, registration: &Registration) -> Result<String, Refused> {
-        if registration.redirect_uris.is_empty() {
+        let device_only = !registration.grant_types.is_empty()
+            && registration
+                .grant_types
+                .iter()
+                .all(|g| g == DEVICE_GRANT || g == "refresh_token");
+        if registration.redirect_uris.is_empty() && !device_only {
             return Err(Refused(
                 "invalid_client_metadata",
                 "redirect_uris is required".into(),
@@ -220,6 +243,136 @@ impl Oauth {
             refresh_token: None,
         })
     }
+
+    /// Open a device grant (RFC 8628 §3.1–3.2): the client gets the
+    /// high-entropy `device_code` to poll with and the short `user_code`
+    /// a signed-in browser approves. The HTTP layer adds the
+    /// verification URIs (they need the public base URL).
+    pub async fn device_start<S: Devices>(
+        &self,
+        store: &S,
+        client_id: &str,
+    ) -> Result<DeviceAuth, Refused> {
+        let client = self.client(client_id).ok_or_else(|| {
+            Refused(
+                "invalid_client",
+                "unknown client_id (register first)".into(),
+            )
+        })?;
+        let device_code = auth::mint();
+        let expires_at = OffsetDateTime::now_utc() + DEVICE_TTL;
+        // A colliding user code (20^-8 per pending grant) is regenerated.
+        for _ in 0..3 {
+            let user_code = user_code();
+            let new = NewDeviceGrant {
+                device_hash: auth::hash(&device_code),
+                client_hash: hex(&Sha256::digest(client_id.as_bytes())),
+                user_code: user_code.clone(),
+                client_name: client.name.clone(),
+                expires_at,
+            };
+            match store.device_start(new).await {
+                Ok(()) => {
+                    return Ok(DeviceAuth {
+                        device_code,
+                        user_code,
+                        expires_in: DEVICE_TTL.whole_seconds(),
+                        interval: DEVICE_POLL_INTERVAL,
+                    });
+                }
+                Err(StoreError::Conflict(_)) => continue,
+                Err(e) => return Err(unavailable(e)),
+            }
+        }
+        Err(Refused(
+            "temporarily_unavailable",
+            "could not allocate a user code".into(),
+        ))
+    }
+
+    /// The device grant's token-endpoint arm (RFC 8628 §3.4–3.5): poll
+    /// until the browser decides, then issue the same access + revocable
+    /// refresh pair as `authorization_code`.
+    pub async fn device_poll<S: Devices + Tokens>(
+        &self,
+        store: &S,
+        device_code: &str,
+        client_id: &str,
+    ) -> Result<Grant, Refused> {
+        let claim = store
+            .device_claim(
+                &auth::hash(device_code),
+                &hex(&Sha256::digest(client_id.as_bytes())),
+            )
+            .await
+            .map_err(unavailable)?;
+        match claim {
+            DeviceClaim::Pending => Err(Refused(
+                "authorization_pending",
+                "the user has not decided yet".into(),
+            )),
+            DeviceClaim::Denied => Err(Refused(
+                "access_denied",
+                "the user denied the request".into(),
+            )),
+            DeviceClaim::Gone => Err(Refused(
+                "expired_token",
+                "unknown or expired device_code".into(),
+            )),
+            DeviceClaim::Approved(user) => {
+                let name = self
+                    .client(client_id)
+                    .map(|c| c.name)
+                    .unwrap_or_else(|| "connector".into());
+                let refresh = auth::mint();
+                store
+                    .token_add(user, format!("connector:{name}"), auth::hash(&refresh))
+                    .await
+                    .map_err(unavailable)?;
+                Ok(Grant {
+                    access_token: self.sessions.access(user),
+                    token_type: "bearer",
+                    expires_in: ACCESS_TTL.whole_seconds(),
+                    refresh_token: Some(refresh),
+                })
+            }
+        }
+    }
+}
+
+/// `POST /oauth/device_authorization` success, minus the verification
+/// URIs the HTTP layer attaches.
+pub struct DeviceAuth {
+    pub device_code: String,
+    pub user_code: String,
+    pub expires_in: i64,
+    pub interval: i64,
+}
+
+/// A fresh canonical user code: `XXXX-XXXX` over the reduced alphabet.
+fn user_code() -> String {
+    let mut rng = rand::rng();
+    let mut code: Vec<u8> = (0..8)
+        .map(|_| USER_CODE_ALPHABET[rng.random_range(0..USER_CODE_ALPHABET.len())])
+        .collect();
+    code.insert(4, b'-');
+    String::from_utf8(code).expect("the alphabet is ASCII")
+}
+
+/// Normalize a typed user code to the canonical `XXXX-XXXX`: uppercase,
+/// separators dropped and re-inserted — forgiving of lowercase and
+/// hyphenless paste. Codes of unexpected length pass through (they
+/// simply won't match anything).
+pub fn normalize_user_code(input: &str) -> String {
+    let chars: String = input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    match chars.len() {
+        8 => format!("{}-{}", &chars[..4], &chars[4..]),
+        _ => chars,
+    }
 }
 
 fn unavailable(e: StoreError) -> Refused {
@@ -256,6 +409,7 @@ mod tests {
             .register(&Registration {
                 redirect_uris: vec!["https://claude.ai/api/mcp/auth_callback".into()],
                 client_name: Some("claude.ai".into()),
+                grant_types: vec![],
             })
             .unwrap_or_else(|e| panic!("{}", e.1))
     }
@@ -267,9 +421,40 @@ mod tests {
                 .register(&Registration {
                     redirect_uris: vec![],
                     client_name: None,
+                    grant_types: vec![],
                 })
                 .is_err()
         );
+        // …except for a device-only client, which never redirects.
+        assert!(
+            oauth()
+                .register(&Registration {
+                    redirect_uris: vec![],
+                    client_name: Some("converge-cli".into()),
+                    grant_types: vec![DEVICE_GRANT.into(), "refresh_token".into()],
+                })
+                .is_ok()
+        );
+        // Mixed grants still redirect somewhere — URIs stay required.
+        assert!(
+            oauth()
+                .register(&Registration {
+                    redirect_uris: vec![],
+                    client_name: None,
+                    grant_types: vec!["authorization_code".into(), DEVICE_GRANT.into()],
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn user_codes_normalize_to_canonical() {
+        assert_eq!(normalize_user_code("bcdf-ghjk"), "BCDF-GHJK");
+        assert_eq!(normalize_user_code("bcdfghjk"), "BCDF-GHJK");
+        assert_eq!(normalize_user_code(" BCDF GHJK "), "BCDF-GHJK");
+        assert_eq!(normalize_user_code("short"), "SHORT");
+        let code = user_code();
+        assert_eq!(normalize_user_code(&code), code);
     }
 
     #[test]

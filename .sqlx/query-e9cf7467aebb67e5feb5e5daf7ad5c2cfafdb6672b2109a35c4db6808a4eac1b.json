@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into device_grants\n                   (device_hash, client_hash, user_code, client_name, expires_at)\n               values ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9cf7467aebb67e5feb5e5daf7ad5c2cfafdb6672b2109a35c4db6808a4eac1b"
+}

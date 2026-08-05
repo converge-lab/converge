@@ -10,6 +10,7 @@ mod expert;
 mod modals;
 mod mutate;
 mod onboard;
+mod pair;
 mod project_log;
 mod route;
 mod search;
@@ -33,6 +34,7 @@ use leptos::mount::mount_to_body;
 use leptos::prelude::*;
 use modals::{ModalHost, ModalKind};
 use onboard::Onboarding;
+use pair::Pair;
 use project_log::ProjectLog;
 use route::{Route, current_route, navigate};
 use search::Search;
@@ -330,6 +332,7 @@ fn App() -> impl IntoView {
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
                         Route::Settings => view! { <Settings /> }.into_any(),
+                        Route::Pair(code) => view! { <Pair code=code /> }.into_any(),
                     }
                 }}
             </AppShell>

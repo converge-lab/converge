@@ -24,6 +24,7 @@ use thiserror::Error;
 
 pub mod agent;
 pub mod decision;
+pub mod device;
 pub mod group;
 pub mod ids;
 pub mod membership;
@@ -39,6 +40,7 @@ pub use decision::{
     Alternative, Author, Decision, DecisionEdit, DecisionFilter, DecisionStatus, Decisions, Edges,
     NewDecision, Related, Source,
 };
+pub use device::{DeviceClaim, DeviceGrant, Devices, NewDeviceGrant};
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};
 pub use ids::{
     AgentId, DecisionId, GroupId, MessageId, ProjectId, SessionId, SignalId, TokenId, UserId,
@@ -155,6 +157,7 @@ pub trait Storage:
     + Sessions
     + Messages
     + Signals
+    + Devices
     + Memberships
     + Clone
     + Send
@@ -172,6 +175,7 @@ impl<
         + Sessions
         + Messages
         + Signals
+        + Devices
         + Memberships
         + Clone
         + Send

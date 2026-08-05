@@ -7,7 +7,7 @@
 //! surface suggestions, the human answers in conversation, hooks write
 //! the marker. No further terminal rituals.
 
-use std::io::{BufRead, Write as _};
+use std::io::{BufRead, IsTerminal, Write as _};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -16,10 +16,80 @@ use serde_json::{Value, json};
 
 use crate::config::{self, Config};
 
-pub async fn run() -> Result<()> {
-    let stdin = std::io::stdin();
-    let mut lines = stdin.lock().lines();
+/// The managed cloud — the Enter-accepts default of the server prompt.
+/// Self-hosters type their own URL over it.
+const HOSTED: &str = "https://app.converge.expert";
 
+/// On a terminal, prompts are styled (dialoguer); on piped stdin they
+/// stay plain line reads — scripts and the e2e harness depend on that.
+fn interactive() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+/// One line of input; `default` fills an empty answer (and renders as
+/// the editable/bracketed default on a terminal).
+fn input(prompt: &str, default: Option<&str>) -> Result<String> {
+    if interactive() {
+        let theme = dialoguer::theme::ColorfulTheme::default();
+        let mut q = dialoguer::Input::<String>::with_theme(&theme).with_prompt(prompt);
+        if let Some(default) = default {
+            q = q.default(default.to_string());
+        }
+        Ok(q.interact_text()?)
+    } else {
+        let answer = plain(prompt)?;
+        Ok(match (answer.is_empty(), default) {
+            (true, Some(default)) => default.to_string(),
+            _ => answer,
+        })
+    }
+}
+
+/// A secret: hidden while typing on a terminal, plain on a pipe.
+fn secret(prompt: &str) -> Result<String> {
+    if interactive() {
+        let theme = dialoguer::theme::ColorfulTheme::default();
+        Ok(dialoguer::Password::with_theme(&theme)
+            .with_prompt(prompt)
+            .interact()?)
+    } else {
+        plain(prompt)
+    }
+}
+
+/// A yes/no question; empty answer takes the default.
+fn confirm(prompt: &str, default: bool) -> Result<bool> {
+    if interactive() {
+        let theme = dialoguer::theme::ColorfulTheme::default();
+        Ok(dialoguer::Confirm::with_theme(&theme)
+            .with_prompt(prompt)
+            .default(default)
+            .interact()?)
+    } else {
+        let answer = plain(&format!(
+            "{prompt} [{}]",
+            if default { "Y/n" } else { "y/N" }
+        ))?;
+        Ok(match answer.as_str() {
+            "" => default,
+            a => a.eq_ignore_ascii_case("y"),
+        })
+    }
+}
+
+/// The pipe-mode primitive: print the prompt, read one line.
+fn plain(prompt: &str) -> Result<String> {
+    print!("{prompt}: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .context("read stdin")?;
+    Ok(line.trim().to_string())
+}
+
+pub async fn run() -> Result<()> {
     // ── credentials ────────────────────────────────────────────────────
     let config = match Config::load() {
         Ok(config) => match verified(&config).await {
@@ -29,10 +99,10 @@ pub async fn run() -> Result<()> {
             }
             Err(e) => {
                 println!("configured, but not working ({e}) — let's redo it");
-                credentials(&mut lines).await?
+                credentials().await?
             }
         },
-        Err(_) => credentials(&mut lines).await?,
+        Err(_) => credentials().await?,
     };
 
     if let Some(warning) = crate::skew::check(&config.client()?).await {
@@ -67,11 +137,7 @@ pub async fn run() -> Result<()> {
     if mcp_registered() {
         println!("✓ mcp: `converge` server already registered");
     } else {
-        let answer = ask(
-            &mut lines,
-            "register the MCP server with Claude Code? [Y/n]",
-        )?;
-        if answer.is_empty() || answer.eq_ignore_ascii_case("y") {
+        if confirm("register the MCP server with Claude Code?", true)? {
             register_mcp(&config)?;
             println!("✓ mcp: registered {}/mcp as `converge`", config.server);
         } else {
@@ -91,10 +157,10 @@ pub async fn run() -> Result<()> {
 }
 
 /// Prompt for server + token, verify, write the config (0600).
-async fn credentials(lines: &mut impl Iterator<Item = std::io::Result<String>>) -> Result<Config> {
-    println!("\nconverge setup — where is your server?");
+async fn credentials() -> Result<Config> {
+    println!("\nconverge setup — where is your server? (Enter = Converge Cloud)");
     let server = loop {
-        let server = ask(lines, "server URL (https://…)")?;
+        let server = input("server URL", Some(HOSTED))?;
         if !server.is_empty() {
             break server.trim_end_matches('/').to_string();
         }
@@ -104,7 +170,7 @@ async fn credentials(lines: &mut impl Iterator<Item = std::io::Result<String>>) 
          (or `converge-server token mint` on the server host)"
     );
     let token = loop {
-        let token = ask(lines, "token (cvg_…)")?;
+        let token = secret("token (cvg_…)")?;
         if !token.is_empty() {
             break token;
         }
@@ -257,17 +323,6 @@ fn register_mcp(config: &Config) -> Result<()> {
         bail!("`claude mcp add` failed with {status}");
     }
     Ok(())
-}
-
-fn ask(lines: &mut impl Iterator<Item = std::io::Result<String>>, prompt: &str) -> Result<String> {
-    print!("{prompt}: ");
-    std::io::stdout().flush().ok();
-    let line = lines
-        .next()
-        .transpose()
-        .context("read stdin")?
-        .unwrap_or_default();
-    Ok(line.trim().to_string())
 }
 
 #[cfg(test)]

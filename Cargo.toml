@@ -56,6 +56,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 url = "2"
+# Interactive prompts for `converge init` (TTY only — piped stdin gets
+# the plain fallback, which scripts and the e2e harness rely on).
+dialoguer = "0.11"
 # Multi-provider model client (Anthropic / OpenAI-compat / ollama, one API):
 # the wire layer under converge-expert — the expert layer keeps its own
 # routing and policy, genai keeps the per-provider protocol churn.

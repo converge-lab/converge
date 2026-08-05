@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::config::{self, Config};
+use crate::device;
 
 /// The managed cloud — the Enter-accepts default of the server prompt.
 /// Self-hosters type their own URL over it.
@@ -77,21 +78,34 @@ fn confirm(prompt: &str, default: bool) -> Result<bool> {
     }
 }
 
-/// The pipe-mode primitive: print the prompt, read one line.
+/// The pipe-mode primitive: print the prompt, read one line. EOF is a
+/// hard stop — retry loops around empty answers would otherwise spin
+/// forever on a closed stdin.
 fn plain(prompt: &str) -> Result<String> {
     print!("{prompt}: ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin()
+    let read = std::io::stdin()
         .lock()
         .read_line(&mut line)
         .context("read stdin")?;
+    if read == 0 {
+        bail!("stdin closed before `{prompt}` was answered");
+    }
     Ok(line.trim().to_string())
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(force: bool) -> Result<()> {
     // ── credentials ────────────────────────────────────────────────────
     let config = match Config::load() {
+        Ok(config) if force => {
+            // Reinit: redo credentials even though the stored ones may
+            // work — the path for switching servers or identities. The
+            // replaced credential stays valid server-side; revoke it in
+            // Settings if it shouldn't outlive this machine's config.
+            println!("reconfiguring — was {}", config.server);
+            credentials().await?
+        }
         Ok(config) => match verified(&config).await {
             Ok(handle) => {
                 println!("✓ credentials: {} as @{handle}", config.server);
@@ -134,19 +148,23 @@ pub async fn run() -> Result<()> {
     }
 
     // ── MCP registration ───────────────────────────────────────────────
-    if mcp_registered() {
+    // A registration bakes in the server URL and bearer, so a forced
+    // reinit must replace it, not keep it.
+    let registered = mcp_registered();
+    if registered && !force {
         println!("✓ mcp: `converge` server already registered");
-    } else {
-        if confirm("register the MCP server with Claude Code?", true)? {
-            register_mcp(&config)?;
-            println!("✓ mcp: registered {}/mcp as `converge`", config.server);
-        } else {
-            println!(
-                "skipped — register later with:\n  claude mcp add --transport http \
-                 --scope user converge {}/mcp --header \"Authorization: Bearer <token>\"",
-                config.server
-            );
+    } else if confirm("register the MCP server with Claude Code?", true)? {
+        if registered {
+            unregister_mcp()?;
         }
+        register_mcp(&config)?;
+        println!("✓ mcp: registered {}/mcp as `converge`", config.server);
+    } else {
+        println!(
+            "skipped — register later with:\n  claude mcp add --transport http \
+             --scope user converge {}/mcp --header \"Authorization: Bearer <token>\"",
+            config.server
+        );
     }
 
     println!(
@@ -156,7 +174,9 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Prompt for server + token, verify, write the config (0600).
+/// Obtain and store a credential: the browser-pairing device flow when
+/// the server offers it (and stdin is a terminal — a human has to reach
+/// a browser), the paste-a-token prompt otherwise.
 async fn credentials() -> Result<Config> {
     println!("\nconverge setup — where is your server? (Enter = Converge Cloud)");
     let server = loop {
@@ -165,6 +185,16 @@ async fn credentials() -> Result<Config> {
             break server.trim_end_matches('/').to_string();
         }
     };
+
+    if interactive()
+        && let Some(offer) = device::probe(&server).await
+    {
+        match device::pair(&offer).await {
+            Ok(token) => return stored(Config { server, token }).await,
+            Err(e) => println!("pairing failed ({e}) — falling back to a pasted token"),
+        }
+    }
+
     println!(
         "mint a token: open {server}/ → Settings → Create token \
          (or `converge-server token mint` on the server host)"
@@ -175,8 +205,11 @@ async fn credentials() -> Result<Config> {
             break token;
         }
     };
+    stored(Config { server, token }).await
+}
 
-    let config = Config { server, token };
+/// Verify a credential end-to-end, then persist it (0600).
+async fn stored(config: Config) -> Result<Config> {
     let handle = verified(&config)
         .await
         .with_context(|| format!("cannot reach {} with that token", config.server))?;
@@ -303,24 +336,42 @@ fn mcp_registered() -> bool {
         .unwrap_or(false)
 }
 
+/// Drop the existing `converge` registration (reinit replaces it).
+fn unregister_mcp() -> Result<()> {
+    quiet_claude(&["mcp", "remove", "--scope", "user", "converge"])
+}
+
 fn register_mcp(config: &Config) -> Result<()> {
-    let status = Command::new("claude")
-        .args([
-            "mcp",
-            "add",
-            "--transport",
-            "http",
-            "--scope",
-            "user",
-            "converge",
-            &format!("{}/mcp", config.server),
-            "--header",
-            &format!("Authorization: Bearer {}", config.token),
-        ])
-        .status()
-        .context("run `claude mcp add` (is the claude CLI installed?)")?;
-    if !status.success() {
-        bail!("`claude mcp add` failed with {status}");
+    quiet_claude(&[
+        "mcp",
+        "add",
+        "--transport",
+        "http",
+        "--scope",
+        "user",
+        "converge",
+        &format!("{}/mcp", config.server),
+        "--header",
+        &format!("Authorization: Bearer {}", config.token),
+    ])
+}
+
+/// Run the claude CLI with its chatter captured: our own status line is
+/// the UX; claude's output surfaces only when the command fails.
+fn quiet_claude(args: &[&str]) -> Result<()> {
+    let output = Command::new("claude")
+        .args(args)
+        .output()
+        .with_context(|| format!("run `claude {} …` (is the claude CLI installed?)", args[0]))?;
+    if !output.status.success() {
+        bail!(
+            "`claude {} {}` failed with {}:\n{}{}",
+            args[0],
+            args[1],
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
     Ok(())
 }

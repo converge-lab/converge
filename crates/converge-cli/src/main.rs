@@ -16,6 +16,7 @@
 //! `CONVERGE_TOKEN`.
 
 mod config;
+mod device;
 mod hook;
 mod marker;
 mod project;
@@ -38,7 +39,12 @@ struct Cli {
 enum Cmd {
     /// One-time machine setup: credentials, agent-tool integration
     /// (hooks + MCP). Safe to re-run.
-    Init,
+    Init {
+        /// Redo credentials and MCP registration even when the stored
+        /// ones work — switch servers, or re-pair as someone else.
+        #[arg(long)]
+        force: bool,
+    },
     /// Self-update from a signed release (or roll back to the kept
     /// previous binary).
     Update {
@@ -96,7 +102,7 @@ enum ProjectCmd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Cmd::Init => setup::run().await,
+        Cmd::Init { force } => setup::run(force).await,
         Cmd::Update {
             version,
             from,

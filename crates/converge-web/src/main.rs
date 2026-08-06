@@ -7,6 +7,7 @@ mod dashboard;
 mod data;
 mod decision_detail;
 mod expert;
+mod members;
 mod modals;
 mod mutate;
 mod onboard;
@@ -32,6 +33,7 @@ use leptos::ev;
 use leptos::html;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
+use members::Members;
 use modals::{ModalHost, ModalKind};
 use onboard::Onboarding;
 use pair::Pair;
@@ -329,6 +331,7 @@ fn App() -> impl IntoView {
                         Route::SignalDetail(id) => view! { <SignalDetail go=go id=id /> }.into_any(),
                         Route::Source(id, idx) => view! { <SourceViewer go=go id=id idx=idx /> }.into_any(),
                         Route::Project(id) => view! { <ProjectLog go=go pid=id /> }.into_any(),
+                        Route::Members => view! { <Members /> }.into_any(),
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
                         Route::Settings => view! { <Settings /> }.into_any(),

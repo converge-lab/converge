@@ -91,6 +91,34 @@ pub fn create_project(name: String) {
     }
 }
 
+/// Rename a group. The id stays fixed, so membership, its projects and every
+/// decision recorded under it are untouched — only the label changes.
+pub fn rename_group(id: String, name: String) {
+    let store = use_store();
+    store.notice().set(None);
+    #[cfg(feature = "api")]
+    {
+        use converge_client::{GroupEdit, GroupId};
+        let Ok(gid) = id.parse::<GroupId>() else {
+            leptos::logging::error!("group id is not a ULID: {id}");
+            return;
+        };
+        let edits = vec![GroupEdit::SetName(name.clone())];
+        leptos::task::spawn_local(async move {
+            match crate::store::client().group_edit(gid, &edits).await {
+                Ok(()) => data::rename_group_local(store, &id, name),
+                // Renaming is owner-only server-side; a member's attempt comes
+                // back as a refusal, which the toast reports verbatim.
+                Err(e) => fail(store, format!("Couldn't rename to “{name}” — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        data::rename_group_local(store, &id, name);
+    }
+}
+
 /// Edit a project's display name and description; the id stays fixed, so every
 /// reference and decision link is untouched.
 pub fn edit_project(id: String, name: String, desc: String) {

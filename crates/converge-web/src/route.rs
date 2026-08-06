@@ -12,6 +12,8 @@ pub enum Route {
     /// A decision's anchored source: `(decision_id, source_index)`.
     Source(String, usize),
     Project(String),
+    /// The active group's members (and, later, adding one).
+    Members,
     Search,
     Expert,
     Settings,
@@ -34,6 +36,7 @@ impl Route {
                 Route::Source(id, idx)
             }
             "project" => Route::Project(parts.next().unwrap_or("").to_string()),
+            "members" => Route::Members,
             "search" => Route::Search,
             "expert" => Route::Expert,
             "settings" => Route::Settings,
@@ -50,6 +53,7 @@ impl Route {
             Route::SignalDetail(id) => format!("#/signal/{id}"),
             Route::Source(id, idx) => format!("#/source/{id}/{idx}"),
             Route::Project(id) => format!("#/project/{id}"),
+            Route::Members => "#/members".into(),
             Route::Search => "#/search".into(),
             Route::Expert => "#/expert".into(),
             Route::Settings => "#/settings".into(),
@@ -66,6 +70,7 @@ impl Route {
             Route::SignalDetail(_) => "Signal".into(),
             Route::Source(_, _) => "Source".into(),
             Route::Project(id) => id.clone(),
+            Route::Members => "Members".into(),
             Route::Search => "Search".into(),
             Route::Expert => "Expert model".into(),
             Route::Settings => "Settings".into(),

@@ -2,7 +2,7 @@
 //!
 //! One `RwSignal<Option<ModalKind>>` lives in context (provided at the app
 //! root); any trigger — an onboarding card, the sidebar "＋" row, the switcher
-//! footer, a project's "⋯" menu — opens a modal by setting it, and [`ModalHost`]
+//! footer, a project's or the group's "⋯" menu — opens a modal by setting it, and [`ModalHost`]
 //! (mounted once at the root) renders the active one. Submits go through
 //! [`crate::mutate`], bound to the live API.
 
@@ -20,6 +20,10 @@ pub enum ModalKind {
     NewProject,
     /// Edit the project with this id (name + description).
     EditProject(String),
+    /// Rename the group with this id. Name only — a group carries no
+    /// description in the UI's dataset (its tagline is derived from kind and
+    /// project count).
+    RenameGroup(String),
 }
 
 /// The context-shared open-modal signal.
@@ -62,6 +66,7 @@ pub fn ModalHost() -> impl IntoView {
             ModalKind::NewGroup => view! { <NewGroupModal /> }.into_any(),
             ModalKind::NewProject => view! { <NewProjectModal /> }.into_any(),
             ModalKind::EditProject(id) => view! { <EditProjectModal id=id /> }.into_any(),
+            ModalKind::RenameGroup(id) => view! { <RenameGroupModal id=id /> }.into_any(),
         })
     }
 }
@@ -190,6 +195,62 @@ fn NewProjectModal() -> impl IntoView {
                 <Button label="Cancel" variant=ButtonVariant::Ghost on_click=close />
                 <Button
                     label="Create project"
+                    tone=Tone::Primary
+                    disabled=Signal::derive(move || name.get().trim().is_empty())
+                    on_click=submit
+                />
+            </div>
+        </Modal>
+    }
+}
+
+#[component]
+fn RenameGroupModal(id: String) -> impl IntoView {
+    let modal = use_modal();
+    let (name, set_name) = signal(data::group_name_of(&id));
+    let name_ref = NodeRef::<html::Input>::new();
+    autofocus(name_ref);
+
+    let close = Callback::new(move |()| modal.set(None));
+    let gid = id.clone();
+    let submit = Callback::new(move |()| {
+        let n = name.get_untracked().trim().to_string();
+        if n.is_empty() {
+            return;
+        }
+        modal.set(None);
+        mutate::rename_group(gid.clone(), n);
+    });
+
+    view! {
+        <Modal
+            title="Rename group"
+            subtitle="The id stays the same, so members, projects and decisions all keep their place."
+            on_close=close
+        >
+            <div class="cv-col cv-gap-6">
+                <span class="cv-modal__label">"Name"</span>
+                <div class="cv-input">
+                    <input
+                        node_ref=name_ref
+                        class="cv-input__field"
+                        prop:value=name
+                        on:input=move |ev| set_name.set(event_target_value(&ev))
+                        on:keydown=move |ev| match ev.key().as_str() {
+                            "Enter" => {
+                                ev.prevent_default();
+                                submit.run(());
+                            }
+                            "Escape" => close.run(()),
+                            _ => {}
+                        }
+                    />
+                </div>
+            </div>
+            <div class="cv-modal__foot">
+                <Button label="Cancel" variant=ButtonVariant::Ghost on_click=close />
+                <Button
+                    label="Rename"
                     tone=Tone::Primary
                     disabled=Signal::derive(move || name.get().trim().is_empty())
                     on_click=submit

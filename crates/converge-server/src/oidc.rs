@@ -16,6 +16,10 @@
 //! no JWKS machinery. The whole module is optional: without `[auth.oidc]`
 //! config nothing here runs and the server needs no egress.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use converge_storage::Identity;
@@ -39,15 +43,54 @@ pub struct Settings {
     /// This deployment's external origin; the redirect URI is
     /// `{public_url}/auth/callback` — register it with the provider.
     pub public_url: String,
-    /// Handles allowed to sign in. Absent → every identity the provider
-    /// asserts is welcome (gate at the IdP); present → only these.
+    /// Handles allowed to sign in — the default [`Access`] policy.
+    /// Absent → every identity the provider asserts is welcome (gate at
+    /// the IdP); present → only these.
     #[serde(default)]
     pub allowed: Option<Vec<String>>,
+}
+
+/// The sign-in admission policy: given the identity the provider just
+/// asserted, may this login complete? The server ships one policy — the
+/// static allowlist ([`Allowlist`], from `auth.oidc.allowed`) — and
+/// embedders swap in their own via [`Oidc::with_access`] (a hosted
+/// overlay honoring invite codes, an LDAP group check, …).
+///
+/// `grant` is an opaque pass-through: whatever `?grant=` rode into
+/// `/auth/login` arrives here verbatim, having survived the provider
+/// round trip in the flow cookie. The server never interprets it — its
+/// meaning belongs entirely to the policy. Object-safe (boxed futures)
+/// because the policy is chosen at runtime, not compiled in.
+pub trait Access: Send + Sync {
+    fn admitted<'a>(
+        &'a self,
+        identity: &'a Identity,
+        grant: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+}
+
+/// The default policy: the static `auth.oidc.allowed` list, matched on
+/// handle. Absent list → admit (the IdP is the gate). Ignores `grant`.
+pub struct Allowlist(pub Option<Vec<String>>);
+
+impl Access for Allowlist {
+    fn admitted<'a>(
+        &'a self,
+        identity: &'a Identity,
+        _grant: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        let ok = match &self.0 {
+            None => true,
+            Some(allowed) => allowed.iter().any(|a| a == &identity.handle),
+        };
+        Box::pin(async move { ok })
+    }
 }
 
 /// A ready sign-in provider (config + HTTP client + endpoint cache).
 pub struct Oidc {
     settings: Settings,
+    access: Arc<dyn Access>,
     http: reqwest::Client,
     endpoints: OnceCell<Endpoints>,
 }
@@ -93,6 +136,7 @@ struct Userinfo {
 impl Oidc {
     pub fn new(settings: Settings) -> Self {
         Self {
+            access: Arc::new(Allowlist(settings.allowed.clone())),
             settings,
             // GitHub's API refuses requests without a User-Agent.
             http: reqwest::Client::builder()
@@ -103,6 +147,13 @@ impl Oidc {
         }
     }
 
+    /// Swap the admission policy — the embedder's seam. The default
+    /// ([`Allowlist`]) serves every stand-alone deployment; overlays
+    /// composing this server pass their own.
+    pub fn with_access(self, access: Arc<dyn Access>) -> Self {
+        Self { access, ..self }
+    }
+
     /// Display name for the login button ("Sign in with …").
     pub fn label(&self) -> String {
         match self.settings.provider.as_str() {
@@ -111,12 +162,9 @@ impl Oidc {
         }
     }
 
-    /// Is this handle welcome? Absent allowlist delegates to the IdP.
-    pub fn allowed(&self, handle: &str) -> bool {
-        match &self.settings.allowed {
-            None => true,
-            Some(allowed) => allowed.iter().any(|a| a == handle),
-        }
+    /// May this login complete? Delegates to the [`Access`] policy.
+    pub async fn admitted(&self, identity: &Identity, grant: Option<&str>) -> bool {
+        self.access.admitted(identity, grant).await
     }
 
     fn redirect_uri(&self) -> String {
@@ -318,14 +366,45 @@ mod tests {
         assert!(err.contains("issuer is required"), "{err}");
     }
 
-    #[test]
-    fn allowlist_gates_and_absence_delegates() {
+    fn identity(handle: &str) -> Identity {
+        Identity {
+            provider: "github".into(),
+            subject: "1".into(),
+            handle: handle.into(),
+            name: handle.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn allowlist_gates_and_absence_delegates() {
         let open = oidc("github", None);
-        assert!(open.allowed("anyone"));
+        assert!(open.admitted(&identity("anyone"), None).await);
         let gated = oidc("github", Some(vec!["singulared".into()]));
-        assert!(gated.allowed("singulared"));
-        assert!(!gated.allowed("intruder"));
+        assert!(gated.admitted(&identity("singulared"), None).await);
+        assert!(!gated.admitted(&identity("intruder"), None).await);
+        // The default policy never reads the grant.
+        assert!(!gated.admitted(&identity("intruder"), Some("golden")).await);
         assert_eq!(gated.label(), "GitHub");
         assert_eq!(oidc("keycloak", None).label(), "keycloak");
+    }
+
+    /// The embedder's seam: a swapped-in policy sees the identity and the
+    /// opaque grant, and fully replaces the allowlist.
+    #[tokio::test]
+    async fn custom_access_policy_replaces_the_allowlist() {
+        struct Golden;
+        impl Access for Golden {
+            fn admitted<'a>(
+                &'a self,
+                _identity: &'a Identity,
+                grant: Option<&'a str>,
+            ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+                Box::pin(async move { grant == Some("golden") })
+            }
+        }
+        let gated = oidc("github", Some(vec!["singulared".into()])).with_access(Arc::new(Golden));
+        // The allowlist no longer speaks — only the policy does.
+        assert!(!gated.admitted(&identity("singulared"), None).await);
+        assert!(gated.admitted(&identity("intruder"), Some("golden")).await);
     }
 }

@@ -2,13 +2,17 @@
 //! state/PKCE round trip, code exchange, userinfo, allowlist, session
 //! (testcontainers — needs Docker).
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::extract::Form;
 use axum::http::{Request, StatusCode, header};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_server::auth::Sessions;
-use converge_server::oidc::{Oidc, Settings};
+use converge_server::oidc::{Access, Oidc, Settings};
 use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
@@ -70,10 +74,13 @@ async fn idp() -> String {
     issuer
 }
 
-/// The converge app wired to the mock IdP.
+/// The converge app wired to the mock IdP. `policy` swaps the admission
+/// policy the way an embedding overlay would; `None` keeps the default
+/// allowlist.
 async fn server(
     issuer: &str,
     allowed: Option<Vec<String>>,
+    policy: Option<Arc<dyn Access>>,
 ) -> (
     testcontainers_modules::testcontainers::ContainerAsync<
         testcontainers_modules::postgres::Postgres,
@@ -108,6 +115,10 @@ async fn server(
         public_url: "http://127.0.0.1:8080".into(),
         allowed,
     });
+    let oidc = match policy {
+        Some(policy) => oidc.with_access(policy),
+        None => oidc,
+    };
     // No expert jobs: an inert detector (never writes, never spawns).
     let expert = converge_server::Expert::new(
         store.clone(),
@@ -139,7 +150,7 @@ fn query_param(url: &str, key: &str) -> String {
 #[tokio::test]
 async fn sign_in_round_trip() {
     let issuer = idp().await;
-    let (_pg, app) = server(&issuer, None).await;
+    let (_pg, app) = server(&issuer, None, None).await;
 
     // The capability read says the button may be shown.
     let response = app
@@ -238,7 +249,7 @@ async fn sign_in_round_trip() {
 #[tokio::test]
 async fn allowlist_turns_the_identity_away() {
     let issuer = idp().await;
-    let (_pg, app) = server(&issuer, Some(vec!["someone-else".into()])).await;
+    let (_pg, app) = server(&issuer, Some(vec!["someone-else".into()]), None).await;
 
     let response = app
         .clone()
@@ -267,4 +278,66 @@ async fn allowlist_turns_the_identity_away() {
             .unwrap_or_default()
             .starts_with("converge_session=")
     }));
+}
+
+/// The embedder seam end to end: a swapped-in policy sees the opaque
+/// `?grant=` after it rides the whole provider round trip — the shape a
+/// hosted overlay's invite redemption takes.
+#[tokio::test]
+async fn access_policy_admits_by_grant() {
+    struct Invite;
+    impl Access for Invite {
+        fn admitted<'a>(
+            &'a self,
+            _identity: &'a Identity,
+            grant: Option<&'a str>,
+        ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+            Box::pin(async move { grant == Some("welcome-42") })
+        }
+    }
+    let issuer = idp().await;
+    // The allowlist would admit alice — proving the policy replaces it,
+    // not extends it.
+    let (_pg, app) = server(&issuer, Some(vec!["alice".into()]), Some(Arc::new(Invite))).await;
+
+    // One full round trip; the grant (or its absence) is fixed at login.
+    let round_trip = async |login_uri: &str| {
+        let response = app
+            .clone()
+            .oneshot(Request::get(login_uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let location = response.headers()[header::LOCATION].to_str().unwrap();
+        let state = query_param(location, "state");
+        let flow = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        let flow_pair = flow.split(';').next().unwrap().to_string();
+        app.clone()
+            .oneshot(
+                Request::get(format!("/auth/callback?code=good-code&state={state}"))
+                    .header(header::COOKIE, &flow_pair)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    };
+
+    // No grant: refused, allowlist notwithstanding.
+    let response = round_trip("/auth/login").await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // The right grant: admitted, session minted.
+    let response = round_trip("/auth/login?grant=welcome-42").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .any(|c| c
+                .to_str()
+                .unwrap_or_default()
+                .starts_with("converge_session=")),
+        "a session cookie must be minted"
+    );
 }

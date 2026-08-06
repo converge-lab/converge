@@ -19,6 +19,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use converge_storage::{AuthInfo, Storage};
 use serde::Deserialize;
 
@@ -59,6 +61,11 @@ struct Login {
     /// URL for an MCP connector).
     #[serde(default)]
     next: Option<String>,
+    /// Opaque admission material handed to the [`crate::oidc::Access`]
+    /// policy at the callback (e.g. an invite code on a hosted overlay).
+    /// The server carries it, never reads it.
+    #[serde(default)]
+    grant: Option<String>,
 }
 
 async fn login<S: Storage>(
@@ -72,14 +79,20 @@ async fn login<S: Storage>(
     match oidc.authorize().await {
         Ok((url, flow)) => {
             let next = landing(login.next.as_deref());
-            // `next` rides third; it may itself contain dots, so parsing
-            // splits from the left exactly twice.
-            let cookie = Cookie::build((FLOW, format!("{}.{}.{next}", flow.state, flow.verifier)))
-                .http_only(true)
-                .same_site(SameSite::Lax)
-                .path("/auth")
-                .max_age(time::Duration::minutes(10))
-                .build();
+            // The grant is opaque (it may contain anything, dots
+            // included), so it rides base64url-encoded; `next` may too,
+            // which is why it stays last — parsing splits from the left
+            // exactly three times.
+            let grant = URL_SAFE_NO_PAD.encode(login.grant.as_deref().unwrap_or_default());
+            let cookie = Cookie::build((
+                FLOW,
+                format!("{}.{}.{grant}.{next}", flow.state, flow.verifier),
+            ))
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .path("/auth")
+            .max_age(time::Duration::minutes(10))
+            .build();
             (jar.add(cookie), Redirect::to(&url)).into_response()
         }
         Err(e) => {
@@ -134,10 +147,16 @@ async fn callback<S: Storage>(
         )
             .into_response();
     };
-    let mut parts = flow.splitn(3, '.');
-    let (Some(expected), Some(verifier)) = (parts.next(), parts.next()) else {
+    let mut parts = flow.splitn(4, '.');
+    let (Some(expected), Some(verifier), Some(grant)) = (parts.next(), parts.next(), parts.next())
+    else {
         return (StatusCode::BAD_REQUEST, "malformed flow cookie; start over").into_response();
     };
+    let grant = URL_SAFE_NO_PAD
+        .decode(grant)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|grant| !grant.is_empty());
     let next = landing(parts.next()).to_string();
     if expected != state {
         return (StatusCode::BAD_REQUEST, "state mismatch; start over").into_response();
@@ -150,11 +169,11 @@ async fn callback<S: Storage>(
             return (StatusCode::BAD_GATEWAY, format!("sign-in failed: {e}")).into_response();
         }
     };
-    if !oidc.allowed(&identity.handle) {
+    if !oidc.admitted(&identity, grant.as_deref()).await {
         return (
             StatusCode::FORBIDDEN,
             format!(
-                "`{}` is not on this deployment's allowlist",
+                "`{}` is not admitted by this deployment's access policy",
                 identity.handle
             ),
         )

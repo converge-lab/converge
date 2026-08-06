@@ -338,3 +338,46 @@ async fn mapping_round_trip() {
     let skipped = call(&app, "project_dismiss", json!({ "scope": "session" })).await;
     assert_eq!(skipped["disable"], false);
 }
+
+/// The DNS-rebinding guard on /mcp: the deployment's public host is
+/// admitted alongside the localhost family; anything else 403s. This is
+/// the proxied-production shape — nginx forwards `Host: app.<domain>`,
+/// which rmcp's default (localhost-only) allowlist rejected.
+#[tokio::test]
+async fn public_host_passes_the_rebinding_guard() {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    let (_pg, _store, app) = common::hosted(Some("https://converge.test")).await;
+
+    let post = |host: &'static str| {
+        let app = app.clone();
+        async move {
+            let request = Request::post("/mcp")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .header(header::HOST, host)
+                .header(header::AUTHORIZATION, format!("Bearer {}", common::TOKEN))
+                .body(Body::from(
+                    json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} })
+                        .to_string(),
+                ))
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            (status, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+
+    // The public name and the localhost family are served…
+    let (status, body) = post("converge.test").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = post("127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // …an unrelated host is still refused (rebinding protection intact).
+    let (status, body) = post("evil.test").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

@@ -52,7 +52,7 @@ pub fn app<S: Storage + 'static>(
         store: store.clone(),
         sessions: sessions.clone(),
         oauth: crate::oauth::Oauth::new(sessions.clone()),
-        public,
+        public: public.clone(),
         signin: oidc.is_some(),
     };
     let oidc = Arc::new(oidc);
@@ -66,7 +66,10 @@ pub fn app<S: Storage + 'static>(
         .merge(device::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))
         .merge(user::routes().with_state(store.clone()))
-        .nest_service("/mcp", crate::mcp::service(store.clone(), me, expert))
+        .nest_service(
+            "/mcp",
+            crate::mcp::service(store.clone(), me, expert, public.as_deref()),
+        )
         .layer(middleware::from_fn_with_state(
             (store.clone(), sessions.clone()),
             crate::auth::require::<S>,

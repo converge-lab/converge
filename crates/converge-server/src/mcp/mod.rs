@@ -37,11 +37,13 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 
-/// The `/mcp` tower service, ready to nest into the app router.
+/// The `/mcp` tower service, ready to nest into the app router. `public`
+/// is the deployment's external origin (`auth.public_url`), when set.
 pub fn service<S: Storage + 'static>(
     store: S,
     me: Identity,
     expert: crate::expert::Expert<S>,
+    public: Option<&str>,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
     let memory = Memory::new(store, me, expert);
     // Stateless + plain-JSON POST responses: nothing to orphan on
@@ -49,6 +51,18 @@ pub fn service<S: Storage + 'static>(
     let mut config = StreamableHttpServerConfig::default();
     config.stateful_mode = false;
     config.json_response = true;
+    // rmcp's DNS-rebinding guard allows only the localhost family by
+    // default — a deployment reached through its public name must allow
+    // that name too, or every proxied request 403s on the Host header.
+    if let Some(public) = public
+        && let Ok(url) = url::Url::parse(public)
+        && let Some(host) = url.host_str()
+    {
+        config.allowed_hosts.push(host.to_string());
+        if let Some(port) = url.port() {
+            config.allowed_hosts.push(format!("{host}:{port}"));
+        }
+    }
     StreamableHttpService::new(
         move || Ok(memory.clone()),
         Arc::new(LocalSessionManager::default()),

@@ -24,6 +24,14 @@ pub const TOKEN: &str = "cvg_test";
 /// handle lets tests seed around surfaces the API deliberately doesn't
 /// expose yet (users/agents).
 pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
+    hosted(None).await
+}
+
+/// [`server`] with a configured public origin (`auth.public_url`) — for
+/// suites exercising surfaces that depend on the deployment's external
+/// name (the /mcp Host guard, issued URLs).
+#[allow(dead_code)] // pulled in per-suite; not every suite needs an origin
+pub async fn hosted(public: Option<&str>) -> (ContainerAsync<Postgres>, PgStorage, Router) {
     let node = Postgres::default()
         .with_tag("16-alpine")
         .start()
@@ -62,7 +70,7 @@ pub async fn server() -> (ContainerAsync<Postgres>, PgStorage, Router) {
             me,
             Sessions::new(Some("test-session-secret")),
             None,
-            None,
+            public.map(str::to_string),
             None,
             expert,
         ),

@@ -48,8 +48,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Claude Code installation E2E
-        run: cargo test -p converge-e2e --test claude_installation -- --test-threads=1
+      - name: E2E
+        run: cargo test -p converge-e2e -- --test-threads=1
 
   sqlx:
     # A stale query cache compiles fine offline but lies about the schema —

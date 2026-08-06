@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use axum::routing::get;
 use axum::{Router, middleware};
-use converge_storage::{Identity, Storage};
+use converge_storage::Storage;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::auth::Sessions;
@@ -33,15 +33,14 @@ use crate::oidc::Oidc;
 /// The application router over any storage backend: the versioned web API
 /// plus the unversioned, stateless `/mcp` endpoint — both behind
 /// authentication (`crate::auth`: bearer token or session cookie), no
-/// fallback caller. `me` is the deployment identity MCP authorship stamps
-/// in single-user mode. Open paths: `healthz`, the session exchange
+/// fallback caller; MCP reads and writes act as the authenticated
+/// caller, same as REST. Open paths: `healthz`, the session exchange
 /// (`/api/v1/session` — the gate's entrance), and, when `web` names a
 /// trunk `dist/` directory, the static assets served same-origin as the
 /// fallback (the app must load to show its login screen; it is
 /// hash-routed, so `/` → `index.html` suffices).
 pub fn app<S: Storage + 'static>(
     store: S,
-    me: Identity,
     sessions: Sessions,
     oidc: Option<Oidc>,
     public: Option<String>,
@@ -68,7 +67,7 @@ pub fn app<S: Storage + 'static>(
         .merge(user::routes().with_state(store.clone()))
         .nest_service(
             "/mcp",
-            crate::mcp::service(store.clone(), me, expert, public.as_deref()),
+            crate::mcp::service(store.clone(), expert, public.as_deref()),
         )
         .layer(middleware::from_fn_with_state(
             (store.clone(), sessions.clone()),

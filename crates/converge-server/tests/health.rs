@@ -5,7 +5,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use converge_server::app;
 use converge_server::auth::Sessions;
-use converge_storage::Identity;
 use converge_storage_postgres::PgStorage;
 use http_body_util::BodyExt;
 use testcontainers_modules::postgres::Postgres;
@@ -25,12 +24,6 @@ async fn healthz() {
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
 
-    let me = Identity {
-        provider: "local".into(),
-        subject: "admin".into(),
-        handle: "admin".into(),
-        name: "Admin".into(),
-    };
     // No expert jobs: an inert detector (never writes, never spawns).
     let expert = |s: &PgStorage| {
         converge_server::Expert::new(
@@ -41,7 +34,6 @@ async fn healthz() {
     };
     let response = app(
         store.clone(),
-        me.clone(),
         Sessions::new(Some("test-session-secret")),
         None,
         None,
@@ -58,7 +50,6 @@ async fn healthz() {
     let gated = PgStorage::connect(&url).await.unwrap();
     let gate = app(
         gated.clone(),
-        me.clone(),
         Sessions::new(Some("test-session-secret")),
         None,
         None,
@@ -93,7 +84,6 @@ async fn healthz() {
     std::fs::write(dist.join("index.html"), "<title>Converge</title>").unwrap();
     let web = app(
         store.clone(),
-        me,
         Sessions::new(Some("test-session-secret")),
         None,
         None,

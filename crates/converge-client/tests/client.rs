@@ -52,7 +52,6 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
             listener,
             app(
                 store,
-                me,
                 Sessions::new(Some("test-session-secret")),
                 None,
                 None,

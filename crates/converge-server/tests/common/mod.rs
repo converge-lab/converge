@@ -67,7 +67,6 @@ pub async fn hosted(public: Option<&str>) -> (ContainerAsync<Postgres>, PgStorag
         store.clone(),
         app(
             store,
-            me,
             Sessions::new(Some("test-session-secret")),
             None,
             public.map(str::to_string),

@@ -180,7 +180,6 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app(
             store,
-            me,
             sessions,
             oidc,
             config.auth.public_url.clone(),

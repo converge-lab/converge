@@ -10,10 +10,12 @@
 //! - Per the time-authority decision: **no datetime parameters** (instants
 //!   are server-assigned), and payload instants are RFC3339 UTC only —
 //!   stable and comparable, never localized or relativized server-side.
-//! - Authorship is stamped server-side: the deployment user working
-//!   through the calling agent (`user_via_agent`), the agent ensured by
-//!   natural key from MCP client info when the transport exposes it, else
-//!   the generic `mcp` tool agent.
+//! - Authorship is stamped server-side: the **authenticated caller**
+//!   (the user the HTTP gate resolved from the bearer) working through
+//!   the calling agent (`user_via_agent`), the agent ensured by natural
+//!   key from MCP client info when the transport exposes it, else the
+//!   generic `mcp` tool agent. The same user is every read's visibility
+//!   scope — the ACL holds on this surface exactly as on REST.
 //!
 //! No `resolve_project` yet: project names are display-only (no natural
 //! key), so resolve-by-name would be scan-then-create. Agents discover ids
@@ -21,10 +23,11 @@
 
 use std::sync::Arc;
 
+use axum::http::request::Parts;
 use converge_storage::{
-    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, Identity, MessageId,
-    NewAgent, NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, Scope,
-    SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
+    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, MessageId, NewAgent,
+    NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, Scope, SessionId,
+    SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier, UserId,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -37,15 +40,16 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::Caller;
+
 /// The `/mcp` tower service, ready to nest into the app router. `public`
 /// is the deployment's external origin (`auth.public_url`), when set.
 pub fn service<S: Storage + 'static>(
     store: S,
-    me: Identity,
     expert: crate::expert::Expert<S>,
     public: Option<&str>,
 ) -> StreamableHttpService<Memory<S>, LocalSessionManager> {
-    let memory = Memory::new(store, me, expert);
+    let memory = Memory::new(store, expert);
     // Stateless + plain-JSON POST responses: nothing to orphan on
     // restart, and simple JSON survives proxies better than SSE.
     let mut config = StreamableHttpServerConfig::default();
@@ -76,7 +80,6 @@ pub struct Memory<S> {
     #[allow(dead_code)] // read by the macro-generated tool dispatcher
     tool_router: ToolRouter<Self>,
     store: S,
-    me: Identity,
     expert: crate::expert::Expert<S>,
 }
 
@@ -254,11 +257,10 @@ pub struct ProjectDismiss {
 
 #[tool_router]
 impl<S: Storage + 'static> Memory<S> {
-    pub fn new(store: S, me: Identity, expert: crate::expert::Expert<S>) -> Self {
+    pub fn new(store: S, expert: crate::expert::Expert<S>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store,
-            me,
             expert,
         }
     }
@@ -268,8 +270,9 @@ impl<S: Storage + 'static> Memory<S> {
     async fn project_list(
         &self,
         Parameters(_req): Parameters<ProjectList>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = self.scope().await?;
+        let scope = self.scope(&context)?;
         let groups = self
             .store
             .group_list(scope, Pagination::default())
@@ -312,8 +315,9 @@ impl<S: Storage + 'static> Memory<S> {
     async fn project_match(
         &self,
         Parameters(req): Parameters<ProjectMatch>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = self.scope().await?;
+        let scope = self.scope(&context)?;
         let groups = self
             .store
             .group_list(scope, Pagination::default())
@@ -386,8 +390,9 @@ impl<S: Storage + 'static> Memory<S> {
     async fn project_bind(
         &self,
         Parameters(req): Parameters<ProjectBind>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = self.scope().await?;
+        let scope = self.scope(&context)?;
         let (id, name) = match (req.project_id.as_deref(), req.name) {
             (Some(id), None) => {
                 let id: ProjectId = parse_id(id, "project_id")?;
@@ -468,6 +473,7 @@ impl<S: Storage + 'static> Memory<S> {
     async fn session_ensure(
         &self,
         Parameters(req): Parameters<SessionEnsure>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let project_id: ProjectId = parse_id(&req.project_id, "project_id")?;
         let kind = match req.kind.as_deref() {
@@ -477,7 +483,7 @@ impl<S: Storage + 'static> Memory<S> {
         let id = self
             .store
             .session_ensure(
-                self.scope().await?,
+                self.scope(&context)?,
                 NewSession {
                     project_id,
                     kind,
@@ -497,6 +503,7 @@ impl<S: Storage + 'static> Memory<S> {
     async fn message_add(
         &self,
         Parameters(req): Parameters<MessageAdd>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let session: SessionId = parse_id(&req.session_id, "session_id")?;
         let messages = req
@@ -513,7 +520,7 @@ impl<S: Storage + 'static> Memory<S> {
             .collect();
         let ids = self
             .store
-            .message_add(self.scope().await?, session, messages)
+            .message_add(self.scope(&context)?, session, messages)
             .await
             .map_err(map_err)?;
         json_result(&serde_json::json!({ "message_ids": ids }))
@@ -586,9 +593,10 @@ impl<S: Storage + 'static> Memory<S> {
     async fn decision_get(
         &self,
         Parameters(req): Parameters<DecisionGet>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let id: DecisionId = parse_id(&req.decision_id, "decision_id")?;
-        let scope = self.scope().await?;
+        let scope = self.scope(&context)?;
         let decision = self
             .store
             .decision_get(scope, id)
@@ -609,6 +617,7 @@ impl<S: Storage + 'static> Memory<S> {
     async fn decision_list(
         &self,
         Parameters(req): Parameters<DecisionList>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let filter = DecisionFilter {
             project: req
@@ -629,7 +638,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_list(self.scope().await?, filter, page)
+            .decision_list(self.scope(&context)?, filter, page)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -662,6 +671,7 @@ impl<S: Storage + 'static> Memory<S> {
     async fn decision_search(
         &self,
         Parameters(req): Parameters<DecisionSearch>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let filter = DecisionFilter {
             project: req
@@ -678,7 +688,7 @@ impl<S: Storage + 'static> Memory<S> {
         };
         let decisions = self
             .store
-            .decision_search(self.scope().await?, &req.query, filter, req.limit)
+            .decision_search(self.scope(&context)?, &req.query, filter, req.limit)
             .await
             .map_err(map_err)?;
         let items: Vec<_> = decisions
@@ -704,6 +714,7 @@ impl<S: Storage + 'static> Memory<S> {
     async fn signal_list(
         &self,
         Parameters(req): Parameters<SignalList>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let filter = SignalFilter {
             project: req
@@ -722,7 +733,7 @@ impl<S: Storage + 'static> Memory<S> {
         let signals = self
             .store
             .signal_list(
-                self.scope().await?,
+                self.scope(&context)?,
                 filter,
                 Pagination {
                     limit: req.limit,
@@ -774,26 +785,17 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&serde_json::json!({ "signal_id": id, "status": status }))
     }
 
-    /// The caller's visibility scope: the deployment user this MCP
-    /// surface authenticates as.
-    async fn scope(&self) -> Result<Scope, McpError> {
-        let user = self
-            .store
-            .user_login(self.me.clone())
-            .await
-            .map_err(map_err)?;
-        Ok(Scope::User(user))
+    /// The caller's visibility scope: the authenticated user behind this
+    /// very request — same ACL as REST, per credential, never a fixture.
+    fn scope(&self, context: &RequestContext<RoleServer>) -> Result<Scope, McpError> {
+        Ok(Scope::User(user(context)?))
     }
 
-    /// The judging/authoring identity: the deployment user working
+    /// The judging/authoring identity: the authenticated user working
     /// through the calling agent (client info when the transport carries
     /// it, the generic tool agent otherwise).
     async fn caller(&self, context: &RequestContext<RoleServer>) -> Result<Author, McpError> {
-        let user = self
-            .store
-            .user_login(self.me.clone())
-            .await
-            .map_err(map_err)?;
+        let user = user(context)?;
         let client = context
             .peer
             .peer_info()
@@ -809,6 +811,22 @@ impl<S: Storage + 'static> Memory<S> {
             .map_err(map_err)?;
         Ok(Author::UserViaAgent { user, agent })
     }
+}
+
+/// The authenticated user on this request: the HTTP gate verifies the
+/// bearer and parks [`Caller`] in the request extensions; rmcp forwards
+/// them into the tool context as `http::request::Parts`. Absence is an
+/// internal error — `/mcp` is unreachable unauthenticated.
+fn user(context: &RequestContext<RoleServer>) -> Result<UserId, McpError> {
+    context
+        .extensions
+        .get::<Parts>()
+        .and_then(|parts| parts.extensions.get::<Caller>())
+        .map(|caller| caller.user)
+        .ok_or_else(|| {
+            tracing::error!("mcp request reached a tool without an authenticated caller");
+            McpError::internal_error("no authenticated caller on the request", None)
+        })
 }
 
 #[tool_handler]

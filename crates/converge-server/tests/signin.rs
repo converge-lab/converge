@@ -101,12 +101,6 @@ async fn server(
     let store = PgStorage::connect(&url).await.unwrap();
     store.migrate().await.unwrap();
 
-    let me = Identity {
-        provider: "local".into(),
-        subject: "admin".into(),
-        handle: "admin".into(),
-        name: "Admin".into(),
-    };
     let oidc = Oidc::new(Settings {
         provider: "corp".into(),
         issuer: Some(issuer.into()),
@@ -127,7 +121,6 @@ async fn server(
     );
     let app = converge_server::app(
         store,
-        me,
         Sessions::new(Some("test-session-secret")),
         Some(oidc),
         None,

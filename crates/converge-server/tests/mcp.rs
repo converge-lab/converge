@@ -381,3 +381,116 @@ async fn public_host_passes_the_rebinding_guard() {
     let (status, body) = post("evil.test").await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+/// The MCP surface acts as the authenticated caller, not a deployment
+/// fixture: visibility is the caller's ACL, authorship is the caller's
+/// identity — token for token, exactly like REST.
+#[tokio::test]
+async fn tools_act_as_the_authenticated_caller() {
+    use converge_server::auth;
+    use converge_storage::{Identity, Tokens, Users};
+
+    let (_pg, store, app) = server().await;
+
+    // A second user with their own bearer.
+    let beta = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "beta".into(),
+            handle: "beta".into(),
+            name: "Beta".into(),
+        })
+        .await
+        .unwrap();
+    store
+        .token_add(beta, "laptop".into(), auth::hash("cvg_beta"))
+        .await
+        .unwrap();
+
+    /// One tools/call as a specific bearer, JSON payload parsed out.
+    async fn call_as(app: &Router, token: &str, tool: &str, arguments: Value) -> Value {
+        let (status, response) = common::send_as(
+            app,
+            token,
+            "POST",
+            "/mcp",
+            Some(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": tool, "arguments": arguments },
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text content: {response}"));
+        serde_json::from_str(text).unwrap()
+    }
+
+    // Nobody owns anything yet (the harness runs no boot adoption).
+    let beta_map = call_as(&app, "cvg_beta", "project_list", json!({})).await;
+    assert_eq!(beta_map, json!([]));
+
+    // Beta builds their own corner (group via REST, project via MCP)…
+    let (status, created) = common::send_as(
+        &app,
+        "cvg_beta",
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "beta-team", "description": null, "kind": "shared" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let group_id = created["id"].as_str().unwrap().to_string();
+    let bound = call_as(
+        &app,
+        "cvg_beta",
+        "project_bind",
+        json!({ "name": "secret", "group_id": group_id }),
+    )
+    .await;
+    let project_id = bound["project_id"].as_str().unwrap().to_string();
+
+    // Visibility is per-caller: beta sees their group; the admin's map
+    // stays empty — beta's corner is invisible to another token.
+    let beta_map = call_as(&app, "cvg_beta", "project_list", json!({})).await;
+    assert_eq!(beta_map[0]["group_name"], "beta-team", "{beta_map}");
+    let admin_map = call_as(&app, common::TOKEN, "project_list", json!({})).await;
+    assert_eq!(admin_map, json!([]));
+
+    // …and a decision they record is attributed to THEM.
+    let recorded = call_as(
+        &app,
+        "cvg_beta",
+        "decision_add",
+        json!({ "project_id": project_id, "title": "Beta's call", "summary": "s" }),
+    )
+    .await;
+    let decision_id = recorded["decision_id"].as_str().unwrap().to_string();
+    let fetched = call_as(
+        &app,
+        "cvg_beta",
+        "decision_get",
+        json!({ "decision_id": decision_id }),
+    )
+    .await;
+    let author = &fetched["decision"]["authors"][0]["user_via_agent"];
+    assert_eq!(author["user"], beta.to_string(), "{fetched}");
+
+    // The ACL holds across the surface: the admin cannot see beta's
+    // decision through MCP.
+    let (status, denied) = common::send_as(
+        &app,
+        common::TOKEN,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "decision_get",
+                        "arguments": { "decision_id": decision_id } },
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(denied["error"]["message"], "decision not found", "{denied}");
+}

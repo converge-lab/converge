@@ -465,6 +465,16 @@ pub fn group_name() -> String {
     cur_group().name
 }
 
+/// Display name for a group id (the id itself when unknown), for callers that
+/// hold an id rather than the active group — the rename modal, say.
+pub fn group_name_of(gid: &str) -> String {
+    ds().groups
+        .iter()
+        .find(|g| g.id == gid)
+        .map(|g| g.name.clone())
+        .unwrap_or_else(|| gid.to_string())
+}
+
 pub fn group_meta() -> String {
     let g = cur_group();
     let n = g.project_ids.len();
@@ -534,6 +544,21 @@ pub fn add_project_local(
     });
     if let Some(g) = ds.groups.iter_mut().find(|g| g.id == group_id) {
         g.project_ids.push(id);
+    }
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
+/// Reflect a renamed group in place. The id is immutable, so the active-group
+/// index, its project list and every decision under it stay valid — only the
+/// label the sidebar and dashboard print changes.
+pub fn rename_group_local(store: AppStore, id: &str, name: String) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    if let Some(g) = ds.groups.iter_mut().find(|g| g.id == id) {
+        g.name = name;
     }
     store.dataset().set(Some(Rc::new(ds)));
 }

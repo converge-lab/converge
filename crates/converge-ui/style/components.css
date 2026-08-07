@@ -1374,3 +1374,60 @@
 .cv-tokens__confirm { display: flex; align-items: center; gap: 0.625rem; flex: none; }
 .cv-tokens__warn { font-size: 0.78125rem; color: var(--cv-danger); }
 .cv-tokens__empty { font-size: 0.8125rem; color: var(--cv-text-faint); padding: 1rem; text-align: center; }
+
+/* === Members: the group's roster ========================================== */
+/* Members-first layout: the group name *is* the page heading (a "✎" beside it
+   opens the rename modal), the roster is a table, and the destructive actions
+   sit as one quiet line in the footer. */
+.cv-members { max-width: 52rem; }
+.cv-members__title { display: flex; align-items: center; gap: 0.625rem; }
+.cv-members__pencil { width: 1.75rem; height: 1.75rem; flex: none; border: 1px solid var(--cv-border); border-radius: 0.5rem; background: transparent; color: var(--cv-text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.8125rem; }
+.cv-members__pencil:hover { background: var(--cv-chip); color: var(--cv-text); border-color: var(--cv-border-strong); }
+.cv-members__meta { font-size: 0.8125rem; color: var(--cv-text-muted); margin-top: 0.4375rem; }
+.cv-members__foot { font-size: 0.71875rem; color: var(--cv-text-faint); line-height: 1.5; margin-top: 1.5rem; }
+
+/* Invite card */
+.cv-invite { background: var(--cv-panel); border: 1px solid var(--cv-border); border-radius: 0.6875rem; padding: 1.0625rem 1.125rem; margin: 1.5rem 0 1.375rem; }
+.cv-invite__head { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.75rem; }
+.cv-invite__row { display: flex; align-items: center; gap: 0.5rem; }
+.cv-invite__row .cv-input { flex: 1; }
+.cv-invite__note { font-size: 0.8125rem; color: var(--cv-text-muted); line-height: 1.5; margin-top: 0.75rem; }
+
+/* Username resolution under the invite field: found · no such user · already in */
+.cv-resolve { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.625rem; padding: 0.6875rem 0.75rem; border-radius: 0.5625rem; background: var(--cv-inset); border: 1px solid var(--cv-border); }
+.cv-resolve--miss { background: color-mix(in srgb, var(--cv-signal) 8%, transparent); border-color: color-mix(in srgb, var(--cv-signal) 26%, transparent); }
+.cv-resolve__body { flex: 1; min-width: 0; }
+.cv-resolve__name { font-size: 0.875rem; font-weight: 500; }
+.cv-resolve__sub { font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
+.cv-resolve__msg { flex: 1; min-width: 0; font-size: 0.8125rem; line-height: 1.5; color: var(--cv-text-secondary); }
+
+/* Roster table */
+.cv-roster__head { display: flex; align-items: center; gap: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--cv-border); font-family: var(--cv-font-mono); font-size: 0.6875rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cv-text-faint); }
+.cv-roster__row { display: flex; align-items: center; gap: 1rem; padding: 0.6875rem 0; border-bottom: 1px solid var(--cv-border); }
+.cv-roster__row:last-child { border-bottom: 0; }
+.cv-roster__who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.625rem; }
+.cv-roster__name { font-size: 0.875rem; font-weight: 500; display: flex; align-items: center; gap: 0.5rem; }
+.cv-roster__you { font-family: var(--cv-font-mono); font-size: 0.75rem; font-weight: 400; color: var(--cv-text-faint); }
+.cv-roster__handle { font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
+/* Fixed columns so the header labels line up with every row's cells. */
+.cv-roster__role { width: 9rem; flex: none; }
+.cv-roster__owner { font-family: var(--cv-font-mono); font-size: 0.8125rem; color: var(--cv-text-muted); }
+.cv-roster__joined { width: 6.75rem; flex: none; font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
+.cv-roster__x { width: 1.75rem; height: 1.75rem; flex: none; display: flex; align-items: center; justify-content: center; border: 1px solid var(--cv-border); border-radius: 0.5rem; background: transparent; color: var(--cv-text-faint); cursor: pointer; font-size: 0.8125rem; font-family: var(--cv-font-sans); }
+.cv-roster__x:hover { color: var(--cv-danger); border-color: color-mix(in srgb, var(--cv-danger) 40%, transparent); background: color-mix(in srgb, var(--cv-danger) 8%, transparent); }
+/* The owner has no remove control, but still holds the column so rows align. */
+.cv-roster__x--none { visibility: hidden; }
+
+/* "Your agent can do this too" line under the roster. */
+.cv-agenthint { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.9375rem; font-size: 0.8125rem; color: var(--cv-text-muted); }
+.cv-agenthint__mark { color: var(--cv-expert); }
+
+/* Danger line: one sentence, two links, no card. */
+.cv-dangerbar { display: flex; align-items: center; gap: 1rem; margin-top: 2rem; padding-top: 1.0625rem; border-top: 1px solid var(--cv-border); font-size: 0.8125rem; color: var(--cv-text-muted); }
+.cv-dangerbar__act { flex: none; padding: 0; border: 0; background: transparent; font-family: var(--cv-font-sans); font-size: 0.8125rem; color: var(--cv-text-secondary); cursor: pointer; }
+.cv-dangerbar__act:hover { color: var(--cv-text); }
+.cv-dangerbar__act--danger { color: var(--cv-danger); }
+.cv-dangerbar__act--danger:hover { color: var(--cv-danger); text-decoration: underline; }
+
+/* Transient one-liner for actions that only pretend to do something. */
+.cv-flash { margin-top: 0.875rem; font-size: 0.8125rem; color: var(--cv-text-faint); }

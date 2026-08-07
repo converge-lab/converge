@@ -4,9 +4,11 @@
 
 use crate::command_snippet::{CommandSnippet, mcp_command};
 use crate::data;
+use crate::modals::{ModalKind, open};
 use crate::route::Route;
-use converge_ui::atoms::SectionLabel;
-use converge_ui::molecules::{DecisionCard, SignalCard, SignalView};
+use converge_ui::atoms::{Glyph, SectionLabel};
+use converge_ui::molecules::{DecisionCard, MenuItem, OverflowMenu, SignalCard, SignalView};
+use leptos::ev;
 use leptos::prelude::*;
 
 #[component]
@@ -14,16 +16,93 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
     // With no signals the aside is dropped entirely — the grid collapses
     // to one column so the feed isn't stranded beside a phantom column.
     let solo = data::group_signals().is_empty();
+
+    // The group's "⋯" menu, the twin of the project log's header menu:
+    // Escape closes it, outside clicks land on the scrim below. The listener
+    // handle is removed by hand — leptos never detaches window listeners on
+    // owner disposal, and the dashboard is rebuilt on every navigation, so a
+    // dropped handle would leak one global listener per visit.
+    let (menu_open, set_menu_open) = signal(false);
+    let gid = data::cur_group().id;
+    let escape = window_event_listener(ev::keydown, move |evt| {
+        if evt.key() == "Escape" {
+            set_menu_open.set(false);
+        }
+    });
+    on_cleanup(move || escape.remove());
+
     view! {
         <div class="cv-dash">
-            <div class="cv-dash__head">
-                <h1 class="cv-heading cv-fs-4xl cv-mb-6">
-                    {data::group_name()}
-                </h1>
-                <p class="cv-fg-muted cv-fs-lg">
-                    {data::group_tagline()}" The " <em>"why"</em>
-                    " behind the code — captured, anchored, and verifiable."
-                </p>
+            <div class="cv-dash__head cv-row">
+                <div class="cv-grow">
+                    <h1 class="cv-heading cv-fs-4xl cv-mb-6">
+                        {data::group_name()}
+                    </h1>
+                    <p class="cv-fg-muted cv-fs-lg">
+                        {data::group_tagline()}" The " <em>"why"</em>
+                        " behind the code — captured, anchored, and verifiable."
+                    </p>
+                </div>
+                <div class="cv-relative">
+                    <div
+                        class=move || {
+                            if menu_open.get() {
+                                "cv-iconbtn cv-iconbtn--open"
+                            } else {
+                                "cv-iconbtn"
+                            }
+                        }
+                        role="button"
+                        tabindex="0"
+                        aria-label="Group actions"
+                        on:click=move |_| set_menu_open.update(|o| *o = !*o)
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" || ev.key() == " " {
+                                ev.prevent_default();
+                                set_menu_open.update(|o| *o = !*o);
+                            }
+                        }
+                    >
+                        {Glyph::More.glyph()}
+                    </div>
+                    {move || {
+                        menu_open
+                            .get()
+                            .then(|| {
+                                let gid = gid.clone();
+                                view! {
+                                    // Transparent full-screen catcher: an outside click closes the menu.
+                                    <div
+                                        class="cv-acctmenu__scrim"
+                                        on:click=move |_| set_menu_open.set(false)
+                                    ></div>
+                                    // Anchored top-right below the button; z above the scrim. No
+                                    // utility covers this float, so the position is inline (as in
+                                    // the project log's menu).
+                                    <div style="position:absolute;right:0;top:2.25rem;z-index:61">
+                                        <OverflowMenu>
+                                            <MenuItem
+                                                icon=Glyph::Edit
+                                                label="Rename group…"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    open(ModalKind::RenameGroup(gid.clone()));
+                                                })
+                                            />
+                                            <MenuItem
+                                                icon=Glyph::Shared
+                                                label="Members"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    go.run(Route::Members);
+                                                })
+                                            />
+                                        </OverflowMenu>
+                                    </div>
+                                }
+                            })
+                    }}
+                </div>
             </div>
 
             <div class=if solo { "cv-dash__grid cv-dash__grid--solo" } else { "cv-dash__grid" }>

@@ -9,14 +9,11 @@
 //! provisions teammates without an identity provider. Users manage their
 //! own tokens over `/api/v1/tokens`.
 
-mod config;
-mod telemetry;
-
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use config::ConfigService;
 use converge_server::auth::Sessions;
-use converge_server::{app, auth};
+use converge_server::config::{Config, ConfigService};
+use converge_server::{app, auth, telemetry};
 use converge_storage::{
     AgentKind, Agents, Identity, Memberships, NewAgent, Pagination, Storage, TokenId, Users,
 };
@@ -253,7 +250,7 @@ async fn check(config: &converge_expert::Config, only: Option<&str>) -> anyhow::
 /// nothing could run at all — per-decision failures are counted and
 /// non-fatal.
 async fn backfill(
-    config: &config::Config,
+    config: &Config,
     project: Option<&str>,
     group: Option<&str>,
 ) -> anyhow::Result<()> {

@@ -127,7 +127,7 @@ pub struct Auth {
     /// [`converge_server::oidc::Settings`]). Absent → token-paste only;
     /// the auth core never needs egress.
     #[serde(default)]
-    pub oidc: Option<converge_server::oidc::Settings>,
+    pub oidc: Option<crate::oidc::Settings>,
     /// This deployment's external origin, used as the OAuth issuer for
     /// MCP connectors. Absent → derived per-request from the `Host`
     /// header (fine for dev; set it behind a proxy).

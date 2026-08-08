@@ -91,11 +91,14 @@ pub fn create_project(name: String) {
     }
 }
 
-/// Rename a group. The id stays fixed, so membership, its projects and every
-/// decision recorded under it are untouched — only the label changes.
-pub fn rename_group(id: String, name: String) {
+/// Edit a group's name and description. The id stays fixed, so membership, its
+/// projects and every decision recorded under it are untouched. `kind` is not
+/// here on purpose: it is fixed at creation, and turning a personal space into
+/// a shared one is a separate operation the server doesn't offer yet.
+pub fn edit_group(id: String, name: String, desc: String) {
     let store = use_store();
     store.notice().set(None);
+    let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
         use converge_client::{GroupEdit, GroupId};
@@ -103,19 +106,22 @@ pub fn rename_group(id: String, name: String) {
             leptos::logging::error!("group id is not a ULID: {id}");
             return;
         };
-        let edits = vec![GroupEdit::SetName(name.clone())];
+        let edits = vec![
+            GroupEdit::SetName(name.clone()),
+            GroupEdit::SetDescription(description.clone()),
+        ];
         leptos::task::spawn_local(async move {
             match crate::store::client().group_edit(gid, &edits).await {
-                Ok(()) => data::rename_group_local(store, &id, name),
-                // Renaming is owner-only server-side; a member's attempt comes
+                Ok(()) => data::edit_group_local(store, &id, name, description),
+                // Editing is owner-only server-side; a member's attempt comes
                 // back as a refusal, which the toast reports verbatim.
-                Err(e) => fail(store, format!("Couldn't rename to “{name}” — {e}")),
+                Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
-        data::rename_group_local(store, &id, name);
+        data::edit_group_local(store, &id, name, description);
     }
 }
 

@@ -12,8 +12,10 @@ pub enum Route {
     /// A decision's anchored source: `(decision_id, source_index)`.
     Source(String, usize),
     Project(String),
-    /// The active group's members (and, later, adding one).
-    Members,
+    /// The active group's own settings: name, description, members, danger.
+    GroupSettings,
+    /// One project's settings, by project id.
+    ProjectSettings(String),
     Search,
     Expert,
     Settings,
@@ -35,8 +37,19 @@ impl Route {
                 let idx = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
                 Route::Source(id, idx)
             }
-            "project" => Route::Project(parts.next().unwrap_or("").to_string()),
-            "members" => Route::Members,
+            "project" => {
+                let id = parts.next().unwrap_or("").to_string();
+                match parts.next() {
+                    Some("settings") => Route::ProjectSettings(id),
+                    _ => Route::Project(id),
+                }
+            }
+            // `#/group/settings`; a bare `#/group` is the dashboard, which is
+            // the group's own screen.
+            "group" => match parts.next() {
+                Some("settings") => Route::GroupSettings,
+                _ => Route::Dashboard,
+            },
             "search" => Route::Search,
             "expert" => Route::Expert,
             "settings" => Route::Settings,
@@ -53,7 +66,8 @@ impl Route {
             Route::SignalDetail(id) => format!("#/signal/{id}"),
             Route::Source(id, idx) => format!("#/source/{id}/{idx}"),
             Route::Project(id) => format!("#/project/{id}"),
-            Route::Members => "#/members".into(),
+            Route::GroupSettings => "#/group/settings".into(),
+            Route::ProjectSettings(id) => format!("#/project/{id}/settings"),
             Route::Search => "#/search".into(),
             Route::Expert => "#/expert".into(),
             Route::Settings => "#/settings".into(),
@@ -70,7 +84,8 @@ impl Route {
             Route::SignalDetail(_) => "Signal".into(),
             Route::Source(_, _) => "Source".into(),
             Route::Project(id) => id.clone(),
-            Route::Members => "Members".into(),
+            Route::GroupSettings => "Settings".into(),
+            Route::ProjectSettings(_) => "Settings".into(),
             Route::Search => "Search".into(),
             Route::Expert => "Expert model".into(),
             Route::Settings => "Settings".into(),

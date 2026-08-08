@@ -102,9 +102,9 @@ pub struct Sig {
 /// A group with its membership (D3 read-model).
 #[derive(Clone)]
 pub struct GroupDef {
-    #[allow(dead_code)] // reserved as the routing/persistence id
     pub id: String,
     pub name: String,
+    pub description: Option<String>,
     pub kind: GroupKind,
     pub project_ids: Vec<String>,
 }
@@ -327,6 +327,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
             .map(|g| GroupDef {
                 id: g.id.clone(),
                 name: g.name.clone(),
+                description: g.description.clone(),
                 kind: group_kind_of(g.kind),
                 project_ids: g.project_ids.clone(),
             })
@@ -448,6 +449,7 @@ pub fn cur_group() -> GroupDef {
     q_group(&d, group_idx()).cloned().unwrap_or(GroupDef {
         id: String::new(),
         name: "No groups".into(),
+        description: None,
         kind: GroupKind::Shared,
         project_ids: Vec::new(),
     })
@@ -463,16 +465,6 @@ pub fn cur_group_projects() -> Vec<String> {
 
 pub fn group_name() -> String {
     cur_group().name
-}
-
-/// Display name for a group id (the id itself when unknown), for callers that
-/// hold an id rather than the active group — the rename modal, say.
-pub fn group_name_of(gid: &str) -> String {
-    ds().groups
-        .iter()
-        .find(|g| g.id == gid)
-        .map(|g| g.name.clone())
-        .unwrap_or_else(|| gid.to_string())
 }
 
 pub fn group_tagline() -> String {
@@ -502,6 +494,7 @@ pub fn add_group_local(store: AppStore, id: String, name: String, kind: GroupKin
     ds.groups.push(GroupDef {
         id,
         name,
+        description: None,
         kind,
         project_ids: Vec::new(),
     });
@@ -535,10 +528,10 @@ pub fn add_project_local(
     store.dataset().set(Some(Rc::new(ds)));
 }
 
-/// Reflect a renamed group in place. The id is immutable, so the active-group
-/// index, its project list and every decision under it stay valid — only the
-/// label the sidebar and dashboard print changes.
-pub fn rename_group_local(store: AppStore, id: &str, name: String) {
+/// Reflect an edited group's name/description in place. The id is immutable, so
+/// the active-group index, its project list and every decision under it stay
+/// valid — only the label the sidebar and dashboard print changes.
+pub fn edit_group_local(store: AppStore, id: &str, name: String, description: Option<String>) {
     let cur = store
         .dataset()
         .get_untracked()
@@ -546,6 +539,7 @@ pub fn rename_group_local(store: AppStore, id: &str, name: String) {
     let mut ds = (*cur).clone();
     if let Some(g) = ds.groups.iter_mut().find(|g| g.id == id) {
         g.name = name;
+        g.description = description;
     }
     store.dataset().set(Some(Rc::new(ds)));
 }

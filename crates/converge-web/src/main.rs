@@ -7,12 +7,13 @@ mod dashboard;
 mod data;
 mod decision_detail;
 mod expert;
-mod members;
+mod group_settings;
 mod modals;
 mod mutate;
 mod onboard;
 mod pair;
 mod project_log;
+mod project_settings;
 mod route;
 mod search;
 mod seed;
@@ -29,15 +30,16 @@ use converge_ui::molecules::{GroupNavItem, NavItem, ProjectNavItem};
 use dashboard::Dashboard;
 use decision_detail::DecisionDetail;
 use expert::Expert;
+use group_settings::GroupSettings;
 use leptos::ev;
 use leptos::html;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
-use members::Members;
 use modals::{ModalHost, ModalKind};
 use onboard::Onboarding;
 use pair::Pair;
 use project_log::ProjectLog;
+use project_settings::ProjectSettings;
 use route::{Route, current_route, navigate};
 use search::Search;
 use settings::Settings;
@@ -331,7 +333,10 @@ fn App() -> impl IntoView {
                         Route::SignalDetail(id) => view! { <SignalDetail go=go id=id /> }.into_any(),
                         Route::Source(id, idx) => view! { <SourceViewer go=go id=id idx=idx /> }.into_any(),
                         Route::Project(id) => view! { <ProjectLog go=go pid=id /> }.into_any(),
-                        Route::Members => view! { <Members /> }.into_any(),
+                        Route::GroupSettings => view! { <GroupSettings /> }.into_any(),
+                        Route::ProjectSettings(id) => {
+                            view! { <ProjectSettings pid=id /> }.into_any()
+                        }
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
                         Route::Settings => view! { <Settings /> }.into_any(),
@@ -808,6 +813,29 @@ fn TopBar(
                 {move || { track_data(store); data::group_name() }}
             </span>
             <span class="cv-topbar__sep">"/"</span>
+            // A project's settings sit one level deeper, so the trail names the
+            // project before "Settings" — otherwise two different screens read
+            // as the same crumb.
+            {move || {
+                track_data(store);
+                match route.get() {
+                    Route::ProjectSettings(id) => {
+                        let name = data::proj_name(&id);
+                        Some(
+                            view! {
+                                <span
+                                    class="cv-mono cv-pointer"
+                                    on:click=move |_| go.run(Route::Project(id.clone()))
+                                >
+                                    {name}
+                                </span>
+                                <span class="cv-topbar__sep">"/"</span>
+                            },
+                        )
+                    }
+                    _ => None,
+                }
+            }}
             <span class="cv-topbar__cur">
             {move || {
                 track_data(store);

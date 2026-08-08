@@ -4,7 +4,6 @@
 
 use crate::command_snippet::{CommandSnippet, mcp_command};
 use crate::data;
-use crate::modals::{ModalKind, open};
 use crate::route::Route;
 use converge_ui::atoms::{Glyph, SectionLabel};
 use converge_ui::molecules::{DecisionCard, MenuItem, OverflowMenu, SignalCard, SignalView};
@@ -23,7 +22,6 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
     // owner disposal, and the dashboard is rebuilt on every navigation, so a
     // dropped handle would leak one global listener per visit.
     let (menu_open, set_menu_open) = signal(false);
-    let gid = data::cur_group().id;
     let escape = window_event_listener(ev::keydown, move |evt| {
         if evt.key() == "Escape" {
             set_menu_open.set(false);
@@ -69,7 +67,6 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                         menu_open
                             .get()
                             .then(|| {
-                                let gid = gid.clone();
                                 view! {
                                     // Transparent full-screen catcher: an outside click closes the menu.
                                     <div
@@ -81,20 +78,18 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                                     // the project log's menu).
                                     <div style="position:absolute;right:0;top:2.25rem;z-index:61">
                                         <OverflowMenu>
+                                            // One entry, the same rule the
+                                            // project's "⋯" follows: the menu
+                                            // beside a name opens that object's
+                                            // settings. Name, description,
+                                            // members and the destructive
+                                            // actions all live on that screen.
                                             <MenuItem
-                                                icon=Glyph::Edit
-                                                label="Rename group…"
+                                                icon=Glyph::Settings
+                                                label="Settings"
                                                 on_click=Callback::new(move |_| {
                                                     set_menu_open.set(false);
-                                                    open(ModalKind::RenameGroup(gid.clone()));
-                                                })
-                                            />
-                                            <MenuItem
-                                                icon=Glyph::Shared
-                                                label="Members"
-                                                on_click=Callback::new(move |_| {
-                                                    set_menu_open.set(false);
-                                                    go.run(Route::Members);
+                                                    go.run(Route::GroupSettings);
                                                 })
                                             />
                                         </OverflowMenu>

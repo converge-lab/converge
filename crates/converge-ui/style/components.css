@@ -44,8 +44,10 @@
 .cv-mb-22 { margin-bottom: var(--cv-space-22); }
 .cv-mb-24 { margin-bottom: var(--cv-space-24); }
 .cv-mb-28 { margin-bottom: var(--cv-space-28); }
+.cv-mb-32 { margin-bottom: var(--cv-space-32); }
 
 /* Margin-top (rare — mostly one vertical direction is enough). */
+.cv-mt-4  { margin-top: var(--cv-space-4); }
 .cv-mt-14 { margin-top: var(--cv-space-14); }
 
 /* Padding-top. */
@@ -59,6 +61,7 @@
 /* Layout primitives. */
 .cv-page    { max-width: 67.5rem; margin: 0 auto; }  /* centered content column */
 .cv-page--narrow { max-width: 51.25rem; }            /* narrower page (820) */
+.cv-page--form   { max-width: 44rem; }               /* settings form column (704) */
 .cv-measure { max-width: 38.75rem; }                 /* narrow reading column (620) */
 .cv-grow    { flex: 1; min-width: 0; }               /* fills row, still shrinks */
 .cv-fill    { flex: 1; min-height: 0; }              /* fills column, child scrolls */
@@ -861,10 +864,12 @@
   padding: 0.3125rem 0.625rem;
   cursor: pointer;
 }
+/* Selected reads in the brand green. Purple is the expert model and agents
+   everywhere else in the product, and a chosen toggle is neither. */
 .cv-projchip--on {
-  color: var(--cv-expert);
-  border-color: color-mix(in srgb, var(--cv-expert) 35%, transparent);
-  background: color-mix(in srgb, var(--cv-expert) 10%, transparent);
+  color: var(--cv-primary);
+  border-color: color-mix(in srgb, var(--cv-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--cv-primary) 10%, transparent);
 }
 .cv-expert__thread { display: flex; flex-direction: column; gap: 1rem; }
 .cv-expert__empty {
@@ -1281,6 +1286,7 @@
 .cv-menu__item { display: flex; align-items: center; gap: 0.625rem; padding: 0.4375rem 0.625rem; border-radius: 0.375rem; font-size: 0.8125rem; color: var(--cv-text-secondary); cursor: pointer; }
 .cv-menu__item:hover { background: var(--cv-chip); color: var(--cv-text); }
 .cv-menu__icon { width: 1rem; text-align: center; flex: none; font-size: 0.8125rem; }
+.cv-menu__item--danger { color: var(--cv-danger); }
 .cv-menu__sep { height: 1px; background: var(--cv-border); margin: 0.25rem 0.375rem; }
 .cv-menu__note { font-size: 0.6875rem; color: var(--cv-text-faint); padding: 0.125rem 0.625rem 0.375rem; line-height: 1.45; }
 
@@ -1322,59 +1328,32 @@
 .cv-tokens__warn { font-size: 0.78125rem; color: var(--cv-danger); }
 .cv-tokens__empty { font-size: 0.8125rem; color: var(--cv-text-faint); padding: 1rem; text-align: center; }
 
-/* === Members: the group's roster ========================================== */
-/* Members-first layout: the group name *is* the page heading (a "✎" beside it
-   opens the rename modal), the roster is a table, and the destructive actions
-   sit as one quiet line in the footer. */
-.cv-members { max-width: 52rem; }
-.cv-members__title { display: flex; align-items: center; gap: 0.625rem; }
-.cv-members__pencil { width: 1.75rem; height: 1.75rem; flex: none; border: 1px solid var(--cv-border); border-radius: 0.5rem; background: transparent; color: var(--cv-text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.8125rem; }
-.cv-members__pencil:hover { background: var(--cv-chip); color: var(--cv-text); border-color: var(--cv-border-strong); }
-.cv-members__meta { font-size: 0.8125rem; color: var(--cv-text-muted); margin-top: 0.4375rem; }
-.cv-members__foot { font-size: 0.71875rem; color: var(--cv-text-faint); line-height: 1.5; margin-top: 1.5rem; }
+/* === Settings screens (group and project) ================================ */
+/* One structure learned once: the form on top, then what the object contains,
+   then the destructive actions fenced off at the bottom. */
+.cv-setform { display: flex; flex-direction: column; gap: 1.375rem; margin-bottom: 2.25rem; }
+.cv-setform__hint { font-size: var(--cv-text-xs); color: var(--cv-text-faint); line-height: 1.5; }
+/* A control that shows a real value the API can't change yet. Inert rather
+   than merely quiet — a field you can focus but not save is worse than one
+   that says up front it isn't editable. */
+.cv-setform__locked { opacity: 0.5; pointer-events: none; }
+.cv-setsep { height: 1px; background: var(--cv-border); margin-bottom: 1.5rem; }
 
-/* Invite card */
-.cv-invite { background: var(--cv-panel); border: 1px solid var(--cv-border); border-radius: 0.6875rem; padding: 1.0625rem 1.125rem; margin: 1.5rem 0 1.375rem; }
-.cv-invite__head { font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.75rem; }
-.cv-invite__row { display: flex; align-items: center; gap: 0.5rem; }
-.cv-invite__row .cv-input { flex: 1; }
-.cv-invite__note { font-size: 0.8125rem; color: var(--cv-text-muted); line-height: 1.5; margin-top: 0.75rem; }
+/* Members block (group settings only) */
+.cv-memberrow { display: flex; align-items: center; gap: 0.75rem; padding: 0.875rem 1rem; border-bottom: 1px solid var(--cv-border); }
+.cv-memberrow:last-child { border-bottom: 0; }
+.cv-memberrow__name { font-size: 0.8125rem; font-weight: 500; }
+.cv-memberrow__handle { font-family: var(--cv-font-mono); font-size: 0.625rem; color: var(--cv-text-faint); }
+.cv-memberrow__role { flex: none; font-size: var(--cv-text-xs); color: var(--cv-text-muted); }
+.cv-memberrow__x { flex: none; width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; font-family: var(--cv-font-sans); font-size: 0.75rem; color: var(--cv-text-faint); cursor: pointer; border-radius: 0.375rem; }
+.cv-memberrow__x:hover { color: var(--cv-danger); background: color-mix(in srgb, var(--cv-danger) 10%, transparent); }
 
-/* Username resolution under the invite field: found · no such user · already in */
-.cv-resolve { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.625rem; padding: 0.6875rem 0.75rem; border-radius: 0.5625rem; background: var(--cv-inset); border: 1px solid var(--cv-border); }
-.cv-resolve--miss { background: color-mix(in srgb, var(--cv-signal) 8%, transparent); border-color: color-mix(in srgb, var(--cv-signal) 26%, transparent); }
-.cv-resolve__body { flex: 1; min-width: 0; }
-.cv-resolve__name { font-size: 0.875rem; font-weight: 500; }
-.cv-resolve__sub { font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
-.cv-resolve__msg { flex: 1; min-width: 0; font-size: 0.8125rem; line-height: 1.5; color: var(--cv-text-secondary); }
+/* Danger zone — fenced, so nothing in it is reachable by accident. */
+.cv-danger { display: flex; flex-direction: column; gap: 1.125rem; border: 1px solid color-mix(in srgb, var(--cv-danger) 30%, transparent); border-radius: 0.625rem; padding: 1.125rem 1.25rem; }
+.cv-danger__title { font-size: var(--cv-text-md); font-weight: 500; color: var(--cv-danger); }
+.cv-danger__row { display: flex; align-items: flex-start; gap: var(--cv-space-8); }
+.cv-danger__what { font-size: var(--cv-text-md); }
+.cv-danger__why { margin-top: 0.25rem; font-size: var(--cv-text-xs); color: var(--cv-text-faint); line-height: 1.5; }
 
-/* Roster table */
-.cv-roster__head { display: flex; align-items: center; gap: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--cv-border); font-family: var(--cv-font-mono); font-size: 0.6875rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--cv-text-faint); }
-.cv-roster__row { display: flex; align-items: center; gap: 1rem; padding: 0.6875rem 0; border-bottom: 1px solid var(--cv-border); }
-.cv-roster__row:last-child { border-bottom: 0; }
-.cv-roster__who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.625rem; }
-.cv-roster__name { font-size: 0.875rem; font-weight: 500; display: flex; align-items: center; gap: 0.5rem; }
-.cv-roster__you { font-family: var(--cv-font-mono); font-size: 0.75rem; font-weight: 400; color: var(--cv-text-faint); }
-.cv-roster__handle { font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
-/* Fixed columns so the header labels line up with every row's cells. */
-.cv-roster__role { width: 9rem; flex: none; }
-.cv-roster__owner { font-family: var(--cv-font-mono); font-size: 0.8125rem; color: var(--cv-text-muted); }
-.cv-roster__joined { width: 6.75rem; flex: none; font-family: var(--cv-font-mono); font-size: 0.75rem; color: var(--cv-text-faint); }
-.cv-roster__x { width: 1.75rem; height: 1.75rem; flex: none; display: flex; align-items: center; justify-content: center; border: 1px solid var(--cv-border); border-radius: 0.5rem; background: transparent; color: var(--cv-text-faint); cursor: pointer; font-size: 0.8125rem; font-family: var(--cv-font-sans); }
-.cv-roster__x:hover { color: var(--cv-danger); border-color: color-mix(in srgb, var(--cv-danger) 40%, transparent); background: color-mix(in srgb, var(--cv-danger) 8%, transparent); }
-/* The owner has no remove control, but still holds the column so rows align. */
-.cv-roster__x--none { visibility: hidden; }
-
-/* "Your agent can do this too" line under the roster. */
-.cv-agenthint { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.9375rem; font-size: 0.8125rem; color: var(--cv-text-muted); }
-.cv-agenthint__mark { color: var(--cv-expert); }
-
-/* Danger line: one sentence, two links, no card. */
-.cv-dangerbar { display: flex; align-items: center; gap: 1rem; margin-top: 2rem; padding-top: 1.0625rem; border-top: 1px solid var(--cv-border); font-size: 0.8125rem; color: var(--cv-text-muted); }
-.cv-dangerbar__act { flex: none; padding: 0; border: 0; background: transparent; font-family: var(--cv-font-sans); font-size: 0.8125rem; color: var(--cv-text-secondary); cursor: pointer; }
-.cv-dangerbar__act:hover { color: var(--cv-text); }
-.cv-dangerbar__act--danger { color: var(--cv-danger); }
-.cv-dangerbar__act--danger:hover { color: var(--cv-danger); text-decoration: underline; }
-
-/* Transient one-liner for actions that only pretend to do something. */
+/* One-liner for actions that are drawn but not wired. */
 .cv-flash { margin-top: 0.875rem; font-size: 0.8125rem; color: var(--cv-text-faint); }

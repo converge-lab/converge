@@ -1,4 +1,5 @@
 use crate::atoms::Glyph;
+use crate::domain::Tone;
 use leptos::ev::KeyboardEvent;
 use leptos::prelude::*;
 
@@ -15,8 +16,16 @@ pub fn OverflowMenu(children: Children) -> impl IntoView {
 pub fn MenuItem(
     icon: Glyph,
     #[prop(into)] label: String,
+    /// `Danger` colours the whole row — for the destructive item that sits
+    /// below the separator.
+    #[prop(optional)]
+    tone: Tone,
     #[prop(optional, into)] on_click: Option<Callback<()>>,
 ) -> impl IntoView {
+    let class = match tone {
+        Tone::Danger => "cv-menu__item cv-menu__item--danger",
+        _ => "cv-menu__item",
+    };
     let click = move |_| {
         if let Some(cb) = on_click {
             cb.run(());
@@ -31,7 +40,7 @@ pub fn MenuItem(
         }
     };
     view! {
-        <div class="cv-menu__item" role="button" tabindex="0" on:click=click on:keydown=keydown>
+        <div class=class role="button" tabindex="0" on:click=click on:keydown=keydown>
             <span class="cv-menu__icon">{icon.glyph()}</span>
             {label}
         </div>

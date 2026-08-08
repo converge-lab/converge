@@ -454,12 +454,21 @@
   border: 0;
   background: transparent;
   padding: 0;
+  /* Buttons don't inherit the page font — without this the glyph renders in
+     the UA's Arial. */
+  font-family: var(--cv-font-sans);
   /* The header's uppercase tracking would push the glyph off its own centre. */
   letter-spacing: 0;
   font-size: 0.875rem;
   line-height: 1;
   color: var(--cv-text-faint);
   cursor: pointer;
+  /* "＋" is fullwidth: every font that serves it draws the stroke centred in an
+     em square, so its ink stops ~0.2em short of the box. Boxes aligned means
+     ink misaligned — the plus would read a few pixels left of the counts in the
+     rows below. Pull it back out by its own bearing; in em so it holds at any
+     --cv-scale. */
+  margin-right: -0.21em;
 }
 .cv-sidebar__add:hover { color: var(--cv-text-secondary); }
 .cv-sidebar__groups { display: flex; flex-direction: column; gap: 1px; }

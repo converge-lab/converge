@@ -2,7 +2,7 @@
 //! cross-project signals panel. Composed entirely from converge-ui, driven by
 //! the shared dataset.
 
-use crate::command_snippet::{CommandSnippet, mcp_command};
+use crate::command_snippet::{CommandSnippet, install_command};
 use crate::data;
 use crate::route::Route;
 use converge_ui::atoms::{Glyph, SectionLabel};
@@ -116,7 +116,7 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                                         <div class="cv-fs-md cv-fg-muted">
                                             "No decisions yet. Connect your agent and record the first one — it lands here, anchored to its source."
                                         </div>
-                                        <CommandSnippet command=mcp_command() />
+                                        <CommandSnippet command=install_command() />
                                     </div>
                                 }
                                     .into_any()

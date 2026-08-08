@@ -190,7 +190,39 @@ pub fn GroupSettings() -> impl IntoView {
 
             <div class="cv-setsep"></div>
 
-            <div class="cv-col cv-gap-8 cv-mb-32">
+            {if personal {
+                // A personal space has no membership to manage. Inviting
+                // someone is precisely what would turn it into a shared group,
+                // and that conversion doesn't exist yet — so this says what
+                // would happen rather than offering a list of one.
+                view! {
+                    <div class="cv-col cv-gap-8 cv-mb-32">
+                        <div class="cv-fs-lg cv-fw-medium">"Members"</div>
+                        <p class="cv-fg-muted cv-fs-md cv-lh-normal cv-measure">
+                            "This is your personal workspace — the decisions here are yours alone. Inviting someone turns it into a shared group, and every project in it becomes visible to them."
+                        </p>
+                        <div>
+                            <Button
+                                label="Make it a shared group…"
+                                variant=ButtonVariant::Outline
+                                tone=Tone::Primary
+                                on_click=Callback::new(move |()| {
+                                    set_flash
+                                        .set(
+                                            Some(
+                                                "Turning a personal space into a shared group isn't wired up yet."
+                                                    .into(),
+                                            ),
+                                        )
+                                })
+                            />
+                        </div>
+                    </div>
+                }
+                    .into_any()
+            } else {
+                view! {
+                    <div class="cv-col cv-gap-8 cv-mb-32">
                 <div class="cv-row" style="align-items:flex-start">
                     <div class="cv-grow">
                         <div class="cv-fs-lg cv-fw-medium">"Members"</div>
@@ -275,7 +307,10 @@ pub fn GroupSettings() -> impl IntoView {
                         }
                     }}
                 </span>
-            </div>
+                    </div>
+                }
+                    .into_any()
+            }}
 
             <div class="cv-danger">
                 <div class="cv-danger__title">"Danger zone"</div>

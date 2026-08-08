@@ -20,7 +20,18 @@ use crate::store::{AppStateStoreFields, use_store};
 #[cfg(feature = "api")]
 fn fail(store: crate::store::AppStore, message: String) {
     leptos::logging::error!("{message}");
-    store.notice().set(Some(message));
+    store
+        .notice()
+        .set(Some(crate::store::Notice::Failed(message)));
+}
+
+/// Confirm a write that changed nothing visible on screen — an edited
+/// description, say. The toast lives above the router, so unlike anything the
+/// screen itself could set, it survives the screen being re-created.
+fn done(store: crate::store::AppStore, message: &str) {
+    store
+        .notice()
+        .set(Some(crate::store::Notice::Ok(message.to_string())));
 }
 
 /// Create a group, switch to it, and land on its (empty) dashboard.
@@ -112,7 +123,10 @@ pub fn edit_group(id: String, name: String, desc: String) {
         ];
         leptos::task::spawn_local(async move {
             match crate::store::client().group_edit(gid, &edits).await {
-                Ok(()) => data::edit_group_local(store, &id, name, description),
+                Ok(()) => {
+                    data::edit_group_local(store, &id, name, description);
+                    done(store, "Group saved.");
+                }
                 // Editing is owner-only server-side; a member's attempt comes
                 // back as a refusal, which the toast reports verbatim.
                 Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
@@ -122,6 +136,7 @@ pub fn edit_group(id: String, name: String, desc: String) {
     #[cfg(not(feature = "api"))]
     {
         data::edit_group_local(store, &id, name, description);
+        done(store, "Group saved.");
     }
 }
 
@@ -144,7 +159,10 @@ pub fn edit_project(id: String, name: String, desc: String) {
         ];
         leptos::task::spawn_local(async move {
             match crate::store::client().project_edit(pid, &edits).await {
-                Ok(()) => data::edit_project_local(store, &id, name, description),
+                Ok(()) => {
+                    data::edit_project_local(store, &id, name, description);
+                    done(store, "Project saved.");
+                }
                 Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
             }
         });
@@ -152,6 +170,7 @@ pub fn edit_project(id: String, name: String, desc: String) {
     #[cfg(not(feature = "api"))]
     {
         data::edit_project_local(store, &id, name, description);
+        done(store, "Project saved.");
     }
 }
 

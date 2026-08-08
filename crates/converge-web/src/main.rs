@@ -345,13 +345,22 @@ fn App() -> impl IntoView {
                 }}
             </AppShell>
             <ModalHost />
-            // Mutation-failure toast: creates/edits close their modal before
-            // the request resolves, so a rejected write reports back here.
+            // Write outcomes. It sits outside the router on purpose: a write
+            // re-creates the active screen, so a message the screen owned would
+            // be destroyed before anyone read it. Failures wait to be
+            // dismissed; a success is a receipt and clears itself.
             {move || {
-                store.notice().get().map(|msg| {
+                store.notice().get().map(|notice| {
+                    let ok = notice.is_ok();
+                    if ok {
+                        clear_notice_later(store);
+                    }
                     view! {
-                        <div class="cv-toast" role="alert">
-                            <span>{msg}</span>
+                        <div
+                            class=if ok { "cv-toast cv-toast--ok" } else { "cv-toast" }
+                            role=if ok { "status" } else { "alert" }
+                        >
+                            <span>{notice.text().to_string()}</span>
                             <button
                                 type="button"
                                 class="cv-toast__close"
@@ -368,6 +377,23 @@ fn App() -> impl IntoView {
         .into_any()
     }
 }
+
+/// Retire a success toast on its own after a beat. Only clears if the notice
+/// is still the success one — a failure raised in the meantime stays put.
+#[cfg(target_arch = "wasm32")]
+fn clear_notice_later(store: AppStore) {
+    set_timeout(
+        move || {
+            if store.notice().get_untracked().is_some_and(|n| n.is_ok()) {
+                store.notice().set(None);
+            }
+        },
+        std::time::Duration::from_millis(2500),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_notice_later(_store: AppStore) {}
 
 /// The app's boot phase, derived from the store by `App`'s gate memo.
 /// `PartialEq` is what lets the memo swallow same-phase writes.

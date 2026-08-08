@@ -32,11 +32,32 @@ pub struct AppState {
     pub error: Option<LoadError>,
     /// Index of the active group within `dataset.groups`.
     pub group: usize,
-    /// A dismissible failure notice from a write. Mutations close their modal
-    /// optimistically, so a rejected create/edit reports back through this —
-    /// the shell renders it as a toast (`main.rs`); cleared on dismiss or on
-    /// the next mutation attempt.
-    pub notice: Option<String>,
+    /// The outcome of the last write, shown as a toast by the shell
+    /// (`main.rs`). It lives here rather than in the screen that triggered it
+    /// because a dataset write re-creates the active screen — any state the
+    /// screen set would die on the same tick. Cleared on dismiss, on the next
+    /// attempt, and (for successes) by a timer.
+    pub notice: Option<Notice>,
+}
+
+/// What a finished write has to say. Failures wait to be dismissed; successes
+/// are a receipt and time out on their own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Notice {
+    Ok(String),
+    Failed(String),
+}
+
+impl Notice {
+    pub fn text(&self) -> &str {
+        match self {
+            Notice::Ok(m) | Notice::Failed(m) => m,
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Notice::Ok(_))
+    }
 }
 
 /// `Rc` inside the state makes it `!Send`, so the store is pinned to the single

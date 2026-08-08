@@ -475,19 +475,6 @@ pub fn group_name_of(gid: &str) -> String {
         .unwrap_or_else(|| gid.to_string())
 }
 
-pub fn group_meta() -> String {
-    let g = cur_group();
-    let n = g.project_ids.len();
-    let kind = match g.kind {
-        GroupKind::Shared => "Shared",
-        GroupKind::Personal => "Personal",
-    };
-    format!(
-        "{kind} · {n} {}",
-        if n == 1 { "project" } else { "projects" }
-    )
-}
-
 pub fn group_tagline() -> String {
     let g = cur_group();
     let n = g.project_ids.len();

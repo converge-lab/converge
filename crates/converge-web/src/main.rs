@@ -23,9 +23,9 @@ mod store;
 mod when;
 
 use converge_ui::atoms::{Avatar, Button, Glyph, Input, Logo};
-use converge_ui::domain::{GroupKind, Tone};
+use converge_ui::domain::Tone;
 use converge_ui::layout::AppShell;
-use converge_ui::molecules::{AddRow, NavItem, ProjectNavItem};
+use converge_ui::molecules::{GroupNavItem, NavItem, ProjectNavItem};
 use dashboard::Dashboard;
 use decision_detail::DecisionDetail;
 use expert::Expert;
@@ -530,7 +530,6 @@ fn Sidebar(
     sidebar_ref: NodeRef<html::Aside>,
 ) -> impl IntoView {
     let acct = data::account();
-    let (group_open, set_group_open) = signal(false);
     let (acct_open, set_acct_open) = signal(false);
     let (theme, set_theme) = signal(read_theme());
 
@@ -576,68 +575,42 @@ fn Sidebar(
                 <Logo />
             </div>
 
-            // group selector + switcher dropdown
-            <div class="cv-relative">
-                <div
-                    class="cv-sidebar__group"
-                    role="button"
-                    tabindex="0"
-                    on:click=move |_| set_group_open.update(|o| *o = !*o)
-                    on:keydown=move |ev| {
-                        if ev.key() == "Enter" || ev.key() == " " {
-                            ev.prevent_default();
-                            set_group_open.update(|o| *o = !*o);
-                        }
-                    }
-                >
-                    <div class="cv-groupicon">
-                        {move || {
-                            track_data(store);
-                            match data::cur_group().kind {
-                                GroupKind::Personal => Glyph::Personal.glyph(),
-                                GroupKind::Shared => Glyph::Shared.glyph(),
-                            }
-                        }}
-                    </div>
-                    <div class="cv-grow">
-                        <div class="cv-fw-medium cv-fs-md">
-                            {move || { track_data(store); data::group_name() }}
-                        </div>
-                        <div class="cv-fs-2xs cv-fg-faint">
-                            {move || { track_data(store); data::group_meta() }}
-                        </div>
-                    </div>
-                    <span class="cv-fg-muted">{Glyph::CaretDown.glyph()}</span>
+            // Groups — a list, not a dropdown: where you are and what else
+            // exists are both visible without a click. The header's "＋" adds
+            // to this list, the same rule the Projects header follows.
+            <div>
+                <div class="cv-sidebar__section cv-sidebar__section--act">
+                    "Groups"
+                    <button
+                        type="button"
+                        class="cv-sidebar__add"
+                        aria-label="New group"
+                        on:click=move |_| modals::open(ModalKind::NewGroup)
+                    >
+                        {Glyph::Plus.glyph()}
+                    </button>
                 </div>
-                {move || {
-                    track_data(store);
-                    group_open.get().then(|| {
-                        let (shared, personal): (Vec<_>, Vec<_>) = data::groups()
+                <nav class="cv-sidebar__groups">
+                    {move || {
+                        track_data(store);
+                        let cur = store.group().get();
+                        data::groups()
                             .into_iter()
                             .enumerate()
-                            .partition(|(_, g)| g.kind == GroupKind::Shared);
-                        view! {
-                            <div class="cv-groupmenu">
-                                <div class="cv-groupmenu__label">"Shared groups"</div>
-                                {shared.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
-                                <div class="cv-groupmenu__label cv-groupmenu__label--div">"Personal"</div>
-                                {personal.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
-                                <div class="cv-groupmenu__foot">
-                                    <div
-                                        class="cv-groupmenu__row"
-                                        on:click=move |_| {
-                                            set_group_open.set(false);
-                                            modals::open(ModalKind::NewGroup);
-                                        }
-                                    >
-                                        <span class="cv-groupmenu__icon">{Glyph::Plus.glyph()}</span>
-                                        <span class="cv-grow">"New group…"</span>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                    })
-                }}
+                            .map(|(i, g)| {
+                                view! {
+                                    <GroupNavItem
+                                        name=g.name
+                                        kind=g.kind
+                                        projects=g.project_ids.len()
+                                        active=i == cur
+                                        on_click=Callback::new(move |_| switch_group.run(i))
+                                    />
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </nav>
             </div>
 
             // Views + Projects are hidden until the group has a project — the
@@ -699,7 +672,17 @@ fn Sidebar(
                 } else {
                     view! {
                         <div class="cv-col cv-fill">
-                            <div class="cv-sidebar__section">"Projects"</div>
+                            <div class="cv-sidebar__section cv-sidebar__section--act">
+                                "Projects"
+                                <button
+                                    type="button"
+                                    class="cv-sidebar__add"
+                                    aria-label="New project"
+                                    on:click=move |_| modals::open(ModalKind::NewProject)
+                                >
+                                    {Glyph::Plus.glyph()}
+                                </button>
+                            </div>
                             <div class="cv-sidebar__projects">
                                 {projects
                                     .iter()
@@ -716,10 +699,6 @@ fn Sidebar(
                                         }
                                     })
                                     .collect_view()}
-                                <AddRow
-                                    label="New project"
-                                    on_click=Callback::new(|_| modals::open(ModalKind::NewProject))
-                                />
                             </div>
                         </div>
                     }
@@ -795,48 +774,6 @@ fn Sidebar(
                 </div>
             </div>
         </aside>
-    }
-}
-
-/// One row in the group-switcher dropdown.
-fn group_row(
-    i: usize,
-    g: &data::GroupDef,
-    store: AppStore,
-    switch_group: Callback<usize>,
-    set_group_open: WriteSignal<bool>,
-    // Everything the view holds is owned; opt out of edition 2024's
-    // capture-all-lifetimes default so `g`'s borrow ends at the call.
-) -> impl IntoView + use<> {
-    let icon = match g.kind {
-        GroupKind::Personal => Glyph::Personal.glyph(),
-        GroupKind::Shared => Glyph::Shared.glyph(),
-    };
-    let count = format!(
-        "{} {}",
-        g.project_ids.len(),
-        if g.project_ids.len() == 1 {
-            "project"
-        } else {
-            "projects"
-        }
-    );
-    let name = g.name.clone();
-    view! {
-        <div
-            class="cv-groupmenu__row"
-            on:click=move |_| {
-                switch_group.run(i);
-                set_group_open.set(false);
-            }
-        >
-            <span class="cv-groupmenu__icon">{icon}</span>
-            <span class="cv-grow cv-truncate">
-                {name}
-            </span>
-            <span class="cv-fs-2xs cv-fg-faint">{count}</span>
-            {move || (store.group().get() == i).then(|| view! { <span class="cv-fg-primary cv-fs-xs">{Glyph::Verified.glyph()}</span> })}
-        </div>
     }
 }
 

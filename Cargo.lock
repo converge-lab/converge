@@ -691,7 +691,7 @@ checksum = "f67855af358fcb20fac58f9d714c94e2b228fe5694c1c9b4ead4a366343eda1b"
 
 [[package]]
 name = "converge-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "converge-client"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "converge-expert",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "converge-e2e"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "converge-expert"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "converge-storage",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "converge-server"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "converge-storage"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "converge-storage-postgres"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "converge-storage",
  "serde_json",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "converge-ui"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "leptos",
  "markdown",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "converge-web"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "converge-client",
  "converge-ui",
@@ -5471,7 +5471,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "clap",

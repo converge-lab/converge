@@ -19,7 +19,9 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
     let (flash, set_flash) = signal(None::<String>);
 
     let decisions = data::project_decisions(&pid).len();
-    let group = data::group_name();
+    // The project's owning group — not the active one; a deep link can open
+    // a project from a group that isn't currently selected.
+    let group = data::proj_group_name(&pid);
     let title = data::proj_name(&pid);
 
     let save = {

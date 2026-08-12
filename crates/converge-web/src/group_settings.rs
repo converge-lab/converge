@@ -274,13 +274,16 @@ pub fn GroupSettings() -> impl IntoView {
                                                     class="cv-memberrow__x"
                                                     aria-label=format!("Remove {name}")
                                                     on:click=move |_| {
+                                                        // Keyed by name, not handle: handles are
+                                                        // derived (first word) and collide across
+                                                        // homonyms; names are unique in the fixture.
                                                         members
-                                                            .update(|ms| { ms.retain(|x| x.handle != handle) });
+                                                            .update(|ms| { ms.retain(|x| x.name != name) });
                                                         set_flash
                                                             .set(
                                                                 Some(
                                                                     format!(
-                                                                        "{name} removed — their decisions stay, authored and searchable.",
+                                                                        "@{handle} removed — their decisions stay, authored and searchable.",
                                                                     ),
                                                                 ),
                                                             );
@@ -367,8 +370,14 @@ pub fn GroupSettings() -> impl IntoView {
                             on_close=Callback::new(move |()| set_inviting.set(false))
                             on_invite=Callback::new(move |m: Member| {
                                 let handle = m.handle.clone();
-                                members.update(|ms| ms.push(m));
+                                let known = members
+                                    .with_untracked(|ms| ms.iter().any(|x| x.handle == m.handle));
                                 set_inviting.set(false);
+                                if known {
+                                    set_flash.set(Some(format!("@{handle} is already a member.")));
+                                    return;
+                                }
+                                members.update(|ms| ms.push(m));
                                 set_flash.set(Some(format!("@{handle} added.")));
                             })
                         />

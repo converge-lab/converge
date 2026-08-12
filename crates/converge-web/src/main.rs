@@ -378,18 +378,28 @@ fn App() -> impl IntoView {
     }
 }
 
-/// Retire a success toast on its own after a beat. Only clears if the notice
-/// is still the success one — a failure raised in the meantime stays put.
+/// Retire a success toast on its own after a beat. One timer lives at a
+/// time — scheduling cancels the previous one, so an older success's timer
+/// can't cut a newer toast short — and it only clears a success (a failure
+/// raised in the meantime stays put).
 #[cfg(target_arch = "wasm32")]
 fn clear_notice_later(store: AppStore) {
-    set_timeout(
+    use std::cell::Cell;
+    thread_local! {
+        static TIMER: Cell<Option<TimeoutHandle>> = const { Cell::new(None) };
+    }
+    let handle = set_timeout_with_handle(
         move || {
             if store.notice().get_untracked().is_some_and(|n| n.is_ok()) {
                 store.notice().set(None);
             }
         },
         std::time::Duration::from_millis(2500),
-    );
+    )
+    .ok();
+    if let Some(old) = TIMER.with(|t| t.replace(handle)) {
+        old.clear();
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

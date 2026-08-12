@@ -582,6 +582,18 @@ pub fn proj_desc(pid: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The owning group's name for a project id — the project's own group, not
+/// the active one (a deep link can cross groups).
+pub fn proj_group_name(pid: &str) -> String {
+    let d = ds();
+    d.projects
+        .iter()
+        .find(|p| p.id == pid)
+        .and_then(|p| d.groups.iter().find(|g| g.id == p.group_id))
+        .map(|g| g.name.clone())
+        .unwrap_or_default()
+}
+
 // ---- decision / signal queries ------------------------------------------------
 
 pub fn by_id(id: &str) -> Option<Rc<Dec>> {

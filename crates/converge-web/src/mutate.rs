@@ -80,7 +80,10 @@ pub fn create_project(name: String) {
     {
         use converge_client::{GroupId, NewProject};
         let Ok(gid) = group_id.parse::<GroupId>() else {
-            leptos::logging::error!("current group id is not a ULID: {group_id}");
+            fail(
+                store,
+                format!("Couldn't create “{name}” — bad group id {group_id}"),
+            );
             return;
         };
         leptos::task::spawn_local(async move {
@@ -114,7 +117,9 @@ pub fn edit_group(id: String, name: String, desc: String) {
     {
         use converge_client::{GroupEdit, GroupId};
         let Ok(gid) = id.parse::<GroupId>() else {
-            leptos::logging::error!("group id is not a ULID: {id}");
+            // "Impossible" (ids come from the dataset), but a silent Save is
+            // worse than a strange toast if it ever happens.
+            fail(store, format!("Couldn't save “{name}” — bad group id {id}"));
             return;
         };
         let edits = vec![
@@ -150,7 +155,10 @@ pub fn edit_project(id: String, name: String, desc: String) {
     {
         use converge_client::{ProjectEdit, ProjectId};
         let Ok(pid) = id.parse::<ProjectId>() else {
-            leptos::logging::error!("project id is not a ULID: {id}");
+            fail(
+                store,
+                format!("Couldn't save “{name}” — bad project id {id}"),
+            );
             return;
         };
         let edits = vec![
@@ -190,12 +198,15 @@ pub fn resolve_signal(id: String, confirm: bool) {
     {
         use converge_client::{Author, SignalId, SignalStatus as Ws, UserId};
         let Ok(sid) = id.parse::<SignalId>() else {
-            leptos::logging::error!("signal id is not a ULID: {id}");
+            fail(store, format!("Couldn't resolve the signal — bad id {id}"));
             return;
         };
         let me = data::account().user_id;
         let Ok(uid) = me.parse::<UserId>() else {
-            leptos::logging::error!("account user id is not a ULID: {me}");
+            fail(
+                store,
+                format!("Couldn't resolve the signal — bad user id {me}"),
+            );
             return;
         };
         let ws = if confirm {

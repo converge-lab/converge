@@ -2,10 +2,9 @@
 //! reactive status / author / tag filters above it.
 
 use crate::data;
-use crate::modals::{ModalKind, open};
 use crate::route::Route;
 use converge_ui::atoms::{Glyph, Select};
-use converge_ui::domain::{DecisionRef, Status};
+use converge_ui::domain::{DecisionRef, Status, Tone};
 use converge_ui::molecules::{DecisionLogRow, MenuItem, OverflowMenu, TagFilterMenu};
 use leptos::ev;
 use leptos::prelude::*;
@@ -50,7 +49,8 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
     let (fauthor, set_fauthor) = signal(String::from("all"));
     let (ftags, set_ftags) = signal::<Vec<String>>(Vec::new());
 
-    // The header "⋯" overflow menu (Edit only this iteration). Escape closes it;
+    // The header "⋯" overflow menu — the way into this project's settings.
+    // Escape closes it;
     // outside clicks are caught by a transparent scrim below. The listener
     // handle must be removed by hand — leptos never detaches window listeners
     // on owner disposal, and ProjectLog is rebuilt on every navigation, so a
@@ -159,7 +159,12 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
                         menu_open
                             .get()
                             .then(|| {
-                                let pid = menu_pid.clone();
+                                let (pid, pid2, pid3, pid4) = (
+                                    menu_pid.clone(),
+                                    menu_pid.clone(),
+                                    menu_pid.clone(),
+                                    menu_pid.clone(),
+                                );
                                 view! {
                                     // Transparent full-screen catcher: an outside click closes the menu.
                                     <div
@@ -171,12 +176,41 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
                                     // prototype).
                                     <div style="position:absolute;right:0;top:2.25rem;z-index:61">
                                         <OverflowMenu>
+                                            // Settings first — the common way
+                                            // in. Rarer below it, destructive
+                                            // behind the separator.
                                             <MenuItem
-                                                icon=Glyph::Edit
-                                                label="Edit project…"
+                                                icon=Glyph::Settings
+                                                label="Settings"
                                                 on_click=Callback::new(move |_| {
                                                     set_menu_open.set(false);
-                                                    open(ModalKind::EditProject(pid.clone()));
+                                                    go.run(Route::ProjectSettings(pid.clone()));
+                                                })
+                                            />
+                                            <MenuItem
+                                                icon=Glyph::Shared
+                                                label="Move to group…"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    go.run(Route::ProjectSettings(pid2.clone()));
+                                                })
+                                            />
+                                            <div class="cv-menu__sep"></div>
+                                            <MenuItem
+                                                icon=Glyph::Archive
+                                                label="Archive project"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    go.run(Route::ProjectSettings(pid3.clone()));
+                                                })
+                                            />
+                                            <MenuItem
+                                                icon=Glyph::Close
+                                                label="Delete project"
+                                                tone=Tone::Danger
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    go.run(Route::ProjectSettings(pid4.clone()));
                                                 })
                                             />
                                         </OverflowMenu>

@@ -20,7 +20,18 @@ use crate::store::{AppStateStoreFields, use_store};
 #[cfg(feature = "api")]
 fn fail(store: crate::store::AppStore, message: String) {
     leptos::logging::error!("{message}");
-    store.notice().set(Some(message));
+    store
+        .notice()
+        .set(Some(crate::store::Notice::Failed(message)));
+}
+
+/// Confirm a write that changed nothing visible on screen — an edited
+/// description, say. The toast lives above the router, so unlike anything the
+/// screen itself could set, it survives the screen being re-created.
+fn done(store: crate::store::AppStore, message: &str) {
+    store
+        .notice()
+        .set(Some(crate::store::Notice::Ok(message.to_string())));
 }
 
 /// Create a group, switch to it, and land on its (empty) dashboard.
@@ -91,6 +102,44 @@ pub fn create_project(name: String) {
     }
 }
 
+/// Edit a group's name and description. The id stays fixed, so membership, its
+/// projects and every decision recorded under it are untouched. `kind` is not
+/// here on purpose: it is fixed at creation, and turning a personal space into
+/// a shared one is a separate operation the server doesn't offer yet.
+pub fn edit_group(id: String, name: String, desc: String) {
+    let store = use_store();
+    store.notice().set(None);
+    let description = (!desc.trim().is_empty()).then(|| desc.clone());
+    #[cfg(feature = "api")]
+    {
+        use converge_client::{GroupEdit, GroupId};
+        let Ok(gid) = id.parse::<GroupId>() else {
+            leptos::logging::error!("group id is not a ULID: {id}");
+            return;
+        };
+        let edits = vec![
+            GroupEdit::SetName(name.clone()),
+            GroupEdit::SetDescription(description.clone()),
+        ];
+        leptos::task::spawn_local(async move {
+            match crate::store::client().group_edit(gid, &edits).await {
+                Ok(()) => {
+                    data::edit_group_local(store, &id, name, description);
+                    done(store, "Group saved.");
+                }
+                // Editing is owner-only server-side; a member's attempt comes
+                // back as a refusal, which the toast reports verbatim.
+                Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        data::edit_group_local(store, &id, name, description);
+        done(store, "Group saved.");
+    }
+}
+
 /// Edit a project's display name and description; the id stays fixed, so every
 /// reference and decision link is untouched.
 pub fn edit_project(id: String, name: String, desc: String) {
@@ -110,7 +159,10 @@ pub fn edit_project(id: String, name: String, desc: String) {
         ];
         leptos::task::spawn_local(async move {
             match crate::store::client().project_edit(pid, &edits).await {
-                Ok(()) => data::edit_project_local(store, &id, name, description),
+                Ok(()) => {
+                    data::edit_project_local(store, &id, name, description);
+                    done(store, "Project saved.");
+                }
                 Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
             }
         });
@@ -118,6 +170,7 @@ pub fn edit_project(id: String, name: String, desc: String) {
     #[cfg(not(feature = "api"))]
     {
         data::edit_project_local(store, &id, name, description);
+        done(store, "Project saved.");
     }
 }
 

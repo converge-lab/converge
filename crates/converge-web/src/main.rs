@@ -7,11 +7,13 @@ mod dashboard;
 mod data;
 mod decision_detail;
 mod expert;
+mod group_settings;
 mod modals;
 mod mutate;
 mod onboard;
 mod pair;
 mod project_log;
+mod project_settings;
 mod route;
 mod search;
 mod seed;
@@ -22,12 +24,13 @@ mod store;
 mod when;
 
 use converge_ui::atoms::{Avatar, Button, Glyph, Input, Logo};
-use converge_ui::domain::{GroupKind, Tone};
+use converge_ui::domain::Tone;
 use converge_ui::layout::AppShell;
-use converge_ui::molecules::{AddRow, NavItem, ProjectNavItem};
+use converge_ui::molecules::{GroupNavItem, NavItem, ProjectNavItem};
 use dashboard::Dashboard;
 use decision_detail::DecisionDetail;
 use expert::Expert;
+use group_settings::GroupSettings;
 use leptos::ev;
 use leptos::html;
 use leptos::mount::mount_to_body;
@@ -36,6 +39,7 @@ use modals::{ModalHost, ModalKind};
 use onboard::Onboarding;
 use pair::Pair;
 use project_log::ProjectLog;
+use project_settings::ProjectSettings;
 use route::{Route, current_route, navigate};
 use search::Search;
 use settings::Settings;
@@ -329,6 +333,10 @@ fn App() -> impl IntoView {
                         Route::SignalDetail(id) => view! { <SignalDetail go=go id=id /> }.into_any(),
                         Route::Source(id, idx) => view! { <SourceViewer go=go id=id idx=idx /> }.into_any(),
                         Route::Project(id) => view! { <ProjectLog go=go pid=id /> }.into_any(),
+                        Route::GroupSettings => view! { <GroupSettings /> }.into_any(),
+                        Route::ProjectSettings(id) => {
+                            view! { <ProjectSettings pid=id /> }.into_any()
+                        }
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
                         Route::Settings => view! { <Settings /> }.into_any(),
@@ -337,13 +345,22 @@ fn App() -> impl IntoView {
                 }}
             </AppShell>
             <ModalHost />
-            // Mutation-failure toast: creates/edits close their modal before
-            // the request resolves, so a rejected write reports back here.
+            // Write outcomes. It sits outside the router on purpose: a write
+            // re-creates the active screen, so a message the screen owned would
+            // be destroyed before anyone read it. Failures wait to be
+            // dismissed; a success is a receipt and clears itself.
             {move || {
-                store.notice().get().map(|msg| {
+                store.notice().get().map(|notice| {
+                    let ok = notice.is_ok();
+                    if ok {
+                        clear_notice_later(store);
+                    }
                     view! {
-                        <div class="cv-toast" role="alert">
-                            <span>{msg}</span>
+                        <div
+                            class=if ok { "cv-toast cv-toast--ok" } else { "cv-toast" }
+                            role=if ok { "status" } else { "alert" }
+                        >
+                            <span>{notice.text().to_string()}</span>
                             <button
                                 type="button"
                                 class="cv-toast__close"
@@ -360,6 +377,23 @@ fn App() -> impl IntoView {
         .into_any()
     }
 }
+
+/// Retire a success toast on its own after a beat. Only clears if the notice
+/// is still the success one — a failure raised in the meantime stays put.
+#[cfg(target_arch = "wasm32")]
+fn clear_notice_later(store: AppStore) {
+    set_timeout(
+        move || {
+            if store.notice().get_untracked().is_some_and(|n| n.is_ok()) {
+                store.notice().set(None);
+            }
+        },
+        std::time::Duration::from_millis(2500),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_notice_later(_store: AppStore) {}
 
 /// The app's boot phase, derived from the store by `App`'s gate memo.
 /// `PartialEq` is what lets the memo swallow same-phase writes.
@@ -527,7 +561,6 @@ fn Sidebar(
     sidebar_ref: NodeRef<html::Aside>,
 ) -> impl IntoView {
     let acct = data::account();
-    let (group_open, set_group_open) = signal(false);
     let (acct_open, set_acct_open) = signal(false);
     let (theme, set_theme) = signal(read_theme());
 
@@ -573,68 +606,42 @@ fn Sidebar(
                 <Logo />
             </div>
 
-            // group selector + switcher dropdown
-            <div class="cv-relative">
-                <div
-                    class="cv-sidebar__group"
-                    role="button"
-                    tabindex="0"
-                    on:click=move |_| set_group_open.update(|o| *o = !*o)
-                    on:keydown=move |ev| {
-                        if ev.key() == "Enter" || ev.key() == " " {
-                            ev.prevent_default();
-                            set_group_open.update(|o| *o = !*o);
-                        }
-                    }
-                >
-                    <div class="cv-groupicon">
-                        {move || {
-                            track_data(store);
-                            match data::cur_group().kind {
-                                GroupKind::Personal => Glyph::Personal.glyph(),
-                                GroupKind::Shared => Glyph::Shared.glyph(),
-                            }
-                        }}
-                    </div>
-                    <div class="cv-grow">
-                        <div class="cv-fw-medium cv-fs-md">
-                            {move || { track_data(store); data::group_name() }}
-                        </div>
-                        <div class="cv-fs-2xs cv-fg-faint">
-                            {move || { track_data(store); data::group_meta() }}
-                        </div>
-                    </div>
-                    <span class="cv-fg-muted">{Glyph::CaretDown.glyph()}</span>
+            // Groups — a list, not a dropdown: where you are and what else
+            // exists are both visible without a click. The header's "＋" adds
+            // to this list, the same rule the Projects header follows.
+            <div>
+                <div class="cv-sidebar__section cv-sidebar__section--act">
+                    "Groups"
+                    <button
+                        type="button"
+                        class="cv-sidebar__add"
+                        aria-label="New group"
+                        on:click=move |_| modals::open(ModalKind::NewGroup)
+                    >
+                        {Glyph::Plus.glyph()}
+                    </button>
                 </div>
-                {move || {
-                    track_data(store);
-                    group_open.get().then(|| {
-                        let (shared, personal): (Vec<_>, Vec<_>) = data::groups()
+                <nav class="cv-sidebar__groups">
+                    {move || {
+                        track_data(store);
+                        let cur = store.group().get();
+                        data::groups()
                             .into_iter()
                             .enumerate()
-                            .partition(|(_, g)| g.kind == GroupKind::Shared);
-                        view! {
-                            <div class="cv-groupmenu">
-                                <div class="cv-groupmenu__label">"Shared groups"</div>
-                                {shared.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
-                                <div class="cv-groupmenu__label cv-groupmenu__label--div">"Personal"</div>
-                                {personal.into_iter().map(|(i, g)| group_row(i, &g, store, switch_group, set_group_open)).collect_view()}
-                                <div class="cv-groupmenu__foot">
-                                    <div
-                                        class="cv-groupmenu__row"
-                                        on:click=move |_| {
-                                            set_group_open.set(false);
-                                            modals::open(ModalKind::NewGroup);
-                                        }
-                                    >
-                                        <span class="cv-groupmenu__icon">{Glyph::Plus.glyph()}</span>
-                                        <span class="cv-grow">"New group…"</span>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                    })
-                }}
+                            .map(|(i, g)| {
+                                view! {
+                                    <GroupNavItem
+                                        name=g.name
+                                        kind=g.kind
+                                        projects=g.project_ids.len()
+                                        active=i == cur
+                                        on_click=Callback::new(move |_| switch_group.run(i))
+                                    />
+                                }
+                            })
+                            .collect_view()
+                    }}
+                </nav>
             </div>
 
             // Views + Projects are hidden until the group has a project — the
@@ -696,7 +703,17 @@ fn Sidebar(
                 } else {
                     view! {
                         <div class="cv-col cv-fill">
-                            <div class="cv-sidebar__section">"Projects"</div>
+                            <div class="cv-sidebar__section cv-sidebar__section--act">
+                                "Projects"
+                                <button
+                                    type="button"
+                                    class="cv-sidebar__add"
+                                    aria-label="New project"
+                                    on:click=move |_| modals::open(ModalKind::NewProject)
+                                >
+                                    {Glyph::Plus.glyph()}
+                                </button>
+                            </div>
                             <div class="cv-sidebar__projects">
                                 {projects
                                     .iter()
@@ -713,10 +730,6 @@ fn Sidebar(
                                         }
                                     })
                                     .collect_view()}
-                                <AddRow
-                                    label="New project"
-                                    on_click=Callback::new(|_| modals::open(ModalKind::NewProject))
-                                />
                             </div>
                         </div>
                     }
@@ -795,48 +808,6 @@ fn Sidebar(
     }
 }
 
-/// One row in the group-switcher dropdown.
-fn group_row(
-    i: usize,
-    g: &data::GroupDef,
-    store: AppStore,
-    switch_group: Callback<usize>,
-    set_group_open: WriteSignal<bool>,
-    // Everything the view holds is owned; opt out of edition 2024's
-    // capture-all-lifetimes default so `g`'s borrow ends at the call.
-) -> impl IntoView + use<> {
-    let icon = match g.kind {
-        GroupKind::Personal => Glyph::Personal.glyph(),
-        GroupKind::Shared => Glyph::Shared.glyph(),
-    };
-    let count = format!(
-        "{} {}",
-        g.project_ids.len(),
-        if g.project_ids.len() == 1 {
-            "project"
-        } else {
-            "projects"
-        }
-    );
-    let name = g.name.clone();
-    view! {
-        <div
-            class="cv-groupmenu__row"
-            on:click=move |_| {
-                switch_group.run(i);
-                set_group_open.set(false);
-            }
-        >
-            <span class="cv-groupmenu__icon">{icon}</span>
-            <span class="cv-grow cv-truncate">
-                {name}
-            </span>
-            <span class="cv-fs-2xs cv-fg-faint">{count}</span>
-            {move || (store.group().get() == i).then(|| view! { <span class="cv-fg-primary cv-fs-xs">{Glyph::Verified.glyph()}</span> })}
-        </div>
-    }
-}
-
 #[component]
 fn TopBar(
     route: ReadSignal<Route>,
@@ -868,6 +839,29 @@ fn TopBar(
                 {move || { track_data(store); data::group_name() }}
             </span>
             <span class="cv-topbar__sep">"/"</span>
+            // A project's settings sit one level deeper, so the trail names the
+            // project before "Settings" — otherwise two different screens read
+            // as the same crumb.
+            {move || {
+                track_data(store);
+                match route.get() {
+                    Route::ProjectSettings(id) => {
+                        let name = data::proj_name(&id);
+                        Some(
+                            view! {
+                                <span
+                                    class="cv-mono cv-pointer"
+                                    on:click=move |_| go.run(Route::Project(id.clone()))
+                                >
+                                    {name}
+                                </span>
+                                <span class="cv-topbar__sep">"/"</span>
+                            },
+                        )
+                    }
+                    _ => None,
+                }
+            }}
             <span class="cv-topbar__cur">
             {move || {
                 track_data(store);

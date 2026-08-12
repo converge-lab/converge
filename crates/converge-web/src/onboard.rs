@@ -6,7 +6,7 @@ use converge_ui::atoms::{Glyph, Logo, LogoVariant};
 use converge_ui::molecules::OnboardCard;
 use leptos::prelude::*;
 
-use crate::command_snippet::{CommandSnippet, mcp_command};
+use crate::command_snippet::{CommandSnippet, install_command};
 use crate::data;
 use crate::modals::{ModalKind, open};
 
@@ -58,7 +58,7 @@ pub fn Onboarding() -> impl IntoView {
                 </div>
                 <div class="cv-onboard__or">"or connect your agent"</div>
                 <div class="cv-onboard__agent">
-                    <CommandSnippet command=mcp_command() />
+                    <CommandSnippet command=install_command() />
                     <div class="cv-onboard__ask">
                         "Then ask for what you need in plain words — "
                         <em>

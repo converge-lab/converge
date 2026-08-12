@@ -1,4 +1,4 @@
-//! Copy-to-clipboard pieces: the shared [`CopyButton`] and the MCP connect
+//! Copy-to-clipboard pieces: the shared [`CopyButton`] and the install
 //! [`CommandSnippet`] built on it (the onboarding screen, the dashboard's
 //! empty-feed hint, and the token reveal on Settings all copy something).
 
@@ -83,26 +83,10 @@ fn reset_copied(set_copied: WriteSignal<bool>) {
 #[cfg(not(target_arch = "wasm32"))]
 fn reset_copied(_set_copied: WriteSignal<bool>) {}
 
-/// The MCP connect command, pointed at this deployment's own origin — in
-/// production the server serves the app and `/mcp` same-origin, so the page's
-/// scheme *and* host are exactly the ones an agent must connect to (an http
-/// deployment must not be told to speak TLS).
-pub fn mcp_command() -> String {
-    format!(
-        "claude mcp add --transport http converge {}/mcp",
-        mcp_origin()
-    )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn mcp_origin() -> String {
-    window()
-        .location()
-        .origin()
-        .unwrap_or_else(|_| "https://converge.internal".into())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn mcp_origin() -> String {
-    "https://converge.internal".into()
+/// The command that gets an agent talking to Converge: install the CLI, which
+/// then pairs with this deployment and registers the MCP endpoint itself. It
+/// replaced a hand-written `claude mcp add …` line — that spelled out a single
+/// client's registration syntax and left the credential to the reader.
+pub fn install_command() -> &'static str {
+    "curl -fsSL https://converge.expert/install.sh | sh"
 }

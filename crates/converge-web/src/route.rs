@@ -22,6 +22,10 @@ pub enum Route {
     /// Device pairing (RFC 8628 approval): the code may ride the URL
     /// (`#/pair/XXXX-XXXX` from `verification_uri_complete`) or be typed.
     Pair(Option<String>),
+    /// A hash path no stock screen owns — offered to the composed
+    /// extensions (see `ext`); unresolved, it renders as the dashboard
+    /// (the old unknown-hash behavior).
+    Ext(String),
 }
 
 impl Route {
@@ -54,7 +58,8 @@ impl Route {
             "expert" => Route::Expert,
             "settings" => Route::Settings,
             "pair" => Route::Pair(parts.next().filter(|c| !c.is_empty()).map(str::to_string)),
-            _ => Route::Dashboard,
+            "" => Route::Dashboard,
+            _ => Route::Ext(h.to_string()),
         }
     }
 
@@ -73,6 +78,7 @@ impl Route {
             Route::Settings => "#/settings".into(),
             Route::Pair(None) => "#/pair".into(),
             Route::Pair(Some(code)) => format!("#/pair/{code}"),
+            Route::Ext(path) => format!("#/{path}"),
         }
     }
 
@@ -90,6 +96,9 @@ impl Route {
             Route::Expert => "Expert model".into(),
             Route::Settings => "Settings".into(),
             Route::Pair(_) => "Pair device".into(),
+            // The owning extension's crumb is looked up where the
+            // composed set is in scope (TopBar).
+            Route::Ext(_) => String::new(),
         }
     }
 }

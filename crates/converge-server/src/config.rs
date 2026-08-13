@@ -124,7 +124,7 @@ pub struct Auth {
     #[serde(default)]
     pub session_secret: Option<String>,
     /// Identity-provider sign-in (`[auth.oidc]`, see
-    /// [`converge_server::oidc::Settings`]). Absent → token-paste only;
+    /// [`crate::oidc::Settings`]). Absent → token-paste only;
     /// the auth core never needs egress.
     #[serde(default)]
     pub oidc: Option<crate::oidc::Settings>,

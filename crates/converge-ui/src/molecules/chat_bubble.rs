@@ -1,5 +1,6 @@
 use crate::atoms::Glyph;
 use crate::domain::ChatRole;
+use crate::md::Markdown;
 use leptos::prelude::*;
 
 /// An Expert-chat message. User messages sit right; expert messages sit left
@@ -25,7 +26,9 @@ pub fn ChatBubble(
                 <div class="cv-bubble--expert-row">
                     <div class="cv-bubble__avatar">{Glyph::Expert.glyph()}</div>
                     <div class="cv-grow">
-                        <div class="cv-bubble__expert">{text}</div>
+                        // Expert answers are markdown (the ask prompt says
+                        // so); user questions render verbatim.
+                        <div class="cv-bubble__expert"><Markdown source=text /></div>
                         {has_fwd
                             .then(move || {
                                 view! {

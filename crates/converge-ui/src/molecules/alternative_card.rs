@@ -1,4 +1,5 @@
 use crate::domain::Alternative;
+use crate::md::Markdown;
 use leptos::prelude::*;
 
 /// A rejected alternative: struck-through option + why it lost.
@@ -11,7 +12,7 @@ pub fn AlternativeCard(alternative: Alternative) -> impl IntoView {
     view! {
         <div class="cv-alt">
             <div class="cv-alt__opt">{option}</div>
-            <div class="cv-alt__why">{why_rejected}</div>
+            <div class="cv-alt__why"><Markdown source=why_rejected /></div>
         </div>
     }
 }

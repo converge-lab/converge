@@ -153,7 +153,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                         </div>
                         <div class="cv-detail__decision">
                             <div class="cv-fs-xl cv-fw-medium cv-lh-relaxed">
-                                {summary}
+                                <Markdown source=summary />
                             </div>
                             {has_desc
                                 .then(move || {

@@ -182,6 +182,68 @@ pub fn edit_project(id: String, name: String, desc: String) {
     }
 }
 
+/// Delete a project permanently — decisions, sessions, the lot. The
+/// dataset flips only on server success; the caller navigates first
+/// (the active screen may be the one being deleted).
+pub fn project_delete(id: String, name: String) {
+    let store = use_store();
+    store.notice().set(None);
+    #[cfg(feature = "api")]
+    {
+        use converge_client::ProjectId;
+        let Ok(pid) = id.parse::<ProjectId>() else {
+            fail(store, format!("Couldn't delete “{name}” — bad id {id}"));
+            return;
+        };
+        leptos::task::spawn_local(async move {
+            match crate::store::client().project_delete(pid).await {
+                Ok(()) => {
+                    data::drop_project_local(store, &id);
+                    done(store, &format!("Project “{name}” deleted."));
+                }
+                // The evidence-pinning refusal (409) lands here verbatim.
+                Err(e) => fail(store, format!("Couldn't delete “{name}” — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        data::drop_project_local(store, &id);
+        done(store, &format!("Project “{name}” deleted."));
+    }
+}
+
+/// Delete a group and everything under it. On success the active group
+/// resets to the first remaining one.
+pub fn group_delete(id: String, name: String) {
+    let store = use_store();
+    store.notice().set(None);
+    #[cfg(feature = "api")]
+    {
+        use converge_client::GroupId;
+        let Ok(gid) = id.parse::<GroupId>() else {
+            fail(store, format!("Couldn't delete “{name}” — bad id {id}"));
+            return;
+        };
+        leptos::task::spawn_local(async move {
+            match crate::store::client().group_delete(gid).await {
+                Ok(()) => {
+                    store.group().set(0);
+                    data::drop_group_local(store, &id);
+                    done(store, &format!("Group “{name}” deleted."));
+                }
+                Err(e) => fail(store, format!("Couldn't delete “{name}” — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        store.group().set(0);
+        data::drop_group_local(store, &id);
+        done(store, &format!("Group “{name}” deleted."));
+    }
+}
+
 /// Resolve a signal with the user's verdict: confirm (it holds) or
 /// dismiss (it will not be raised again). The dataset flips only on
 /// server success; dismissal drops the signal from every list.

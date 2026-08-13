@@ -18,6 +18,16 @@ use crate::{data, mutate};
 pub enum ModalKind {
     NewGroup,
     NewProject,
+    /// Permanent project deletion; the name is retyped to confirm.
+    DeleteProject {
+        id: String,
+        name: String,
+    },
+    /// Permanent group deletion — same ceremony, bigger blast radius.
+    DeleteGroup {
+        id: String,
+        name: String,
+    },
 }
 
 /// The context-shared open-modal signal.
@@ -59,7 +69,109 @@ pub fn ModalHost() -> impl IntoView {
         modal.get().map(|kind| match kind {
             ModalKind::NewGroup => view! { <NewGroupModal /> }.into_any(),
             ModalKind::NewProject => view! { <NewProjectModal /> }.into_any(),
+            ModalKind::DeleteProject { id, name } => {
+                let run = Callback::new(move |(id, name): (String, String)| {
+                    crate::route::navigate(&crate::route::Route::Dashboard);
+                    mutate::project_delete(id, name);
+                });
+                view! {
+                    <DeleteModal
+                        id=id
+                        name=name
+                        what="project"
+                        why="Its decisions and recorded sessions go with it. This cannot be undone."
+                        run=run
+                    />
+                }
+                    .into_any()
+            }
+            ModalKind::DeleteGroup { id, name } => {
+                let run = Callback::new(move |(id, name): (String, String)| {
+                    crate::route::navigate(&crate::route::Route::Dashboard);
+                    mutate::group_delete(id, name);
+                });
+                view! {
+                    <DeleteModal
+                        id=id
+                        name=name
+                        what="group"
+                        why="Every project in it — decisions, sessions, membership — goes with it. This cannot be undone."
+                        run=run
+                    />
+                }
+                    .into_any()
+            }
         })
+    }
+}
+
+/// The shared destruction ceremony: retype the name, then the danger
+/// button arms. Deletion itself goes through `mutate` (toast on either
+/// outcome); navigation happens before the request so the screen being
+/// deleted isn't the one left showing.
+#[component]
+fn DeleteModal(
+    id: String,
+    name: String,
+    what: &'static str,
+    why: &'static str,
+    run: Callback<(String, String)>,
+) -> impl IntoView {
+    let modal = use_modal();
+    let (typed, set_typed) = signal(String::new());
+    let input_ref = NodeRef::<html::Input>::new();
+    autofocus(input_ref);
+    let expected = name.clone();
+    let armed = Signal::derive(move || typed.get().trim() == expected);
+    let submit = {
+        let id = id.clone();
+        let name = name.clone();
+        Callback::new(move |()| {
+            if !armed.get_untracked() {
+                return;
+            }
+            modal.set(None);
+            run.run((id.clone(), name.clone()));
+        })
+    };
+    view! {
+        <Modal
+            title=format!("Delete {what} “{name}”?")
+            subtitle=why
+            on_close=Callback::new(move |()| modal.set(None))
+        >
+            <div class="cv-col cv-gap-6">
+                <span class="cv-modal__label">{format!("Type the {what}'s name to confirm")}</span>
+                <div class="cv-input">
+                    <input
+                        node_ref=input_ref
+                        class="cv-input__field cv-mono"
+                        placeholder=name.clone()
+                        prop:value=typed
+                        on:input=move |ev| set_typed.set(event_target_value(&ev))
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" {
+                                ev.prevent_default();
+                                submit.run(());
+                            }
+                        }
+                    />
+                </div>
+            </div>
+            <div class="cv-modal__foot">
+                <Button
+                    label="Cancel"
+                    variant=ButtonVariant::Ghost
+                    on_click=Callback::new(move |()| modal.set(None))
+                />
+                <Button
+                    label=format!("Delete {what}")
+                    tone=Tone::Danger
+                    disabled=Signal::derive(move || !armed.get())
+                    on_click=submit
+                />
+            </div>
+        </Modal>
     }
 }
 

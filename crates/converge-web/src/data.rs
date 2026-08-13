@@ -544,6 +544,52 @@ pub fn edit_group_local(store: AppStore, id: &str, name: String, description: Op
     store.dataset().set(Some(Rc::new(ds)));
 }
 
+/// Reflect a deleted project: the row, its listing under the group, and
+/// everything recorded in it (decisions, their signals, unread marks).
+pub fn drop_project_local(store: AppStore, id: &str) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    ds.projects.retain(|p| p.id != id);
+    for g in &mut ds.groups {
+        g.project_ids.retain(|p| p != id);
+    }
+    let doomed: Vec<String> = ds
+        .decisions
+        .iter()
+        .filter(|d| d.project_id == id)
+        .map(|d| d.id.clone())
+        .collect();
+    ds.decisions.retain(|d| d.project_id != id);
+    ds.signals
+        .retain(|s| s.from != id && !doomed.contains(&s.dec_id));
+    ds.unread.retain(|p| p != id);
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
+/// Reflect a deleted group: the group and, transitively, each of its
+/// projects. The caller re-points the active-group index first.
+pub fn drop_group_local(store: AppStore, id: &str) {
+    let projects: Vec<String> = ds()
+        .projects
+        .iter()
+        .filter(|p| p.group_id == id)
+        .map(|p| p.id.clone())
+        .collect();
+    for p in &projects {
+        drop_project_local(store, p);
+    }
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    ds.groups.retain(|g| g.id != id);
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
 /// Reflect an edited project's name/description in place (the id is immutable).
 pub fn edit_project_local(store: AppStore, id: &str, name: String, description: Option<String>) {
     let cur = store

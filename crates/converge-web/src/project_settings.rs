@@ -10,6 +10,7 @@ use converge_ui::atoms::{Button, ButtonVariant};
 use converge_ui::domain::Tone;
 use leptos::prelude::*;
 
+use crate::modals::{self, ModalKind};
 use crate::{data, mutate};
 
 #[component]
@@ -143,9 +144,16 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                         label="Delete"
                         variant=ButtonVariant::Outline
                         tone=Tone::Danger
-                        on_click=Callback::new(move |()| {
-                            set_flash.set(Some("Deleting a project isn't wired up yet.".into()))
-                        })
+                        on_click={
+                            let pid = pid.clone();
+                            let name = title.clone();
+                            Callback::new(move |()| {
+                                modals::open(ModalKind::DeleteProject {
+                                    id: pid.clone(),
+                                    name: name.clone(),
+                                })
+                            })
+                        }
                     />
                 </div>
             </div>

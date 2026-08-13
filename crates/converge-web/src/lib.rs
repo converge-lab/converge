@@ -338,9 +338,13 @@ fn App() -> impl IntoView {
                     // it outside the component (see `expert::ExpertState`).
                     track_data(store);
                     match route.get() {
-                        // Onboarding is a *state* of the dashboard: an empty
-                        // group shows it instead of the (empty) feed.
-                        Route::Dashboard if data::cur_group_projects().is_empty() => {
+                        // Full-screen onboarding only when there is no group
+                        // at all; an *empty group* renders the dashboard,
+                        // which shows the guide under its own header — the
+                        // header's "⋯" is the way into group settings, and
+                        // an empty group is exactly when settings (invite,
+                        // rename, delete) are needed.
+                        Route::Dashboard if data::groups().is_empty() => {
                             view! { <Onboarding /> }.into_any()
                         }
                         Route::Dashboard => view! { <Dashboard go=go /> }.into_any(),
@@ -361,7 +365,7 @@ fn App() -> impl IntoView {
                         // the old unknown-hash behavior (dashboard).
                         Route::Ext(path) => match extensions().find(&path) {
                             Some((e, rest)) => (e.screen)(rest),
-                            None if data::cur_group_projects().is_empty() => {
+                            None if data::groups().is_empty() => {
                                 view! { <Onboarding /> }.into_any()
                             }
                             None => view! { <Dashboard go=go /> }.into_any(),

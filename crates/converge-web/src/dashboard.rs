@@ -4,6 +4,7 @@
 
 use crate::command_snippet::{CommandSnippet, install_command};
 use crate::data;
+use crate::onboard::Onboarding;
 use crate::route::Route;
 use converge_ui::atoms::{Glyph, SectionLabel};
 use converge_ui::molecules::{DecisionCard, MenuItem, OverflowMenu, SignalCard, SignalView};
@@ -100,6 +101,13 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                 </div>
             </div>
 
+            // An empty group keeps the header above (its "⋯" is the way
+            // into settings — invite/rename/delete matter most before the
+            // first project); only the content below flips to the guide.
+            {if data::cur_group_projects().is_empty() {
+                view! { <Onboarding /> }.into_any()
+            } else {
+                view! {
             <div class=if solo { "cv-dash__grid cv-dash__grid--solo" } else { "cv-dash__grid" }>
                 <section>
                     <div class="cv-row cv-gap-8 cv-mb-14">
@@ -172,6 +180,9 @@ pub fn Dashboard(go: Callback<Route>) -> impl IntoView {
                         })
                 }
             </div>
+                }
+                    .into_any()
+            }}
         </div>
     }
 }

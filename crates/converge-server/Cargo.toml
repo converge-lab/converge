@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 converge-expert.workspace = true
+futures.workspace = true
 converge-storage.workspace = true
 converge-storage-postgres.workspace = true
 axum.workspace = true

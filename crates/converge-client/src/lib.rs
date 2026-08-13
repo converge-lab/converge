@@ -381,6 +381,77 @@ impl Client {
             .await
     }
 
+    // Expert
+
+    /// Grounded chat: stream the expert's answer over the group's
+    /// decision memory. `history` is the prior turns as `(user, text)`
+    /// pairs — the server holds no conversations. The first event is
+    /// always [`AskEvent::Context`]; the text arrives as ordered
+    /// [`AskEvent::Delta`]s; a clean end is [`AskEvent::Done`].
+    pub async fn expert_ask(
+        &self,
+        group: GroupId,
+        question: &str,
+        history: &[(bool, String)],
+    ) -> Result<impl futures::Stream<Item = Result<AskEvent, StoreError>> + use<>, StoreError> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            group_id: GroupId,
+            question: &'a str,
+            history: Vec<WireTurn<'a>>,
+        }
+        #[derive(Serialize)]
+        struct WireTurn<'a> {
+            user: bool,
+            text: &'a str,
+        }
+        let body = Wire {
+            group_id: group,
+            question,
+            history: history
+                .iter()
+                .map(|(user, text)| WireTurn { user: *user, text })
+                .collect(),
+        };
+        let response = self
+            .authed(self.http.post(self.url("expert/ask")))
+            .json(&body)
+            .send()
+            .await
+            .map_err(transport)?;
+        if response.status() != StatusCode::OK {
+            return Err(fail(response).await);
+        }
+        // A minimal SSE reader: blocks split on blank lines, `event:` +
+        // `data:` pairs kept, comments/keepalives skipped. Mid-stream
+        // server trouble arrives as an `error` event → an Err item.
+        let stream = futures::stream::unfold(
+            (response.bytes_stream(), String::new(), false),
+            |(mut bytes, mut buffer, done)| async move {
+                if done {
+                    return None;
+                }
+                loop {
+                    if let Some(pos) = buffer.find("\n\n") {
+                        let block: String = buffer.drain(..pos + 2).collect();
+                        if let Some(item) = sse_event(&block) {
+                            let last =
+                                !matches!(item, Ok(AskEvent::Delta(_) | AskEvent::Context { .. }));
+                            return Some((item, (bytes, buffer, last)));
+                        }
+                        continue;
+                    }
+                    match futures::StreamExt::next(&mut bytes).await {
+                        Some(Ok(chunk)) => buffer.push_str(&String::from_utf8_lossy(&chunk)),
+                        Some(Err(e)) => return Some((Err(transport(e)), (bytes, buffer, true))),
+                        None => return None,
+                    }
+                }
+            },
+        );
+        Ok(stream)
+    }
+
     /// The server's version (open — from the health probe). Distributed
     /// clients compare it against their own build to surface skew.
     pub async fn version(&self) -> Result<String, StoreError> {
@@ -644,5 +715,50 @@ fn transport(e: reqwest::Error) -> StoreError {
         StoreError::Backend(format!("malformed response: {e}"))
     } else {
         StoreError::Unavailable(e.to_string())
+    }
+}
+
+/// One event of a streamed expert answer (see [`Client::expert_ask`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AskEvent {
+    /// What the answer grounds in — always the first event.
+    Context { decisions: u64, signals: u64 },
+    /// The next chunk of answer text, in order.
+    Delta(String),
+    /// The stream ended cleanly.
+    Done,
+}
+
+/// Parse one SSE block into an event; `None` skips comments/keepalives.
+fn sse_event(block: &str) -> Option<Result<AskEvent, StoreError>> {
+    let mut event = String::new();
+    let mut data = String::new();
+    for line in block.lines() {
+        if let Some(v) = line.strip_prefix("event:") {
+            event = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("data:") {
+            data.push_str(v.strip_prefix(' ').unwrap_or(v));
+        }
+    }
+    let field = |name: &str| {
+        serde_json::from_str::<serde_json::Value>(&data)
+            .ok()
+            .and_then(|v| v.get(name).cloned())
+    };
+    match event.as_str() {
+        "context" => Some(Ok(AskEvent::Context {
+            decisions: field("decisions").and_then(|v| v.as_u64()).unwrap_or(0),
+            signals: field("signals").and_then(|v| v.as_u64()).unwrap_or(0),
+        })),
+        "delta" => field("text")
+            .and_then(|v| v.as_str().map(str::to_string))
+            .map(|t| Ok(AskEvent::Delta(t))),
+        "error" => Some(Err(StoreError::Backend(
+            field("message")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| "expert stream error".into()),
+        ))),
+        "done" => Some(Ok(AskEvent::Done)),
+        _ => None,
     }
 }

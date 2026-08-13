@@ -54,6 +54,8 @@ markdown = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
+    # The expert's SSE answers ride a body stream (native and wasm).
+    "stream",
 ] }
 url = "2"
 # Interactive prompts for `converge init` (TTY only — piped stdin gets
@@ -63,6 +65,9 @@ dialoguer = "0.11"
 # the wire layer under converge-expert — the expert layer keeps its own
 # routing and policy, genai keeps the per-provider protocol churn.
 genai = "0.6"
+# Stream combinators for the expert's token streams (genai already
+# depends on it; naming it keeps our usage version-honest).
+futures = "0.3"
 
 # Async
 tokio = { version = "1", features = [

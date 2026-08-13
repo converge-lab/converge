@@ -249,3 +249,45 @@ async fn detection_writes_stamped_signals_once() {
         .unwrap();
     assert_eq!(stats, converge_server::Backfill::default());
 }
+
+/// The ask surface's guardrails (the streaming path itself needs a live
+/// model): no configured `ask` job answers 503; an invisible group 404s.
+#[tokio::test]
+async fn ask_guardrails() {
+    let (_pg, store, app) = server().await;
+    let group = {
+        use converge_storage::{Groups, NewGroup, Users};
+        let admin = store.user_lookup("admin").await.unwrap().remove(0).id;
+        store
+            .group_add(
+                admin,
+                NewGroup {
+                    name: "asked".into(),
+                    description: None,
+                    kind: converge_storage::GroupKind::Shared,
+                },
+            )
+            .await
+            .unwrap()
+    };
+    // The harness registry has no jobs: asking is refused loudly, not
+    // hung — the fail-open rule is for enrichment, not for answers.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/expert/ask",
+        Some(json!({ "group_id": group, "question": "what do we know?" })),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 503, "{body}");
+
+    let ghost = converge_storage::GroupId::new();
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/expert/ask",
+        Some(json!({ "group_id": ghost, "question": "hello?" })),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 404);
+}

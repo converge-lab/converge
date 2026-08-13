@@ -1,7 +1,9 @@
-//! The Expert screen — the chat with the server-side "Converge Expert" that
-//! holds the group's whole decision memory and forwards the relevant slice into
-//! a local agent's context. The live LLM is deferred; this opens on an empty
-//! state and reveals a mock conversation once you ask something.
+//! The Expert screen — grounded chat with the server-side expert over
+//! the group's decision memory. On the `api` build the conversation is
+//! real: `POST /api/v1/expert/ask` streams the answer (SSE), grounded
+//! per the context policy (rich index + selected records), and the
+//! transcript lives client-side — the server keeps no conversations.
+//! The embedded build keeps a canned exchange, enough to show the shape.
 
 use converge_ui::atoms::Glyph;
 use converge_ui::domain::ChatRole;
@@ -11,24 +13,28 @@ use leptos::prelude::*;
 use crate::store::AppStateStoreFields;
 
 const SUGGESTIONS: [&str; 3] = [
-    "What must the local agent know before changing the api-gateway error format?",
-    "Is it safe to change the OIDC token TTL?",
-    "Why is infrastructure deployed separately from services?",
+    "What must an agent know before touching authentication?",
+    "Which decisions are still proposed, and what's blocking them?",
+    "Summarize what this group has settled about deployment.",
 ];
 
-// The prototype opens with a single fresh chat; more accumulate as you talk.
-const CHATS: [&str; 1] = ["New chat"];
+/// One transcript turn.
+#[derive(Clone, PartialEq)]
+pub struct Msg {
+    pub user: bool,
+    pub text: String,
+}
 
 /// Expert-chat state, held in context above the router: the active screen is
 /// re-created on every route change *and* on every dataset write (a sidebar
 /// "New project" mid-chat), and an in-progress chat must survive both. It is
-/// scoped to a group and reset lazily when the active group changes — the
-/// reference design likewise kept the thread in app-level state.
+/// scoped to a group and reset lazily when the active group changes.
 #[derive(Clone, Copy)]
 pub struct ExpertState {
-    started: RwSignal<bool>,
-    active_chat: RwSignal<usize>,
-    selected: RwSignal<Vec<String>>,
+    thread: RwSignal<Vec<Msg>>,
+    busy: RwSignal<bool>,
+    /// What the last answer grounded in: (decisions, signals).
+    grounded: RwSignal<Option<(u64, u64)>>,
     /// The group index the state belongs to; `None` until the first visit.
     for_group: RwSignal<Option<usize>>,
 }
@@ -36,10 +42,104 @@ pub struct ExpertState {
 /// Provide the chat state at the app root (once, above every screen).
 pub fn provide_expert_state() {
     provide_context(ExpertState {
-        started: RwSignal::new(false),
-        active_chat: RwSignal::new(0),
-        selected: RwSignal::new(Vec::new()),
+        thread: RwSignal::new(Vec::new()),
+        busy: RwSignal::new(false),
+        grounded: RwSignal::new(None),
         for_group: RwSignal::new(None),
+    });
+}
+
+/// Ask over the live API: append the question, stream the answer into a
+/// growing expert turn.
+#[cfg(feature = "api")]
+fn send(state: ExpertState, question: String) {
+    use converge_client::AskEvent;
+    use futures::StreamExt;
+
+    if state.busy.get_untracked() || question.trim().is_empty() {
+        return;
+    }
+    let Ok(group) = crate::data::cur_group()
+        .id
+        .parse::<converge_client::GroupId>()
+    else {
+        return;
+    };
+    let history: Vec<(bool, String)> = state
+        .thread
+        .get_untracked()
+        .into_iter()
+        .map(|m| (m.user, m.text))
+        .collect();
+    state.thread.update(|t| {
+        t.push(Msg {
+            user: true,
+            text: question.clone(),
+        });
+        t.push(Msg {
+            user: false,
+            text: String::new(),
+        });
+    });
+    state.busy.set(true);
+    leptos::task::spawn_local(async move {
+        let outcome = async {
+            // Pinned: the SSE reader is an unfold (not Unpin).
+            let mut stream = Box::pin(
+                crate::store::client()
+                    .expert_ask(group, &question, &history)
+                    .await?,
+            );
+            while let Some(event) = stream.next().await {
+                match event? {
+                    AskEvent::Context { decisions, signals } => {
+                        state.grounded.set(Some((decisions, signals)));
+                    }
+                    AskEvent::Delta(text) => state.thread.update(|t| {
+                        if let Some(last) = t.last_mut() {
+                            last.text.push_str(&text);
+                        }
+                    }),
+                    AskEvent::Done => break,
+                }
+            }
+            Ok::<_, converge_client::StoreError>(())
+        }
+        .await;
+        if let Err(e) = outcome {
+            state.thread.update(|t| {
+                if let Some(last) = t.last_mut() {
+                    if last.text.is_empty() {
+                        last.text = format!("The expert couldn't answer — {e}");
+                    } else {
+                        last.text
+                            .push_str(&format!("\n\n(stream interrupted — {e})"));
+                    }
+                }
+            });
+        }
+        state.busy.set(false);
+    });
+}
+
+/// The embedded demo: a canned reply, immediately.
+#[cfg(not(feature = "api"))]
+fn send(state: ExpertState, question: String) {
+    if question.trim().is_empty() {
+        return;
+    }
+    state.thread.update(|t| {
+        t.push(Msg {
+            user: true,
+            text: question,
+        });
+        t.push(Msg {
+            user: false,
+            text: "This demo build has no model behind it — the hosted expert \
+                   answers from the group's decision memory, streaming, with \
+                   the decisions it leaned on cited inline."
+                .into(),
+        });
     });
 }
 
@@ -47,104 +147,60 @@ pub fn provide_expert_state() {
 pub fn Expert() -> impl IntoView {
     let state = expect_context::<ExpertState>();
     // (Re)scope the chat to the active group: the first visit — or a group
-    // switch — resets the thread and derives the default project scope
-    // (api-gateway when the group has it, else its first project).
+    // switch — resets the thread.
     let group = crate::store::use_store().group().get_untracked();
     if state.for_group.get_untracked() != Some(group) {
         state.for_group.set(Some(group));
-        state.started.set(false);
-        state.active_chat.set(0);
-        let projs = crate::data::cur_group_projects();
-        let first = if projs.iter().any(|p| p.as_str() == "api-gateway") {
-            "api-gateway"
-        } else {
-            projs.first().map(|s| s.as_str()).unwrap_or("")
-        };
-        state.selected.set(if first.is_empty() {
-            vec![]
-        } else {
-            vec![first.to_string()]
-        });
+        state.thread.set(Vec::new());
+        state.grounded.set(None);
     }
-    let started = state.started;
-    let active_chat = state.active_chat;
-    let selected = state.selected;
+    let thread = state.thread;
+    let grounded = state.grounded;
 
     view! {
         <div class="cv-expert">
             <div class="cv-expert__chats">
-                <div class="cv-expert__newchat" on:click=move |_| started.set(false)>
+                <div
+                    class="cv-expert__newchat"
+                    on:click=move |_| {
+                        thread.set(Vec::new());
+                        grounded.set(None);
+                    }
+                >
                     <span class="cv-fg-expert">"＋"</span>
                     " New chat"
                 </div>
                 <div class="cv-expert__chatslabel">"Chats"</div>
-                {move || {
-                    let cur = active_chat.get();
-                    CHATS
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            view! {
-                                <ChatListItem
-                                    title=*t
-                                    active=i == cur
-                                    on_click=Callback::new(move |_| active_chat.set(i))
-                                />
-                            }
-                        })
-                        .collect_view()
-                }}
+                <ChatListItem title="New chat" active=true on_click=Callback::new(move |_| {}) />
             </div>
 
             <div class="cv-expert__area">
                 <div class="cv-row cv-gap-9 cv-mb-12">
                     <span class="cv-fg-expert cv-fs-2xl">{Glyph::Expert.glyph()}</span>
-                    <h1 class="cv-heading cv-fs-2xl">
-                        "Expert model"
-                    </h1>
-                </div>
-                <div class="cv-expert__projs">
+                    <h1 class="cv-heading cv-fs-2xl">"Expert model"</h1>
+                    <span class="cv-spacer"></span>
                     {move || {
-                        let sel = selected.get();
-                        crate::data::cur_group_projects()
-                            .iter()
-                            .map(|p| {
-                                let pid = p.to_string();
-                                let on = sel.iter().any(|x| x == &pid);
-                                let cls = if on {
-                                    "cv-projchip cv-projchip--on"
-                                } else {
-                                    "cv-projchip"
-                                };
+                        grounded
+                            .get()
+                            .map(|(d, s)| {
                                 view! {
-                                    <span
-                                        class=cls
-                                        on:click=move |_| {
-                                            let pid = pid.clone();
-                                            selected
-                                                .update(|s| {
-                                                    if let Some(idx) = s.iter().position(|x| x == &pid) {
-                                                        // keep at least one project selected
-                                                        if s.len() > 1 { s.remove(idx); }
-                                                    } else {
-                                                        s.push(pid);
-                                                    }
-                                                });
-                                        }
-                                    >
-                                        {crate::data::proj_name(p)}
+                                    <span class="cv-fs-xs cv-fg-faint">
+                                        {format!(
+                                            "grounded in {d} decision{} · {s} open signal{}",
+                                            if d == 1 { "" } else { "s" },
+                                            if s == 1 { "" } else { "s" },
+                                        )}
                                     </span>
                                 }
                             })
-                            .collect_view()
                     }}
                 </div>
 
                 {move || {
-                    if started.get() {
-                        started_thread().into_any()
+                    if thread.get().is_empty() {
+                        empty_state(state).into_any()
                     } else {
-                        empty_state(started).into_any()
+                        thread_view(state).into_any()
                     }
                 }}
             </div>
@@ -152,43 +208,35 @@ pub fn Expert() -> impl IntoView {
     }
 }
 
-/// Empty state — hero, composer, and three suggestion chips. Any of them starts
-/// the (mock) conversation.
-fn empty_state(started: RwSignal<bool>) -> impl IntoView {
+/// Empty state — hero, composer, and three suggestion chips.
+fn empty_state(state: ExpertState) -> impl IntoView {
     view! {
         <div class="cv-expert__empty">
             <div class="cv-text-center cv-expert__lead">
-                <div class="cv-fs-5xl cv-fg-expert cv-mb-8">
-                    {Glyph::Expert.glyph()}
-                </div>
-                <h2 class="cv-heading cv-fs-4xl cv-mb-9">
-                    "Ask the expert"
-                </h2>
+                <div class="cv-fs-5xl cv-fg-expert cv-mb-8">{Glyph::Expert.glyph()}</div>
+                <h2 class="cv-heading cv-fs-4xl cv-mb-9">"Ask the expert"</h2>
                 <p class="cv-fs-lg cv-fg-muted cv-lh-relaxed">
                     "It holds all "
-                    <span class="cv-fg-secondary">
-                        {crate::data::group_decisions().len()}
-                    </span>
+                    <span class="cv-fg-secondary">{crate::data::group_decisions().len()}</span>
                     " decisions for "
-                    <span class="cv-mono cv-fg-secondary">
-                        {crate::data::group_name()}
-                    </span>
-                    " and decides which to forward into your local agent's context."
+                    <span class="cv-mono cv-fg-secondary">{crate::data::group_name()}</span>
+                    " and answers from them — citing what it leaned on."
                 </p>
             </div>
             <div class="cv-w-full cv-measure">
                 <ChatComposer
                     placeholder="Ask the expert…"
-                    on_send=Callback::new(move |_: String| started.set(true))
+                    on_send=Callback::new(move |q: String| send(state, q))
                 />
             </div>
             <div class="cv-w-full cv-measure cv-col cv-gap-7">
                 {SUGGESTIONS
                     .iter()
                     .map(|s| {
+                        let q = *s;
                         view! {
-                            <div class="cv-suggest" on:click=move |_| started.set(true)>
-                                {*s}
+                            <div class="cv-suggest" on:click=move |_| send(state, q.to_string())>
+                                {q}
                             </div>
                         }
                     })
@@ -198,26 +246,35 @@ fn empty_state(started: RwSignal<bool>) -> impl IntoView {
     }
 }
 
-/// The started conversation — a mock exchange plus the docked composer.
-fn started_thread() -> impl IntoView {
+/// The live conversation plus the docked composer.
+fn thread_view(state: ExpertState) -> impl IntoView {
+    let thread = state.thread;
+    let busy = state.busy;
     view! {
         <div class="cv-expert__thread">
-            <ChatBubble
-                role=ChatRole::User
-                text="we're about to rename the error status field in api-gateway. anything that'll break?"
-            />
-            <ChatBubble
-                role=ChatRole::Expert
-                text="Two things. web-app still parses the error text to choose toast copy, so changing the field breaks it until it moves to the enum — that's the open \"will break\" signal. And the error code stays pinned by a contract with the legacy billing stack, so don't touch that. Ship behind a flag and let web-app cut over first."
-                forwarded=vec![
-                    ("api-gateway".to_string(), "Error responses include a structured `status` field".to_string()),
-                    ("web-app".to_string(), "Error toasts map status → copy".to_string()),
-                ]
-            />
+            {move || {
+                thread
+                    .get()
+                    .into_iter()
+                    .map(|m| {
+                        let role = if m.user { ChatRole::User } else { ChatRole::Expert };
+                        let text = if m.text.is_empty() { "…".to_string() } else { m.text };
+                        view! { <ChatBubble role=role text=text /> }
+                    })
+                    .collect_view()
+            }}
         </div>
 
         <div class="cv-pt-16">
-            <ChatComposer placeholder="Ask the expert…" />
+            {move || {
+                let waiting = busy.get();
+                view! {
+                    <ChatComposer
+                        placeholder=if waiting { "Answering…" } else { "Ask the expert…" }
+                        on_send=Callback::new(move |q: String| send(state, q))
+                    />
+                }
+            }}
         </div>
     }
 }

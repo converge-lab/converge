@@ -18,19 +18,24 @@
 //! The wire layer is [`genai`] — it owns each provider's protocol (and,
 //! at the E2 rung, the tool-calling encodings); this crate owns what
 //! genai must not: routing, credential resolution, and the budget. The
-//! surface is one-shot by design — `system + user → text` — no
-//! streaming, no tools, no conversation state; those belong to E2 when
-//! it exists. Every call carries the endpoint's hard timeout, and errors
-//! are values, never panics: expert work is best-effort enrichment, and
-//! the paths that call it must stay fail-open.
+//! surface is deliberately small: one-shot (`reply`/`extract`) for the
+//! enrichment jobs, and a streaming transcript exchange (`converse`)
+//! for the grounded chat — still no tools and no server-held
+//! conversation state (tools are E2's). Every call carries the
+//! endpoint's hard timeout (streams treat it as start + idle guard),
+//! and errors are values, never panics: expert work must leave its
+//! callers fail-open.
 
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::Stream;
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, JsonSpec};
+use genai::chat::{
+    ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat, ChatStreamEvent, JsonSpec,
+};
 use genai::resolver::{AuthData, ServiceTargetResolver};
 use genai::{ModelIden, ServiceTarget};
 use serde::Deserialize;
@@ -200,6 +205,61 @@ impl Client {
     pub fn describe(&self) -> &str {
         &self.describe
     }
+
+    /// Streaming multi-turn exchange: the transcript in, assistant text
+    /// chunks out. The endpoint timeout bounds the stream *start* and
+    /// each subsequent pull (an idle guard); the total duration is the
+    /// caller's to bound — a healthy stream may legitimately outlive
+    /// any single await.
+    pub async fn converse(
+        &self,
+        system: &str,
+        turns: Vec<Turn>,
+    ) -> Result<impl Stream<Item = Result<String, Error>> + Send + use<>, Error> {
+        let mut messages = vec![ChatMessage::system(system)];
+        for turn in turns {
+            messages.push(match turn.user {
+                true => ChatMessage::user(turn.text),
+                false => ChatMessage::assistant(turn.text),
+            });
+        }
+        let request = ChatRequest::new(messages);
+        let response = tokio::time::timeout(
+            self.timeout,
+            self.genai
+                .exec_chat_stream(&self.model, request, Some(&self.options)),
+        )
+        .await
+        .map_err(|_| Error::Timeout(self.timeout))??;
+        let idle = self.timeout;
+        // unfold + per-pull timeout: chunks flow until End/error/idle.
+        let stream = futures::stream::unfold(Some(response.stream), move |state| async move {
+            let mut inner = state?;
+            loop {
+                let event =
+                    match tokio::time::timeout(idle, futures::StreamExt::next(&mut inner)).await {
+                        Err(_) => return Some((Err(Error::Timeout(idle)), None)),
+                        Ok(None) => return None,
+                        Ok(Some(Err(e))) => return Some((Err(Error::from(e)), None)),
+                        Ok(Some(Ok(event))) => event,
+                    };
+                match event {
+                    ChatStreamEvent::Chunk(chunk) => return Some((Ok(chunk.content), Some(inner))),
+                    // Reasoning, signatures, start/end markers: not text.
+                    _ => continue,
+                }
+            }
+        });
+        Ok(stream)
+    }
+}
+
+/// One prior exchange turn for [`Client::converse`], provider-neutral.
+#[derive(Debug, Clone)]
+pub struct Turn {
+    /// `true` = the asking user; `false` = the assistant's earlier reply.
+    pub user: bool,
+    pub text: String,
 }
 
 impl Endpoint {

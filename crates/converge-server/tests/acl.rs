@@ -134,8 +134,13 @@ async fn membership_is_visibility() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    // Ownership contains membership: the roster leads with the owner,
+    // marked, then the invited members.
     let (_, members) = send(&app, "GET", &format!("/api/v1/groups/{gid}/members"), None).await;
-    assert_eq!(members[0]["handle"], "bob");
+    assert_eq!(members[0]["handle"], "admin");
+    assert_eq!(members[0]["owner"], true);
+    assert_eq!(members[1]["handle"], "bob");
+    assert_eq!(members[1]["owner"], false);
     let (status, got) = send_as(&app, BOB, "GET", &format!("/api/v1/decisions/{did}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(got["title"], "Rate limits are per token");

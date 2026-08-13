@@ -457,6 +457,22 @@ impl Groups for PgStorage {
         }
         tx.commit().await.map_err(db_err)
     }
+
+    async fn group_delete(&self, scope: Scope, id: GroupId) -> Result<(), StoreError> {
+        // The sentinel default workspace is infrastructure, not data —
+        // boot would recreate it empty, which reads as data loss.
+        if Uuid::from(id.ulid()) == Uuid::nil() {
+            return Err(StoreError::Invalid(
+                "the default workspace cannot be deleted".into(),
+            ));
+        }
+        self.owner_gate(scope, id).await?;
+        sqlx::query!("delete from groups where id = $1", Uuid::from(id.ulid()))
+            .execute(&self.pool)
+            .await
+            .map_err(evidence_pinned)?;
+        Ok(())
+    }
 }
 
 impl PgStorage {
@@ -538,12 +554,25 @@ impl Memberships for PgStorage {
 
     async fn member_list(&self, scope: Scope, group: GroupId) -> Result<Vec<Member>, StoreError> {
         self.visible_gate(scope, group).await?;
+        // Ownership contains membership: the owner heads the list (their
+        // "since" is the group's own creation).
         Ok(sqlx::query!(
-            r#"select m.user_id, u.handle, u.name, m.invited_by, m.created_at
-               from memberships m
-               join users u on u.id = m.user_id
-               where m.group_id = $1
-               order by m.created_at, m.user_id"#,
+            r#"select user_id as "user_id!", handle as "handle!", name as "name!",
+                      invited_by as "invited_by!", created_at as "created_at!",
+                      owner as "owner!"
+               from (
+                   select g.owner_id as user_id, u.handle, u.name,
+                          g.owner_id as invited_by, g.created_at, true as owner
+                   from groups g join users u on u.id = g.owner_id
+                   where g.id = $1
+                   union all
+                   select m.user_id, u.handle, u.name, m.invited_by,
+                          m.created_at, false as owner
+                   from memberships m
+                   join users u on u.id = m.user_id
+                   where m.group_id = $1
+               ) roster
+               order by owner desc, created_at, user_id"#,
             Uuid::from(group.ulid()),
         )
         .fetch_all(&self.pool)
@@ -556,6 +585,7 @@ impl Memberships for PgStorage {
             name: r.name,
             invited_by: wire::id(r.invited_by),
             since: r.created_at,
+            owner: r.owner,
         })
         .collect())
     }
@@ -709,6 +739,27 @@ impl Projects for PgStorage {
             .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn project_delete(&self, scope: Scope, id: ProjectId) -> Result<(), StoreError> {
+        let uuid = Uuid::from(id.ulid());
+        let row = sqlx::query!(
+            r#"select group_id from projects
+               where id = $1 and ($2::uuid is null or group_visible(group_id, $2))"#,
+            uuid,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or(StoreError::NotFound)?;
+        // Deleting is managing the owning group, not just seeing it.
+        self.owner_gate(scope, wire::id(row.group_id)).await?;
+        sqlx::query!("delete from projects where id = $1", uuid)
+            .execute(&self.pool)
+            .await
+            .map_err(evidence_pinned)?;
+        Ok(())
     }
 }
 
@@ -2030,4 +2081,21 @@ fn db_err(e: sqlx::Error) -> StoreError {
         }
         _ => StoreError::Backend(e.to_string()),
     }
+}
+
+/// [`db_err`] for deletes: the FK violation on the evidence→message
+/// anchor is the "an evidenced message is undeletable" invariant doing
+/// its job — a domain conflict, not a caller mistake.
+fn evidence_pinned(e: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(d) = &e
+        && d.code().as_deref() == Some("23503")
+        && d.constraint() == Some("evidence_message_id_fkey")
+    {
+        return StoreError::Conflict(
+            "a session here anchors evidence of a decision elsewhere — \
+             evidenced messages are undeletable"
+                .into(),
+        );
+    }
+    db_err(e)
 }

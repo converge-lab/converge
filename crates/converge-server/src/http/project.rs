@@ -18,7 +18,10 @@ use crate::auth::Caller;
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/projects", post(add::<S>).get(list::<S>))
-        .route("/api/v1/projects/{id}", get(fetch::<S>).patch(edit::<S>))
+        .route(
+            "/api/v1/projects/{id}",
+            get(fetch::<S>).patch(edit::<S>).delete(remove::<S>),
+        )
         .route("/api/v1/groups/{id}/projects", get(by_group::<S>))
 }
 
@@ -92,5 +95,14 @@ async fn edit<S: Storage>(
     store
         .project_edit(Scope::User(caller.user), id, edits)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove<S: Storage>(
+    State(store): State<S>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<ProjectId>,
+) -> Result<StatusCode> {
+    store.project_delete(Scope::User(caller.user), id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

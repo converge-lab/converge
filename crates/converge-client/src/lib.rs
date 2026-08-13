@@ -14,10 +14,11 @@
 pub use converge_storage::{
     Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
     DecisionFilter, DecisionId, DecisionStatus, DeviceGrant, Edges, Group, GroupEdit, GroupId,
-    GroupKind, Identity, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup, NewMessage,
-    NewProject, NewSession, NewSignal, NewToken, Page, Pagination, Project, ProjectEdit,
-    ProjectFilter, ProjectId, Related, Session, SessionFilter, SessionId, SessionKind, Signal,
-    SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User, UserId,
+    GroupKind, Identity, Member, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup,
+    NewMessage, NewProject, NewSession, NewSignal, NewToken, Page, Pagination, Project,
+    ProjectEdit, ProjectFilter, ProjectId, Related, Session, SessionFilter, SessionId, SessionKind,
+    Signal, SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User,
+    UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;
@@ -108,6 +109,46 @@ impl Client {
         self.apply(&format!("groups/{id}"), edits).await
     }
 
+    /// Owner-only; takes the group's projects, decisions, sessions and
+    /// memberships with it (`Conflict` when evidence elsewhere pins one
+    /// of its messages).
+    pub async fn group_delete(&self, id: GroupId) -> Result<(), StoreError> {
+        self.remove(&format!("groups/{id}")).await
+    }
+
+    // Members
+
+    pub async fn member_list(&self, group: GroupId) -> Result<Vec<Member>, StoreError> {
+        self.fetch(&format!("groups/{group}/members"))
+            .await?
+            .ok_or(StoreError::NotFound)
+    }
+
+    /// Add by handle — the human-friendly form; an ambiguous handle is
+    /// `Invalid` (fall back to [`Client::member_add_id`]).
+    pub async fn member_add(&self, group: GroupId, handle: &str) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct ByHandle<'a> {
+            handle: &'a str,
+        }
+        self.submit(&format!("groups/{group}/members"), &ByHandle { handle })
+            .await
+    }
+
+    /// Add by user id — the unambiguous form.
+    pub async fn member_add_id(&self, group: GroupId, user: UserId) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct ById {
+            user_id: UserId,
+        }
+        self.submit(&format!("groups/{group}/members"), &ById { user_id: user })
+            .await
+    }
+
+    pub async fn member_remove(&self, group: GroupId, user: UserId) -> Result<(), StoreError> {
+        self.remove(&format!("groups/{group}/members/{user}")).await
+    }
+
     // Projects
 
     pub async fn project_add(&self, new: &NewProject) -> Result<ProjectId, StoreError> {
@@ -136,6 +177,13 @@ impl Client {
     ) -> Result<Page<Project>, StoreError> {
         self.list(&format!("groups/{group}/projects"), &(), page)
             .await
+    }
+
+    /// Owner-of-the-owning-group only; takes the project's decisions
+    /// and sessions with it (`Conflict` when evidence elsewhere pins
+    /// one of its messages).
+    pub async fn project_delete(&self, id: ProjectId) -> Result<(), StoreError> {
+        self.remove(&format!("projects/{id}")).await
     }
 
     pub async fn project_edit(
@@ -527,6 +575,33 @@ impl Client {
             .map_err(transport)?;
         match response.status() {
             StatusCode::OK => Ok(response.json().await.map_err(transport)?),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// POST with no answer body; the server answers `204`.
+    async fn submit(&self, path: &str, body: &(impl Serialize + ?Sized)) -> Result<(), StoreError> {
+        let response = self
+            .authed(self.http.post(self.url(path)))
+            .json(body)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// DELETE; the server answers `204`.
+    async fn remove(&self, path: &str) -> Result<(), StoreError> {
+        let response = self
+            .authed(self.http.delete(self.url(path)))
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
             _ => Err(fail(response).await),
         }
     }

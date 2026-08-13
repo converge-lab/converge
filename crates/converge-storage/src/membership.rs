@@ -24,10 +24,15 @@ pub struct Member {
     pub user_id: UserId,
     pub handle: String,
     pub name: String,
-    /// Who brought them in (the owner, today).
+    /// Who brought them in (the owner, today; the owner "brought"
+    /// themself).
     pub invited_by: UserId,
     #[serde(with = "time::serde::rfc3339")]
     pub since: OffsetDateTime,
+    /// The group's single owner — ownership contains membership, so
+    /// the owner appears in listings, first and marked.
+    #[serde(default)]
+    pub owner: bool,
 }
 
 /// Storage operations on memberships.

@@ -72,4 +72,15 @@ pub trait Projects {
         id: ProjectId,
         edits: Vec<ProjectEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Delete the project and everything under it: decisions (with
+    /// their edges, signals, evidence) and sessions (with their
+    /// messages). Owner-of-the-owning-group only. `Conflict` when one
+    /// of its sessions anchors evidence of a surviving decision in
+    /// another project — an evidenced message is undeletable.
+    fn project_delete(
+        &self,
+        scope: Scope,
+        id: ProjectId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }

@@ -81,4 +81,15 @@ pub trait Groups {
         id: GroupId,
         edits: Vec<GroupEdit>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Delete the group and everything under it: projects, their
+    /// decisions and sessions, its memberships. Owner-only, like
+    /// [`Groups::group_edit`]. `Conflict` when a session here anchors
+    /// evidence of a decision *outside* the group — an evidenced
+    /// message is undeletable (the evidence table's design invariant).
+    fn group_delete(
+        &self,
+        scope: Scope,
+        id: GroupId,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }

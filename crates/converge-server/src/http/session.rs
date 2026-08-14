@@ -58,6 +58,7 @@ async fn logout(jar: CookieJar) -> (CookieJar, StatusCode) {
     // when the request carried the original, and logout must clear the
     // browser unconditionally. Path must match the set cookie's.
     let cookie = Cookie::build((COOKIE, ""))
+        .secure(true)
         .path("/")
         .max_age(time::Duration::ZERO)
         .build();

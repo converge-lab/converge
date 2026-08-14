@@ -71,7 +71,10 @@ async fn session_round_trip() {
     let cookie = set_cookie(&headers);
     assert!(cookie.starts_with("converge_session="), "{cookie}");
     assert!(cookie.contains("HttpOnly"), "{cookie}");
-    assert!(cookie.contains("SameSite=Strict"), "{cookie}");
+    // Lax, not Strict: /authorize is entered via cross-site redirects
+    // (connector platform → here, IdP → here); Strict loops the sign-in.
+    assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+    assert!(cookie.contains("Secure"), "{cookie}");
     assert!(cookie.contains("Path=/"), "{cookie}");
 
     // The cookie alone (no bearer) authenticates; me = the token's owner.

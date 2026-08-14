@@ -134,14 +134,25 @@ impl Sessions {
 }
 
 /// The session cookie, ready to set: `HttpOnly` (never visible to JS),
-/// `SameSite=Strict`, whole-site path, living [`SESSION_TTL`]. Shared by
+/// `SameSite=Lax`, whole-site path, living [`SESSION_TTL`]. Shared by
 /// the token exchange and the OIDC callback so the two entrances can't
 /// drift.
+///
+/// Lax, not Strict: `/authorize` is reached by cross-site top-level
+/// redirects (the connector platform sends the browser here, and the
+/// IdP sends it back) — Strict withholds the cookie on those chains, so
+/// the endpoint sees every visitor as signed out and the sign-in loop
+/// never terminates. Lax still withholds the cookie on cross-site
+/// POSTs and subresource requests, which is the CSRF surface that
+/// matters; every state-changing route is a non-GET.
 pub fn cookie(jwt: String) -> axum_extra::extract::cookie::Cookie<'static> {
     use axum_extra::extract::cookie::{Cookie, SameSite};
+    // `Secure` unconditionally: prod is always https, and browsers
+    // exempt http://localhost, so plain-http dev keeps working.
     Cookie::build((COOKIE, jwt))
         .http_only(true)
-        .same_site(SameSite::Strict)
+        .same_site(SameSite::Lax)
+        .secure(true)
         .path("/")
         .max_age(SESSION_TTL)
         .build()

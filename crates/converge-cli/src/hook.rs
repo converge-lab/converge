@@ -54,10 +54,9 @@ pub async fn inject() -> Result<()> {
     let cwd = cwd_of(&payload);
 
     let (context, system) = match marker::find(&cwd) {
-        Ok(State::Bound { project, .. }) => (
-            bound(project).await,
-            format!("Converge: bound to {project} ✓"),
-        ),
+        // The visible line comes from bound() too: it must reflect what
+        // the fetch actually found, not just that a marker exists.
+        Ok(State::Bound { project, .. }) => bound(project).await,
         Ok(State::Disabled { .. }) => (
             "## Converge — disabled for this repo\n\
              Converge is off here (`.converge` has `disable = true`). Do NOT \
@@ -116,7 +115,9 @@ right away.";
 /// but doesn't know the project for this account.
 type Index = Option<(String, Vec<String>, Vec<String>)>;
 
-async fn bound(project: ProjectId) -> String {
+/// Returns `(context block, visible summary line)` — the summary states
+/// what was actually injected (or why nothing was), never a bare ✓.
+async fn bound(project: ProjectId) -> (String, String) {
     let fetched: Result<Index> = async {
         let config = Config::load()?;
         let client = config.client()?;
@@ -183,16 +184,36 @@ async fn bound(project: ProjectId) -> String {
         Some(client) => crate::skew::check_cached(&client).await,
         None => None,
     };
-    let block = match fetched {
-        Ok(None) => format!(
-            "## Converge memory — project {project}\n\
-             This working tree is bound to converge project `{project}`, \
-             but the server doesn't know it for this account — the project \
-             was deleted, or this token's user isn't a member of its \
-             group. Ask a group owner to add you, or re-bind with \
-             `project_match`."
+    let (block, system) = match fetched {
+        Ok(None) => (
+            format!(
+                "## Converge memory — project {project}\n\
+                 This working tree is bound to converge project `{project}`, \
+                 but the server doesn't know it for this account — the project \
+                 was deleted, or this token's user isn't a member of its \
+                 group. Ask a group owner to add you, or re-bind with \
+                 `project_match`."
+            ),
+            format!(
+                "Converge: bound to {project}, but the server doesn't \
+                 know it — re-bind (`converge project init --rebind`)"
+            ),
         ),
         Ok(Some((name, decisions, signals))) => {
+            // The list limits cap what we can count; say "N+" at the cap
+            // instead of understating a bigger corpus as exactly N.
+            let counted = |n: usize, cap: usize| {
+                if n >= cap {
+                    format!("{n}+")
+                } else {
+                    n.to_string()
+                }
+            };
+            let system = format!(
+                "Converge: \"{name}\" — {} decision(s), {} open signal(s) ✓",
+                counted(decisions.len(), 30),
+                counted(signals.len(), 10),
+            );
             let mut block = if decisions.is_empty() {
                 format!(
                     "## Converge memory — project \"{name}\" ({project})\n\
@@ -222,20 +243,24 @@ async fn bound(project: ProjectId) -> String {
                     signals.join("\n")
                 ));
             }
-            block
+            (block, system)
         }
-        Err(_) => format!(
-            "## Converge memory — project {project}\n\
-             This working tree is bound to converge project `{project}`, \
-             but the server was unreachable when this session started — \
-             the decision index is unavailable. Tools may still work; \
-             `decision_list` fetches the index on demand."
+        Err(_) => (
+            format!(
+                "## Converge memory — project {project}\n\
+                 This working tree is bound to converge project `{project}`, \
+                 but the server was unreachable when this session started — \
+                 the decision index is unavailable. Tools may still work; \
+                 `decision_list` fetches the index on demand."
+            ),
+            format!("Converge: bound to {project} (server unreachable — index unavailable)"),
         ),
     };
-    match skew {
+    let block = match skew {
         Some(warning) => format!("{block}\n\n(note: {warning})"),
         None => block,
-    }
+    };
+    (block, system)
 }
 
 // ─── SessionEnd: transcript → evidence ──────────────────────────────────────

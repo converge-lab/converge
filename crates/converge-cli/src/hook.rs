@@ -67,7 +67,11 @@ pub async fn inject() -> Result<()> {
         ),
         Ok(State::Unbound) => (
             UNBOUND.to_string(),
-            "Converge: repo unmapped — link it via project_match".to_string(),
+            // The deterministic path leads: the human can always bind via
+            // the TTY picker even when the model skips the injected flow.
+            "Converge: repo unmapped — run `converge project init` to bind \
+             (or let the agent suggest candidates)"
+                .to_string(),
         ),
         Err(_) => (
             "## Converge — marker unreadable\n\

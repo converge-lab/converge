@@ -115,10 +115,27 @@ right away.";
 /// but doesn't know the project for this account.
 type Index = Option<(String, Vec<String>, Vec<String>)>;
 
+/// Index-fetch budget. Past it, degrade to the cached index (marked
+/// stale) or the unavailable line — a session start must never hang on
+/// a wedged server.
+const BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Last-good index cache: the successful block, one file per project.
+/// Served only on fetch failure, and always labelled with its age —
+/// a stale index must read as stale, never as fresh.
+fn cache_path(project: ProjectId) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".converge/cache")
+            .join(format!("index-{project}.md")),
+    )
+}
+
 /// Returns `(context block, visible summary line)` — the summary states
 /// what was actually injected (or why nothing was), never a bare ✓.
 async fn bound(project: ProjectId) -> (String, String) {
-    let fetched: Result<Index> = async {
+    let fetch = async {
         let config = Config::load()?;
         let client = config.client()?;
         // ACL: an invisible project answers exactly like a missing one —
@@ -175,30 +192,43 @@ async fn bound(project: ProjectId) -> (String, String) {
             })
             .collect();
         Ok(Some((name, decisions, signals)))
-    }
-    .await;
+    };
+    // Budget timeout counts as a fetch failure — same degradation path.
+    let fetched: Result<Index> = match tokio::time::timeout(BUDGET, fetch).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!("index fetch exceeded {BUDGET:?}")),
+    };
 
     // The daily-cached skew nudge rides the bound path (the one that
     // already talks to the server); its failure is silence, not noise.
+    // Skipped when the index fetch failed — a wedged server would hang
+    // this call too, and the budget already spent its patience.
     let skew = match Config::load().ok().and_then(|c| c.client().ok()) {
-        Some(client) => crate::skew::check_cached(&client).await,
-        None => None,
+        Some(client) if fetched.is_ok() => crate::skew::check_cached(&client).await,
+        _ => None,
     };
     let (block, system) = match fetched {
-        Ok(None) => (
-            format!(
-                "## Converge memory — project {project}\n\
+        Ok(None) => {
+            // The server disowned the project; a lingering cached index
+            // would resurrect it on the next outage.
+            if let Some(path) = cache_path(project) {
+                let _ = std::fs::remove_file(path);
+            }
+            (
+                format!(
+                    "## Converge memory — project {project}\n\
                  This working tree is bound to converge project `{project}`, \
                  but the server doesn't know it for this account — the project \
                  was deleted, or this token's user isn't a member of its \
                  group. Ask a group owner to add you, or re-bind with \
                  `project_match`."
-            ),
-            format!(
-                "Converge: bound to {project}, but the server doesn't \
-                 know it — re-bind (`converge project init --rebind`)"
-            ),
-        ),
+                ),
+                format!(
+                    "Converge: bound to {project}, but the server doesn't \
+                     know it — re-bind (`converge project init --rebind`)"
+                ),
+            )
+        }
         Ok(Some((name, decisions, signals))) => {
             // The list limits cap what we can count; say "N+" at the cap
             // instead of understating a bigger corpus as exactly N.
@@ -243,18 +273,45 @@ async fn bound(project: ProjectId) -> (String, String) {
                     signals.join("\n")
                 ));
             }
+            // Last-good cache: written on success, served on failure.
+            // A ghost binding (Ok(None)) clears it instead — the server
+            // authoritatively disowned the project.
+            if let Some(path) = cache_path(project) {
+                let _ = path.parent().map(std::fs::create_dir_all);
+                let _ = std::fs::write(&path, &block);
+            }
             (block, system)
         }
-        Err(_) => (
-            format!(
-                "## Converge memory — project {project}\n\
-                 This working tree is bound to converge project `{project}`, \
-                 but the server was unreachable when this session started — \
-                 the decision index is unavailable. Tools may still work; \
-                 `decision_list` fetches the index on demand."
+        Err(_) => match cache_path(project).filter(|p| p.exists()) {
+            Some(path) => {
+                let age = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| format!("{}h", d.as_secs() / 3600))
+                    .unwrap_or_else(|| "unknown".into());
+                let cached = std::fs::read_to_string(&path).unwrap_or_default();
+                (
+                    format!(
+                        "{cached}\n\n**Stale index**: the server was unreachable \
+                         at session start; the index above is a local cache \
+                         ({age} old). It may miss recent records — treat it as \
+                         a map, and `decision_list` to confirm when it matters."
+                    ),
+                    format!("Converge: server unreachable — cached index ({age} old)"),
+                )
+            }
+            None => (
+                format!(
+                    "## Converge memory — project {project}\n\
+                     This working tree is bound to converge project `{project}`, \
+                     but the server was unreachable when this session started — \
+                     the decision index is unavailable. Tools may still work; \
+                     `decision_list` fetches the index on demand."
+                ),
+                format!("Converge: bound to {project} (server unreachable — index unavailable)"),
             ),
-            format!("Converge: bound to {project} (server unreachable — index unavailable)"),
-        ),
+        },
     };
     let block = match skew {
         Some(warning) => format!("{block}\n\n(note: {warning})"),

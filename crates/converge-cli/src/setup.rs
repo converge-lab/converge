@@ -171,6 +171,16 @@ pub async fn run(force: bool) -> Result<()> {
         "\ndone. Open any repository in Claude Code — the session will \
          suggest a project binding (or run `converge project init` yourself)."
     );
+    // Account connectors can't be added programmatically (claude.ai UI
+    // only; they sync down to Claude Code, never up) — the best we can
+    // do is point at the documented settings page.
+    println!(
+        "\nwant converge on claude.ai web and mobile too? Add a custom \
+         connector at https://claude.ai/customize/connectors with URL \
+         {}/mcp — it signs in via your browser and also appears in \
+         Claude Code automatically.",
+        config.server
+    );
     Ok(())
 }
 

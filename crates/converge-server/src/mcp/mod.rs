@@ -849,6 +849,25 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
         );
         info
     }
+
+    /// Default behavior plus a capability probe: we're deciding when to
+    /// adopt the sessionless spec's task-based elicitation (SEP-2322),
+    /// and the deciding fact is what real clients declare — this log
+    /// answers it per connect (`tasks`/`elicitation` presence).
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, McpError> {
+        tracing::info!(
+            client = %request.client_info.name,
+            version = %request.protocol_version,
+            capabilities = %serde_json::to_string(&request.capabilities).unwrap_or_default(),
+            "mcp client connected"
+        );
+        context.peer.set_peer_info(request);
+        Ok(self.get_info())
+    }
 }
 
 // ---- shared plumbing -------------------------------------------------------

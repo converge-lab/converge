@@ -200,7 +200,14 @@ async fn credentials() -> Result<Config> {
         && let Some(offer) = device::probe(&server).await
     {
         match device::pair(&offer).await {
-            Ok(token) => return stored(Config { server, token }).await,
+            Ok(token) => {
+                return stored(Config {
+                    server,
+                    token,
+                    auto_update: true,
+                })
+                .await;
+            }
             Err(e) => println!("pairing failed ({e}) — falling back to a pasted token"),
         }
     }
@@ -215,7 +222,12 @@ async fn credentials() -> Result<Config> {
             break token;
         }
     };
-    stored(Config { server, token }).await
+    stored(Config {
+        server,
+        token,
+        auto_update: true,
+    })
+    .await
 }
 
 /// Verify a credential end-to-end, then persist it (0600).

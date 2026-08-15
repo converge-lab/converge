@@ -20,12 +20,24 @@ struct File {
     server: Option<String>,
     token: Option<String>,
     token_cmd: Option<String>,
+    #[serde(default)]
+    update: UpdateFile,
+}
+
+/// `[update]` — self-update behavior. `auto = false` opts out of the
+/// hook-triggered background update (the skew nudge still prints).
+#[derive(Debug, Default, Deserialize)]
+struct UpdateFile {
+    auto: Option<bool>,
 }
 
 /// Resolved configuration: a server origin and a bearer secret.
 pub struct Config {
     pub server: String,
     pub token: String,
+    /// Hook-triggered background self-update (default on; `[update]
+    /// auto = false` opts out).
+    pub auto_update: bool,
 }
 
 impl Config {
@@ -65,6 +77,7 @@ impl Config {
         Ok(Self {
             server: server.trim_end_matches('/').to_string(),
             token: token.trim().to_string(),
+            auto_update: file.update.auto.unwrap_or(true),
         })
     }
 

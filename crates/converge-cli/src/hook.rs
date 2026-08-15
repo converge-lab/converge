@@ -83,6 +83,10 @@ pub async fn inject() -> Result<()> {
         ),
     };
 
+    let system = match version_notice() {
+        Some(notice) => format!("{system} · {notice}"),
+        None => system,
+    };
     emit(&json!({
         "systemMessage": system,
         "hookSpecificOutput": {
@@ -123,6 +127,66 @@ type Index = Option<(String, Vec<String>, Vec<String>)>;
 /// stale) or the unavailable line — a session start must never hang on
 /// a wedged server.
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Hook-triggered self-update: spawn `converge update` fully detached
+/// and return immediately — a hook must never wait on a download. At
+/// most one attempt per day (stamp file), only when the skew check says
+/// the server is ahead, and `[update] auto = false` opts out. The swap
+/// is safe under running sessions (old inode keeps serving them); the
+/// next session notices the version change and says so.
+fn maybe_self_update() {
+    if !Config::load().map(|c| c.auto_update).unwrap_or(true) {
+        return;
+    }
+    let Some(stamp) = cache_file("update-attempt") else {
+        return;
+    };
+    let fresh = std::fs::metadata(&stamp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < std::time::Duration::from_secs(24 * 3600));
+    if fresh {
+        return;
+    }
+    let _ = stamp.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(&stamp, "");
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    use std::process::Stdio;
+    let mut update = Command::new(exe);
+    update
+        .arg("update")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group: the update outlives the hook and the session.
+        update.process_group(0);
+    }
+    let _ = update.spawn();
+}
+
+/// One-time notice after a version change (auto or manual update): the
+/// previous inject's binary version is stamped; a mismatch means the
+/// binary changed underneath the user since last session start.
+fn version_notice() -> Option<String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let stamp = cache_file("last-version")?;
+    let previous = std::fs::read_to_string(&stamp).unwrap_or_default();
+    let _ = stamp.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(&stamp, current);
+    (!previous.is_empty() && previous != current)
+        .then(|| format!("self-updated v{previous} → v{current}"))
+}
+
+fn cache_file(name: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".converge/cache").join(name))
+}
 
 /// Last-good index cache: the successful block, one file per project.
 /// Served only on fetch failure, and always labelled with its age —
@@ -211,6 +275,11 @@ async fn bound(project: ProjectId) -> (String, String) {
         Some(client) if fetched.is_ok() => crate::skew::check_cached(&client).await,
         _ => None,
     };
+    // Skew present = the server is ahead of this binary: the one moment
+    // auto-update has something to do. Fire-and-forget, at most daily.
+    if skew.is_some() {
+        maybe_self_update();
+    }
     let (block, system) = match fetched {
         Ok(None) => {
             // The server disowned the project; a lingering cached index

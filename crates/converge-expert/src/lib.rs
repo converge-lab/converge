@@ -170,9 +170,12 @@ impl Client {
 
     /// One-shot **schema-constrained** exchange: the reply must be a JSON
     /// document matching `schema` (enforced provider-side via structured
-    /// output, verified here by parsing). Deterministic by construction —
-    /// temperature 0. Providers that can't enforce a schema surface a
-    /// call-time error, which `expert check` on the bound job exposes.
+    /// output, verified here by parsing). No temperature override: the
+    /// schema does the shaping, and Claude 5 models *reject* the
+    /// parameter outright ("`temperature` is deprecated for this
+    /// model") — hard-coding 0 made every extraction 400 against them.
+    /// Providers that can't enforce a schema surface a call-time error,
+    /// which `expert check` on the bound job exposes.
     pub async fn extract(
         &self,
         system: &str,
@@ -184,7 +187,6 @@ impl Client {
         let options = self
             .options
             .clone()
-            .with_temperature(0.0)
             .with_response_format(ChatResponseFormat::JsonSpec(JsonSpec::new(name, schema)));
         let response = tokio::time::timeout(
             self.timeout,

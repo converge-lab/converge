@@ -140,8 +140,10 @@ async fn detection_writes_stamped_signals_once() {
     assert_eq!(signal["status"], "proposed");
     assert_eq!(signal["produced_by"]["agent"], json!(agent.to_string()));
 
-    // What the model saw: cross-project candidates only — the decoy
-    // shares the subject's project and must have been filtered out.
+    // What the model saw: candidates from the whole group, the
+    // subject's own project included — several people share a project,
+    // so a same-project decision is as real a collision target as a
+    // cross-project one. Only the subject itself is excluded.
     {
         let seen = seen.lock().await;
         assert_eq!(seen.len(), 1);
@@ -150,8 +152,16 @@ async fn detection_writes_stamped_signals_once() {
         let candidates = request["candidates"].as_array().unwrap();
         assert!(!candidates.is_empty());
         assert!(
-            candidates.iter().all(|c| c["project"] == "server"),
-            "same-project decoy {decoy} leaked into the candidates: {candidates:?}"
+            candidates
+                .iter()
+                .any(|c| c["id"] == json!(decoy.to_string())),
+            "the same-project decoy {decoy} belongs in the candidates: {candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c["id"] != json!(subject.to_string())),
+            "the subject itself must not be a candidate"
         );
         // Cache layout: the volatile subject serializes last *on the
         // wire* (the parsed Value alphabetizes keys — check the string).

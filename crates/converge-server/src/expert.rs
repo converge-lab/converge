@@ -516,23 +516,9 @@ impl<S: Storage + 'static> Expert<S> {
         subject: &Decision,
         group: GroupId,
     ) -> Result<Vec<Decision>, StoreError> {
-        let text = format!(
-            "{} {} {}",
-            subject.title,
-            subject.summary,
-            subject.context.as_deref().unwrap_or_default()
-        )
-        .to_lowercase();
-        let mut words: Vec<&str> = text
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.len() >= 3 && !STOP.contains(w))
-            .collect();
-        words.sort_unstable();
-        words.dedup();
-        if words.is_empty() {
+        let Some(query) = keywords(subject) else {
             return Ok(Vec::new());
-        }
-        let query = words.join(" or ");
+        };
         let hits = self
             .store
             .decision_search(
@@ -545,12 +531,63 @@ impl<S: Storage + 'static> Expert<S> {
                 Some((CANDIDATES * 3) as u32),
             )
             .await?;
+        // Same-project candidates stay in: several people work in one
+        // project, and one author's decision can contradict another's.
+        // The group filter above remains the ACL/coordination boundary.
         Ok(hits
             .into_iter()
-            .filter(|d| d.id != subject.id && d.project_id != subject.project_id)
+            .filter(|d| d.id != subject.id)
             .take(CANDIDATES)
             .collect())
     }
+
+    /// Deterministic near-duplicate lookup for the write path (the
+    /// delivery ADR's "prevention" mode): one ranked search inside the
+    /// subject's own project, no model call, fail-open — the write has
+    /// already succeeded; this only hands the author the collision while
+    /// they still hold the intent ("did you mean to supersede?").
+    pub async fn similar(&self, id: DecisionId) -> Vec<(DecisionId, String)> {
+        match self.try_similar(id).await {
+            Ok(hits) => hits,
+            Err(e) => {
+                debug!(%id, error = %e, "similar lookup skipped");
+                Vec::new()
+            }
+        }
+    }
+
+    async fn try_similar(&self, id: DecisionId) -> Result<Vec<(DecisionId, String)>, StoreError> {
+        let subject = self
+            .store
+            .decision_get(Scope::System, id)
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        let Some(query) = keywords(&subject) else {
+            return Ok(Vec::new());
+        };
+        let hits = self
+            .store
+            .decision_search(
+                Scope::System,
+                &query,
+                DecisionFilter {
+                    project: Some(subject.project_id),
+                    ..Default::default()
+                },
+                Some(8),
+            )
+            .await?;
+        Ok(hits
+            .into_iter()
+            .filter(|d| d.id != subject.id)
+            .take(3)
+            .map(|d| (d.id, d.title))
+            .collect())
+    }
+
+    // (retrieval helpers below; `keywords` lives at module level so the
+    // write-path `similar` and the detection `retrieve` share one notion
+    // of "the decision's own words".)
 
     /// Signals touching a decision on either end, newest first.
     async fn touching(&self, id: DecisionId) -> Result<Vec<Signal>, StoreError> {
@@ -588,6 +625,25 @@ impl<S: Storage + 'static> Expert<S> {
 }
 
 /// A decision as the ask's tier-2 record: the full ADR, plain text.
+/// The subject's own words as a ranked-search OR-query — the shared
+/// retrieval key for detection candidates and write-path similarity.
+fn keywords(subject: &Decision) -> Option<String> {
+    let text = format!(
+        "{} {} {}",
+        subject.title,
+        subject.summary,
+        subject.context.as_deref().unwrap_or_default()
+    )
+    .to_lowercase();
+    let mut words: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && !STOP.contains(w))
+        .collect();
+    words.sort_unstable();
+    words.dedup();
+    (!words.is_empty()).then(|| words.join(" or "))
+}
+
 fn render(d: &Decision) -> String {
     let mut out = format!(
         "\n### [{}] {} ({:?}, project {})\n{}\n",

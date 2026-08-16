@@ -585,7 +585,27 @@ impl<S: Storage + 'static> Memory<S> {
             .await
             .map_err(map_err)?;
         self.expert.detect(id);
-        json_result(&serde_json::json!({ "decision_id": id }))
+        // Prevention: same-project near-matches ride the tool result so
+        // the agent can raise "supersede instead?" while the author still
+        // holds the intent.
+        let similar: Vec<_> = self
+            .expert
+            .similar(id)
+            .await
+            .into_iter()
+            .map(|(id, title)| serde_json::json!({ "decision_id": id, "title": title }))
+            .collect();
+        if similar.is_empty() {
+            json_result(&serde_json::json!({ "decision_id": id }))
+        } else {
+            json_result(&serde_json::json!({
+                "decision_id": id,
+                "similar": similar,
+                "note": "existing decisions in this project overlap this one — \
+                         if it replaces one of them, `decision_edit` it with \
+                         `supersedes`; surface the overlap to the user",
+            }))
+        }
     }
 
     #[tool(description = "Get a decision by id: the full ADR, its authors, \

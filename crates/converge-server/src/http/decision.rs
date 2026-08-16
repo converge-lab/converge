@@ -34,7 +34,19 @@ async fn add<S: Storage + 'static>(
 ) -> Result<(StatusCode, Json<Value>)> {
     let id = store.decision_add(Scope::User(caller.user), new).await?;
     expert.detect(id);
-    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+    // Prevention: hand the author same-project near-matches in the write
+    // response — the one moment "did you mean to supersede?" is cheap.
+    let similar: Vec<Value> = expert
+        .similar(id)
+        .await
+        .into_iter()
+        .map(|(id, title)| json!({ "id": id, "title": title }))
+        .collect();
+    let mut body = json!({ "id": id });
+    if !similar.is_empty() {
+        body["similar"] = json!(similar);
+    }
+    Ok((StatusCode::CREATED, Json(body)))
 }
 
 /// `?q=` switches the list into ranked search: best match first, no

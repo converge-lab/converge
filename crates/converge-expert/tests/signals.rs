@@ -103,10 +103,16 @@ async fn the_job_constrains_the_wire_and_validates_the_reply() {
     assert_eq!(drafts[0].targets[0].to_string(), EXPECTED_TARGET);
     assert_eq!(drafts[0].kind, "contract_divergence");
 
-    // The request rode structured output: temperature pinned to zero and
-    // the schema on the wire, with the fixture JSON as the user turn.
+    // The request rode structured output: the schema on the wire, with
+    // the fixture JSON as the user turn — and NO temperature: Claude 5
+    // models reject the parameter ("deprecated for this model"), so
+    // sending it broke every extraction. The schema does the shaping.
     let seen = seen.lock().await.clone().unwrap();
-    assert_eq!(seen["temperature"], 0.0);
+    assert_eq!(
+        seen.get("temperature"),
+        None,
+        "temperature must stay off the wire"
+    );
     assert_eq!(
         seen["response_format"]["type"], "json_schema",
         "{}",

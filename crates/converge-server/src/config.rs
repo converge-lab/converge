@@ -129,8 +129,11 @@ pub struct Auth {
     #[serde(default)]
     pub oidc: Option<crate::oidc::Settings>,
     /// This deployment's external origin, used as the OAuth issuer for
-    /// MCP connectors. Absent → derived per-request from the `Host`
-    /// header (fine for dev; set it behind a proxy).
+    /// MCP connectors and as the one `Host` the MCP endpoint accepts
+    /// besides the localhost family. Absent → the issuer is derived
+    /// per-request from the `Host` header, and `/mcp` answers 403 to
+    /// anything but localhost (fine for dev; set it behind a proxy or
+    /// under a container name).
     #[serde(default)]
     pub public_url: Option<String>,
 }

@@ -332,7 +332,7 @@ mod api {
             consequence: s.consequence.clone().unwrap_or_default(),
             recommended: s.recommendation.clone().unwrap_or_default(),
             risk: match s.tier {
-                converge_client::Tier::Conflict => seed::Risk::WillBreak,
+                converge_client::Tier::Conflict => seed::Risk::Conflict,
                 converge_client::Tier::Coordinate => seed::Risk::Coordinate,
                 converge_client::Tier::Watch => seed::Risk::Watch,
             },

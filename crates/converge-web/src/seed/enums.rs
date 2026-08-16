@@ -1,5 +1,5 @@
 //! Wire enums. These mirror the SQL `check` constraints; serde speaks
-//! `snake_case` strings on the wire (`"will_break"`, `"accepted"`, …).
+//! `snake_case` strings on the wire (`"conflict"`, `"accepted"`, …).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,11 +31,11 @@ pub enum AgentKind {
 }
 
 /// Severity of a cross-project signal (the server's `conflict` tier
-/// renders as `WillBreak`).
+/// renders as `Conflict`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
-    WillBreak,
+    Conflict,
     Coordinate,
     Watch,
 }

@@ -77,7 +77,7 @@ impl Status {
 /// Severity of a cross-project signal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Risk {
-    WillBreak,
+    Conflict,
     Coordinate,
     Watch,
 }
@@ -85,7 +85,7 @@ pub enum Risk {
 impl Risk {
     pub fn label(self) -> &'static str {
         match self {
-            Risk::WillBreak => "Will break",
+            Risk::Conflict => "Conflict",
             Risk::Coordinate => "Coordinate",
             Risk::Watch => "Watch",
         }
@@ -93,7 +93,7 @@ impl Risk {
 
     pub fn tone(self) -> Tone {
         match self {
-            Risk::WillBreak => Tone::Danger,
+            Risk::Conflict => Tone::Danger,
             Risk::Coordinate => Tone::Signal,
             Risk::Watch => Tone::Expert,
         }

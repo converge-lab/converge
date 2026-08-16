@@ -624,7 +624,7 @@
         "text": "The new structured `status` field changes the error envelope — billing still parses error text and will break.",
         "consequence": "billing classifies success vs. failure by reading the gateway’s error *text*, then feeds that into its retry logic. api-gateway is replacing that text with a structured `status` field. The moment it ships, billing will misread every failure — retrying non-retryable errors and surfacing 500s to customers. This is the exact outage that triggered the change in the first place.",
         "recommended": "Migrate billing to read the structured `status` field before api-gateway removes text parsing. Until then, the two are on a collision course.",
-        "risk": "will_break",
+        "risk": "conflict",
         "sources": [
           "status-field",
           "status-text",

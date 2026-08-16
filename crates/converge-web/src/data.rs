@@ -161,7 +161,7 @@ fn status_of(s: crate::seed::Status) -> Status {
 fn risk_of(r: crate::seed::Risk) -> domain::Risk {
     use crate::seed::Risk as W;
     match r {
-        W::WillBreak => domain::Risk::WillBreak,
+        W::Conflict => domain::Risk::Conflict,
         W::Coordinate => domain::Risk::Coordinate,
         W::Watch => domain::Risk::Watch,
     }

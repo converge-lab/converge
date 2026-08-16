@@ -34,7 +34,7 @@ pub fn Signals(go: Callback<Route>) -> impl IntoView {
             </p>
 
             <div class="cv-row cv-gap-16 cv-wrap cv-mb-22">
-                <LegendItem tone=Tone::Danger term="Will break" desc="active conflict, fails if shipped" />
+                <LegendItem tone=Tone::Danger term="Conflict" desc="active conflict, fails if shipped" />
                 <LegendItem tone=Tone::Signal term="Coordinate" desc="needs cross-team timing" />
                 <LegendItem tone=Tone::Expert term="Watch" desc="standing dependency to monitor" />
             </div>

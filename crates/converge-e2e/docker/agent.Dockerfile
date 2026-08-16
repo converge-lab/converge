@@ -7,6 +7,18 @@
 # not depend on a package registry being reachable.
 
 ARG BASE_IMAGE
+
+# Converge's own CLI, built from the checkout: the suite exists to
+# exercise this branch's code, so it must not install a published
+# release. Kept in this image because `converge` runs where the agent
+# runs — the server keeps its own build in server.Dockerfile.
+FROM rust:1.88-bookworm AS converge-builder
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN cargo build --release -p converge-cli
+
 FROM ${BASE_IMAGE}
 
 ARG AGENT_INSTALL
@@ -28,6 +40,13 @@ RUN apt-get update \
 USER e2e
 RUN sh -c "${AGENT_INSTALL}"
 
+# Last, and as root: this binary changes with every commit, so it must
+# not sit below the agent install — otherwise every source edit re-pulls
+# the agent from its package registry.
+USER root
+COPY --from=converge-builder /src/target/release/converge /usr/local/bin/converge
+
+USER e2e
 WORKDIR /workspace
 
 CMD ["sleep", "infinity"]

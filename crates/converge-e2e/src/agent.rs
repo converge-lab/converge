@@ -48,8 +48,14 @@ impl Agent {
             .with_build_arg("BASE_IMAGE", &self.base_image)
             .with_build_arg("AGENT_INSTALL", &self.install);
 
+        // The workspace rides along so the image carries a `converge`
+        // built from this checkout. `.sqlx` stays out: the CLI's graph
+        // (converge-client → converge-storage) never reaches sqlx.
         let image = GenericBuildableImage::new(IMAGE, &self.tag)
             .with_dockerfile(workspace_root.join(DOCKERFILE))
+            .with_file(workspace_root.join("Cargo.toml"), "Cargo.toml")
+            .with_file(workspace_root.join("Cargo.lock"), "Cargo.lock")
+            .with_file(workspace_root.join("crates"), "crates")
             .build_image_with(build_options)
             .await
             .context("build the agent image")?;

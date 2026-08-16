@@ -2,7 +2,6 @@ mod commands;
 
 use anyhow::{Context, Result};
 use converge_e2e::agent::Agent;
-use converge_e2e::command::Outcome;
 use converge_e2e::model::{Model, Reply};
 use converge_e2e::server::{self, Database, Server};
 use converge_e2e::world::TestWorld;
@@ -21,14 +20,8 @@ async fn the_happy_path() -> Result<()> {
     let claude = world.run(&commands::claude::version()).await?;
     assert!(claude.succeeded());
 
-    let before = world.run(&commands::converge::version()).await?;
-    assert_eq!(before.outcome, Outcome::NotFound);
-
-    let install = world.run(&commands::converge::install()).await?;
-    assert!(install.succeeded());
-
-    let after = world.run(&commands::converge::version()).await?;
-    assert!(after.succeeded());
+    let converge = world.run(&commands::converge::version()).await?;
+    assert!(converge.succeeded(), "{converge:?}");
 
     let server = world
         .server()

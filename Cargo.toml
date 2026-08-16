@@ -133,6 +133,9 @@ time = { version = "0.3", features = ["serde-well-known"] }
 # Dev / test infra
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 http-body-util = "0.1"
+# Container logs arrive with the agent's ANSI colouring still in them; the
+# e2e harness strips it before asserting on the text.
+anstream = "1"
 
 [profile.release]
 lto = "thin"

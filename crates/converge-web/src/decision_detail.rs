@@ -15,6 +15,12 @@ use leptos::prelude::*;
 
 #[component]
 pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
+    // Edges + sources hydrate lazily on open (boot skips per-decision
+    // projections). The patch write re-creates this screen once with the
+    // full data; the no-change guard in `hydrate_local` stops it there.
+    #[cfg(feature = "api")]
+    crate::store::hydrate_decision(crate::store::use_store(), id.clone());
+
     let Some(d) = data::by_id(&id) else {
         return view! {
             <div class="cv-back" on:click=move |_| go.run(Route::Dashboard)>

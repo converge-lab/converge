@@ -143,14 +143,14 @@ pub fn provide_default_store() -> AppStore {
 /// features are visibly seed-scoped in exactly one place.
 #[cfg(feature = "api")]
 pub use api::client;
+#[cfg(feature = "api")]
+pub use api::hydrate_decision;
 
 #[cfg(feature = "api")]
 mod api {
     use super::{DataSource, LoadError, Loading, build_dataset};
     use crate::seed::{self, wire};
-    use converge_client::{
-        Client, DecisionFilter, Pagination, ProjectFilter, SignalFilter, StoreError,
-    };
+    use converge_client::{Client, DecisionFilter, ProjectFilter, SignalFilter, StoreError};
     use converge_ui::domain::initials;
     use leptos::prelude::window;
     use std::collections::HashMap;
@@ -168,6 +168,51 @@ mod api {
         pub fn same_origin() -> Self {
             Self { client: client() }
         }
+    }
+
+    /// Lazily hydrate one decision's projections (graph edges + cited
+    /// sources) and patch them into the store. Called by the detail
+    /// screen on open — so boot never pays per-decision round trips, and
+    /// the detail view is as fresh as its last open, not as stale as
+    /// boot. Fail-open: any fetch error leaves the dataset untouched.
+    /// `data::hydrate_local` returns `None` on no-change, which breaks
+    /// the write→screen-recreate→hydrate cycle.
+    pub fn hydrate_decision(store: super::AppStore, id: String) {
+        use converge_client::DecisionId;
+        use leptos::prelude::{GetUntracked, Set};
+
+        use super::AppStateStoreFields;
+        let Ok(did) = id.parse::<DecisionId>() else {
+            return;
+        };
+        leptos::task::spawn_local(async move {
+            let client = client();
+            let (edges, cited) =
+                futures::join!(client.decision_edges(did), client.decision_sources(did));
+            let (Ok(Some(edges)), Ok(cited)) = (edges, cited) else {
+                return;
+            };
+            let cited = cited.unwrap_or_default();
+            let related = |r: &converge_client::Related| crate::data::Related {
+                id: r.id.to_string(),
+                why: r.why.clone(),
+            };
+            let Some(dataset) = store.dataset().get_untracked() else {
+                return;
+            };
+            let patched = crate::data::hydrate_local(
+                &dataset,
+                &id,
+                edges.supersedes.iter().map(|i| i.to_string()).collect(),
+                edges.superseded_by.iter().map(|i| i.to_string()).collect(),
+                edges.related_to.iter().map(related).collect(),
+                edges.related_by.iter().map(related).collect(),
+                cited.iter().map(source).collect(),
+            );
+            if let Some(next) = patched {
+                store.dataset().set(Some(std::rc::Rc::new(next)));
+            }
+        });
     }
 
     /// A same-origin client. Session-cookie auth rides the browser's fetch
@@ -190,32 +235,31 @@ mod api {
             let client = self.client.clone();
             Box::pin(async move {
                 // Unpaginated boot loads: without `limit` the server returns
-                // everything — fine at v1 scale, cursor-walking later.
-                let me = client.me().await.map_err(oops("load identity"))?;
-                let groups = client
-                    .group_list(&Pagination::default())
-                    .await
-                    .map_err(oops("load groups"))?;
-                let projects = client
-                    .project_list(&ProjectFilter::default(), &Pagination::default())
-                    .await
-                    .map_err(oops("load projects"))?;
-                let users = client
-                    .user_list(&Pagination::default())
-                    .await
-                    .map_err(oops("load users"))?;
-                let agents = client
-                    .agent_list(&Pagination::default())
-                    .await
-                    .map_err(oops("load agents"))?;
-                let decisions = client
-                    .decision_list(&DecisionFilter::default(), &Pagination::default())
-                    .await
-                    .map_err(oops("load decisions"))?;
-                let signals = client
-                    .signal_list(&SignalFilter::default(), &Pagination::default())
-                    .await
-                    .map_err(oops("load signals"))?;
+                // everything — fine at v1 scale, cursor-walking later. All
+                // seven fetched concurrently: boot is one burst, not a
+                // seven-round-trip waterfall.
+                // Pagination is typed per resource id, so each call gets its
+                // own default binding (join!'s temporaries can't borrow).
+                let (g_page, p_page, u_page, a_page, d_page, s_page) = Default::default();
+                let no_projects = ProjectFilter::default();
+                let no_decisions = DecisionFilter::default();
+                let no_signals = SignalFilter::default();
+                let (me, groups, projects, users, agents, decisions, signals) = futures::join!(
+                    client.me(),
+                    client.group_list(&g_page),
+                    client.project_list(&no_projects, &p_page),
+                    client.user_list(&u_page),
+                    client.agent_list(&a_page),
+                    client.decision_list(&no_decisions, &d_page),
+                    client.signal_list(&no_signals, &s_page),
+                );
+                let me = me.map_err(oops("load identity"))?;
+                let groups = groups.map_err(oops("load groups"))?;
+                let projects = projects.map_err(oops("load projects"))?;
+                let users = users.map_err(oops("load users"))?;
+                let agents = agents.map_err(oops("load agents"))?;
+                let decisions = decisions.map_err(oops("load decisions"))?;
+                let signals = signals.map_err(oops("load signals"))?;
 
                 // Remaining residue from the fixture seed (unread, extras,
                 // expert context — the acks slice's territory). Its ids
@@ -225,38 +269,18 @@ mod api {
                 let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
                 let mock = seed::assemble(&seed);
 
-                // The read-model wants each decision's one-hop edges and its
-                // cited sources; the API serves both as per-decision
-                // projections. Sequential is fine at boot-load scale. Real
-                // sources ride the extras map (fixture ids can't collide
-                // with real ULIDs), flowing through the one seed→read-model
-                // conversion the embedded build uses too.
-                let mut wired = Vec::with_capacity(decisions.items.len());
-                let mut extras = mock.decision_extras;
-                for d in &decisions.items {
-                    let edges = client
-                        .decision_edges(d.id)
-                        .await
-                        .map_err(oops("load edges"))?
-                        .unwrap_or_default();
-                    wired.push(decision(d, &edges));
-                    let cited = client
-                        .decision_sources(d.id)
-                        .await
-                        .map_err(oops("load sources"))?
-                        .unwrap_or_default();
-                    if !cited.is_empty() {
-                        extras.insert(
-                            d.id.to_string(),
-                            wire::mock::Extras {
-                                description: None,
-                                session: None,
-                                tags: Vec::new(),
-                                sources: cited.iter().map(source).collect(),
-                            },
-                        );
-                    }
-                }
+                // Edges and cited sources are per-decision projections the
+                // API serves separately — fetching them here made boot cost
+                // 2×decisions round trips (the corpus outgrew the "fine at
+                // v1 scale" assumption). They hydrate lazily instead: the
+                // detail screen fetches both on open (`hydrate_decision`),
+                // which also means detail views are fresh, not boot-stale.
+                let wired: Vec<_> = decisions
+                    .items
+                    .iter()
+                    .map(|d| decision(d, &Default::default()))
+                    .collect();
+                let extras = mock.decision_extras;
 
                 let assembled = seed::Assembled {
                     groups: groups

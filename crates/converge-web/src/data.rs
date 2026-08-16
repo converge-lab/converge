@@ -25,6 +25,7 @@ use std::rc::Rc;
 // ---- internal dataset types ----------------------------------------------
 
 /// One line of an anchored source conversation.
+#[derive(Clone)]
 pub struct Line {
     pub speaker: String,
     pub text: String,
@@ -32,6 +33,7 @@ pub struct Line {
 }
 
 /// Anchored evidence a decision was derived from.
+#[derive(Clone)]
 pub struct Src {
     pub kind: domain::SourceKind,
     pub label: String,
@@ -40,12 +42,14 @@ pub struct Src {
 }
 
 /// A rejected alternative + why it lost.
+#[derive(Clone)]
 pub struct Alt {
     pub option: String,
     pub why_rejected: String,
 }
 
 /// A related-decision reference (either direction) with the reason.
+#[derive(Clone)]
 pub struct Related {
     pub id: String,
     pub why: Option<String>,
@@ -53,6 +57,7 @@ pub struct Related {
 
 /// A decision, fully resolved for rendering: domain enums, authors with tints,
 /// extras (description/session/tags/sources) merged in.
+#[derive(Clone)]
 pub struct Dec {
     pub id: String,
     pub project_id: String,
@@ -146,6 +151,64 @@ pub struct Dataset {
 }
 
 // ---- wire → domain conversion ---------------------------------------------
+
+fn src_of(s: wire::mock::Source) -> Src {
+    Src {
+        kind: source_kind_of(s.kind),
+        label: s.label,
+        when: s.when,
+        lines: s
+            .lines
+            .into_iter()
+            .map(|l| Line {
+                speaker: l.speaker,
+                text: l.text,
+                hl: l.hl,
+            })
+            .collect(),
+    }
+}
+
+/// Patch one decision's lazily-fetched projections (graph edges +
+/// cited sources) into a copy of the dataset. `None` = nothing changed;
+/// callers must not write an unchanged dataset back — a dataset write
+/// re-creates the active screen, and hydrate-on-mount would loop.
+#[cfg_attr(not(feature = "api"), allow(dead_code))]
+pub fn hydrate_local(
+    ds: &Dataset,
+    id: &str,
+    supersedes: Vec<String>,
+    superseded_by: Vec<String>,
+    related_to: Vec<Related>,
+    related_by: Vec<Related>,
+    sources: Vec<wire::mock::Source>,
+) -> Option<Dataset> {
+    let pos = ds.decisions.iter().position(|d| d.id == id)?;
+    let old = &ds.decisions[pos];
+    let sources: Vec<Src> = sources.into_iter().map(src_of).collect();
+    // Convergence guard, not equality: id-lists and counts cover every
+    // change hydration can deliver.
+    let same = old.supersedes == supersedes
+        && old.superseded_by == superseded_by
+        && old.related_to.len() == related_to.len()
+        && old.related_by.len() == related_by.len()
+        && old.sources.len() == sources.len();
+    if same {
+        return None;
+    }
+    let mut dec = (**old).clone();
+    dec.supersedes = supersedes;
+    dec.superseded_by = superseded_by;
+    dec.related_to = related_to;
+    dec.related_by = related_by;
+    dec.sources = sources;
+    let mut decisions = ds.decisions.clone();
+    decisions[pos] = Rc::new(dec);
+    Some(Dataset {
+        decisions,
+        ..ds.clone()
+    })
+}
 
 fn status_of(s: crate::seed::Status) -> Status {
     use crate::seed::Status as W;
@@ -278,24 +341,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                 supersedes: d.supersedes.clone(),
                 superseded_by: d.superseded_by.clone(),
                 session: ex.session.unwrap_or_default(),
-                sources: ex
-                    .sources
-                    .into_iter()
-                    .map(|s| Src {
-                        kind: source_kind_of(s.kind),
-                        label: s.label,
-                        when: s.when,
-                        lines: s
-                            .lines
-                            .into_iter()
-                            .map(|l| Line {
-                                speaker: l.speaker,
-                                text: l.text,
-                                hl: l.hl,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
+                sources: ex.sources.into_iter().map(src_of).collect(),
             })
         })
         .collect();

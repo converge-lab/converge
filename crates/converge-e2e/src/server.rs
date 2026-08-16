@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::core::WaitFor;
 use testcontainers_modules::testcontainers::runners::{AsyncBuilder, AsyncRunner};
@@ -8,16 +8,16 @@ use testcontainers_modules::testcontainers::{
     ContainerAsync, GenericBuildableImage, GenericImage, ImageExt,
 };
 
+use crate::command;
 use crate::logs::ContainerLog;
 
 const IMAGE: &str = "converge-e2e-server";
 const DOCKERFILE: &str = "crates/converge-e2e/docker/server.Dockerfile";
 const PORT: u16 = 8080;
 
-const DATABASE_IMAGE: &str = "converge-e2e-database";
-const DATABASE_DOCKERFILE: &str = "crates/converge-e2e/docker/database.Dockerfile";
-
-pub const TOKEN: &str = "cvg_0000000000000000000000000000000000000000000000000000000000000e2e";
+/// Pinned rather than left to the testcontainers module's default, which
+/// trails several majors behind what Converge deploys against.
+const DATABASE_TAG: &str = "16-bookworm";
 
 pub struct Server {
     database: Database,
@@ -47,10 +47,7 @@ impl Server {
         database_name: &str,
         server_name: &str,
     ) -> Result<RunningServer> {
-        let database = self
-            .database
-            .start(workspace_root, network, database_name)
-            .await?;
+        let database = self.database.start(network, database_name).await?;
 
         let image = GenericBuildableImage::new(IMAGE, "latest")
             .with_dockerfile(workspace_root.join(DOCKERFILE))
@@ -76,14 +73,41 @@ impl Server {
             .await
             .context("start the Converge server container")?;
 
+        // Through the supported path rather than a SQL fixture: `token
+        // mint` owns the hashing scheme, creates the deployment user if
+        // it is absent, and is itself the thing under test.
+        let minted = command::exec(
+            &server,
+            &[
+                "converge-server".to_owned(),
+                "token".to_owned(),
+                "mint".to_owned(),
+                "e2e".to_owned(),
+            ],
+            "converge-server token mint",
+        )
+        .await?;
+        if !minted.succeeded() {
+            bail!("could not mint the e2e token: {minted:?}");
+        }
+        let token = minted.stdout.trim().to_owned();
+        if !token.starts_with("cvg_") {
+            bail!("`token mint` did not print a secret: {minted:?}");
+        }
+
         Ok(RunningServer {
             server,
             database,
             url,
+            token,
         })
     }
 }
 
+/// A stock Postgres. Nothing is baked into it: the server migrates on
+/// every boot (`converge-server`'s `store.migrate()`), so a purpose-built
+/// image would only add a second migration tool to keep in step with the
+/// one the workspace already compiles against.
 #[derive(Default)]
 pub struct Database;
 
@@ -92,29 +116,9 @@ impl Database {
         format!("postgres://postgres:postgres@{name}:5432/postgres")
     }
 
-    async fn start(
-        &self,
-        workspace_root: &Path,
-        network: &str,
-        name: &str,
-    ) -> Result<ContainerAsync<Postgres>> {
-        let _built = GenericBuildableImage::new(DATABASE_IMAGE, "latest")
-            .with_dockerfile(workspace_root.join(DATABASE_DOCKERFILE))
-            .with_file(
-                workspace_root.join("crates/converge-storage-postgres/migrations"),
-                "crates/converge-storage-postgres/migrations",
-            )
-            .with_file(
-                workspace_root.join("crates/converge-e2e/docker"),
-                "crates/converge-e2e/docker",
-            )
-            .build_image()
-            .await
-            .context("build the database image")?;
-
+    async fn start(&self, network: &str, name: &str) -> Result<ContainerAsync<Postgres>> {
         Postgres::default()
-            .with_name(DATABASE_IMAGE)
-            .with_tag("latest")
+            .with_tag(DATABASE_TAG)
             .with_container_name(name.to_owned())
             .with_network(network.to_owned())
             .start()
@@ -127,11 +131,17 @@ pub struct RunningServer {
     server: ContainerAsync<GenericImage>,
     database: ContainerAsync<Postgres>,
     url: String,
+    token: String,
 }
 
 impl RunningServer {
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// A bearer minted by this deployment, for the deployment user.
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     pub(crate) async fn logs(&self) -> Result<(ContainerLog, ContainerLog)> {

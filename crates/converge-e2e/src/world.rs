@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand};
 use testcontainers_modules::testcontainers::{ContainerAsync, GenericImage};
 use uuid::Uuid;
 
 use crate::agent::Agent;
-use crate::command::{Command, CommandResult};
+use crate::command::{self, Command, CommandResult};
 use crate::logs::ContainerLog;
 use crate::model::{Model, RunningModel};
 use crate::server::{RunningServer, Server};
@@ -90,32 +89,7 @@ impl RunningWorld {
     }
 
     pub async fn run(&self, command: &Command) -> Result<CommandResult> {
-        let what = command.program();
-        let argv = command.argv();
-
-        let mut result = self
-            .agent
-            .exec(
-                ExecCommand::new(argv.iter().map(String::as_str))
-                    .with_cmd_ready_condition(CmdWaitFor::exit()),
-            )
-            .await
-            .with_context(|| format!("execute in the agent: {what}"))?;
-
-        let exit_code = result
-            .exit_code()
-            .await
-            .with_context(|| format!("read the exit code of {what}"))?
-            .with_context(|| format!("{what} never exited"))?;
-
-        let stdout = read(result.stdout_to_vec().await, what, "stdout")?;
-        let stderr = read(result.stderr_to_vec().await, what, "stderr")?;
-
-        Ok(CommandResult {
-            outcome: exit_code.into(),
-            stdout,
-            stderr,
-        })
+        command::exec(&self.agent, &command.argv(), command.program()).await
     }
 
     pub async fn stop(self) -> Result<WorldLogs> {
@@ -150,15 +124,6 @@ pub struct WorldLogs {
     pub agent: ContainerLog,
     pub server: Option<ContainerLog>,
     pub database: Option<ContainerLog>,
-}
-
-fn read(
-    bytes: Result<Vec<u8>, impl std::error::Error + Send + Sync + 'static>,
-    what: &str,
-    stream: &str,
-) -> Result<String> {
-    let bytes = bytes.with_context(|| format!("read the {stream} of {what}"))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn workspace_root() -> Result<PathBuf> {

@@ -3,7 +3,7 @@ mod commands;
 use anyhow::{Context, Result};
 use converge_e2e::agent::Agent;
 use converge_e2e::model::{Model, Reply};
-use converge_e2e::server::{self, Database, Server};
+use converge_e2e::server::{Database, Server};
 use converge_e2e::world::TestWorld;
 use serde_json::Value;
 
@@ -27,7 +27,7 @@ async fn the_happy_path() -> Result<()> {
         .server()
         .context("the world was built with a server")?;
     let init = world
-        .run(&commands::converge::init(server.url(), server::TOKEN))
+        .run(&commands::converge::init(server.url(), server.token()))
         .await?;
     assert!(init.succeeded());
 

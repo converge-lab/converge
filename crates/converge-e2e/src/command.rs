@@ -1,5 +1,50 @@
 use std::fmt;
 
+use anyhow::{Context, Result};
+use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand};
+use testcontainers_modules::testcontainers::{ContainerAsync, Image};
+
+/// Run `argv` to completion inside a container and collect what it said.
+/// Shared by the agent (where scenarios run) and the server (where the
+/// harness mints its own credentials).
+pub(crate) async fn exec<I: Image>(
+    container: &ContainerAsync<I>,
+    argv: &[String],
+    what: &str,
+) -> Result<CommandResult> {
+    let mut result = container
+        .exec(
+            ExecCommand::new(argv.iter().map(String::as_str))
+                .with_cmd_ready_condition(CmdWaitFor::exit()),
+        )
+        .await
+        .with_context(|| format!("execute in a container: {what}"))?;
+
+    let exit_code = result
+        .exit_code()
+        .await
+        .with_context(|| format!("read the exit code of {what}"))?
+        .with_context(|| format!("{what} never exited"))?;
+
+    let stdout = read(result.stdout_to_vec().await, what, "stdout")?;
+    let stderr = read(result.stderr_to_vec().await, what, "stderr")?;
+
+    Ok(CommandResult {
+        outcome: exit_code.into(),
+        stdout,
+        stderr,
+    })
+}
+
+fn read(
+    bytes: Result<Vec<u8>, impl std::error::Error + Send + Sync + 'static>,
+    what: &str,
+    stream: &str,
+) -> Result<String> {
+    let bytes = bytes.with_context(|| format!("read the {stream} of {what}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub enum Command {
     Run(Vec<String>),
     Pipe {

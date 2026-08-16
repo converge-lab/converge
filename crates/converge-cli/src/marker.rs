@@ -44,7 +44,11 @@ struct Marker {
 pub fn find(start: &Path) -> Result<State> {
     for dir in start.ancestors() {
         let path = dir.join(FILE);
-        if !path.exists() {
+        // A *file* named `.converge` — the walk reaches $HOME, where the
+        // CLI's own install directory `~/.converge` shares the name; a
+        // bare exists() check made every unbound repo under $HOME report
+        // an unreadable marker.
+        if !path.is_file() {
             continue;
         }
         let text =
@@ -153,6 +157,16 @@ mod tests {
         std::fs::write(root.join("a/b").join(FILE), "# empty\n").unwrap();
         assert!(find(&nested).is_err());
 
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_directory_named_dot_converge_is_not_a_marker() {
+        // $HOME carries the CLI's own install dir `~/.converge`; the
+        // ancestor walk must skip it, not report an unreadable marker.
+        let root = temp();
+        std::fs::create_dir_all(root.join(FILE).join("bin")).unwrap();
+        assert!(matches!(find(&root.join("a/b")).unwrap(), State::Unbound));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

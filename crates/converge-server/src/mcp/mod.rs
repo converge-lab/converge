@@ -25,9 +25,10 @@ use std::sync::Arc;
 
 use axum::http::request::Parts;
 use converge_storage::{
-    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, MessageId, NewAgent,
-    NewDecision, NewMessage, NewProject, NewSession, Pagination, ProjectId, Scope, SessionId,
-    SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier, UserId,
+    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, GroupKind, MessageId,
+    NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination, ProjectId,
+    Scope, SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
+    UserId,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -222,6 +223,18 @@ pub struct MessageIn {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct GroupAdd {
+    /// Group name (display; not unique).
+    pub name: String,
+    /// `shared` (invite members later) or `personal` (only you).
+    /// REQUIRED in effect: ask the user — the kind decides who can ever
+    /// see the projects inside.
+    pub kind: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectMatch {
     /// Working directory of the session (a client-side hook injects it;
     /// omit when unknown).
@@ -380,7 +393,66 @@ impl<S: Storage + 'static> Memory<S> {
             .collect();
         candidates.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         let candidates: Vec<_> = candidates.into_iter().map(|(_, c)| c).collect();
-        json_result(&serde_json::json!({ "hints": hints, "candidates": candidates }))
+        // Groups ride along so the create path can offer a placement
+        // choice without another call — placing a project decides who
+        // sees it, and the same project name can exist in several groups.
+        let groups: Vec<_> = groups
+            .iter()
+            .map(|g| {
+                serde_json::json!({
+                    "group_id": g.id,
+                    "name": g.name,
+                    "kind": format!("{:?}", g.kind).to_lowercase(),
+                })
+            })
+            .collect();
+        json_result(&serde_json::json!({
+            "hints": hints,
+            "candidates": candidates,
+            "groups": groups,
+        }))
+    }
+
+    #[tool(description = "Create a group — the visibility boundary projects \
+        live in (members of a group see everything inside it). kind: \
+        `shared` (others can be invited) or `personal` (only you) — ask \
+        the user, never assume. Answers {group_id, name}; pass the id as \
+        `group_id` to `project_bind` when creating a project in it.")]
+    async fn group_add(
+        &self,
+        Parameters(req): Parameters<GroupAdd>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let scope = self.scope(&context)?;
+        let kind = match req.kind.as_str() {
+            "shared" => GroupKind::Shared,
+            "personal" => GroupKind::Personal,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("invalid kind: {other} (shared | personal)"),
+                    None,
+                ));
+            }
+        };
+        let Scope::User(user) = scope else {
+            return Err(McpError::invalid_params(
+                "group creation needs an authenticated user caller",
+                None,
+            ));
+        };
+        let id = self
+            .store
+            .group_add(
+                user,
+                NewGroup {
+                    name: req.name.clone(),
+                    description: req.description,
+                    kind,
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        json_result(&serde_json::json!({ "group_id": id, "name": req.name }))
     }
 
     #[tool(description = "Link the working tree to a converge project: pass \
@@ -410,16 +482,27 @@ impl<S: Storage + 'static> Memory<S> {
                     .group_list(scope, Pagination::default())
                     .await
                     .map_err(map_err)?;
-                let group = match (req.group_id.as_deref(), groups.len()) {
+                // Group placement is a visibility decision (membership IS
+                // visibility), so it defaults silently only when that's
+                // harmless: a sole *personal* group. A shared group is
+                // never a silent target — the parallax lesson: a solo
+                // project auto-placed into the one (shared) group became
+                // visible to every member without anyone choosing that.
+                let group = match (req.group_id.as_deref(), groups.as_slice()) {
                     (Some(gid), _) => parse_id::<GroupId>(gid, "group_id")?,
-                    (None, 1) => groups[0].id,
+                    (None, [only]) if only.kind == GroupKind::Personal => only.id,
                     (None, _) => {
                         let list: Vec<String> = groups
                             .iter()
-                            .map(|g| format!("{} = {}", g.name, g.id))
+                            .map(|g| format!("{} ({:?}) = {}", g.name, g.kind, g.id))
                             .collect();
                         return Err(McpError::invalid_params(
-                            format!("several groups exist; pass group_id ({})", list.join(", ")),
+                            format!(
+                                "pass group_id — placing a project decides who can \
+                                 see it. Existing: {}; or `group_add` a new one and \
+                                 ask the user which they want",
+                                list.join(", ")
+                            ),
                             None,
                         ));
                     }

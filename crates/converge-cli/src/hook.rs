@@ -107,11 +107,18 @@ this working tree is linked to a converge project.\n\n\
 2. If the response carries an outcome (`project_id` or `disable: \
 true`), the server already asked the user and a hook writes the marker \
 — you are done; do NOT render your own menu.\n\
-3. If it carries `candidates`: present them via `AskUserQuestion` (one \
-per candidate + a 'Disable Converge for this repo' option; tell the \
-user the built-in 'Type something' is MANUAL MAPPING — an existing id \
-links, a new name creates), then `project_bind` with the pick, or \
-`project_dismiss` scope='repo' to disable.\n\n\
+3. If it carries `candidates`: present them via `AskUserQuestion`. \
+Label every candidate `name (group)` — the same project name can \
+exist in several groups, and the group is what decides who sees the \
+memory. One option per candidate + a 'Disable Converge for this repo' \
+option; tell the user the built-in 'Type something' is MANUAL MAPPING \
+— an existing id links, a new name creates. Then `project_bind` with \
+the pick, or `project_dismiss` scope='repo' to disable.\n\
+4. When the user chooses to CREATE a project, you must also settle \
+WHERE: ask which group from the response's `groups` (label `name \
+(kind)`) — or offer a new group via `group_add` (ask shared vs \
+personal). Placing a project decides who can see it; never assume a \
+group, even when only one exists.\n\n\
 Do NOT write `.converge` yourself — the hooks do it. Start with step 1 \
 right away.";
 

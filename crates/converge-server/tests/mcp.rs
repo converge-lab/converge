@@ -74,6 +74,7 @@ async fn tool_round_trip() {
             "decision_get",
             "decision_list",
             "decision_search",
+            "group_add",
             "message_add",
             "project_bind",
             "project_dismiss",
@@ -326,9 +327,35 @@ async fn mapping_round_trip() {
     .await;
     assert_eq!(bound["name"], "billing");
 
-    // Create-by-name: the harness has exactly one group, so it is
-    // auto-picked without a group_id.
-    let created = call(&app, "project_bind", json!({ "name": "fresh" })).await;
+    // The groups ride along so the create path can offer placement
+    // without another call.
+    let groups = suggested["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["name"], "g");
+    assert_eq!(groups[0]["kind"], "shared");
+
+    // Create-by-name with a sole *shared* group refuses without an
+    // explicit group_id: placement decides who sees the project, so a
+    // shared group is never a silent target.
+    let refused = rpc(
+        &app,
+        "tools/call",
+        json!({ "name": "project_bind", "arguments": { "name": "fresh" } }),
+    )
+    .await;
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("group_id"),
+        "{refused}"
+    );
+    let created = call(
+        &app,
+        "project_bind",
+        json!({ "name": "fresh", "group_id": group["id"] }),
+    )
+    .await;
     assert!(created["project_id"].is_string());
     assert_eq!(created["name"], "fresh");
 

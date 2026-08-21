@@ -41,15 +41,19 @@ jobs:
 
   e2e:
     # Real Converge and agent CLIs run only inside disposable containers.
+    # Every suite builds its own images — a release build of the server and
+    # sqlx-cli from source among them — so the budget is generous.
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Claude Code installation E2E
-        run: cargo test -p converge-e2e --test claude_installation -- --test-threads=1
+      - name: End-to-end suites
+        # One test at a time: each stands up its own container set, and a
+        # runner cannot carry several of them at once.
+        run: cargo test -p converge-e2e --all-features -- --test-threads=1
 
   sqlx:
     # A stale query cache compiles fine offline but lies about the schema —

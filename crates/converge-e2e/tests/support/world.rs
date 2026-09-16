@@ -95,7 +95,6 @@ impl RunningServer {
 }
 
 pub struct TestWorld<A> {
-    // Drop the server before the agent whose network namespace it uses.
     server: Option<RunningServer>,
     agent_container: ContainerAsync<GenericImage>,
     _agent: A,
@@ -187,8 +186,8 @@ impl<A: Agent> TestWorldBuilder<A> {
         let agent_container = image
             .clone()
             .with_cmd(["sleep", "infinity"])
-            .with_container_name(agent_name.clone())
-            .with_network(network)
+            .with_container_name(agent_name)
+            .with_network(network.clone())
             .start()
             .await
             .context("start the E2E agent container")?;
@@ -197,11 +196,18 @@ impl<A: Agent> TestWorldBuilder<A> {
             (Some(server), Some(postgres_container)) => {
                 let database_url =
                     format!("postgres://postgres:postgres@{postgres_name}:5432/postgres");
+                let url = format!("http://{server_name}:8080");
+                // Server and agent are peers on the shared network, and the
+                // agent addresses the server by container name. Docker's
+                // `container:<name>` network mode would let the agent reach it
+                // on localhost instead, but testcontainers passes whatever
+                // `with_network` gets to `Network::new`, which *creates* it —
+                // and Docker refuses to create a reserved `container:…` name.
                 let mut request = image
                     .with_wait_for(WaitFor::message_on_stdout("converge-server listening"))
                     .with_cmd(["converge-server"])
                     .with_container_name(server_name)
-                    .with_network(format!("container:{agent_name}"))
+                    .with_network(network.clone())
                     .with_env_var("CONVERGE_DATABASE_URL", database_url)
                     .with_env_var("CONVERGE_LISTEN", "0.0.0.0:8080")
                     .with_env_var("CONVERGE_USER__HANDLE", &server.user_handle)
@@ -210,9 +216,15 @@ impl<A: Agent> TestWorldBuilder<A> {
                 if let Some(filter) = &server.log_filter {
                     request = request.with_env_var("CONVERGE_LOG__FILTER", filter);
                 }
-                if let Some(public_url) = &server.public_url {
-                    request = request.with_env_var("CONVERGE_AUTH__PUBLIC_URL", public_url);
-                }
+                // rmcp's DNS-rebinding guard allows the localhost family plus
+                // whatever `auth.public_url` names. Reached by container name,
+                // the server has to be told that name or every MCP request
+                // 403s on the Host header — which is what a real deployment
+                // behind a public name does too. A test may still override it.
+                request = request.with_env_var(
+                    "CONVERGE_AUTH__PUBLIC_URL",
+                    server.public_url.clone().unwrap_or_else(|| url.clone()),
+                );
                 if let Some(session_secret) = &server.session_secret {
                     request = request.with_env_var("CONVERGE_AUTH__SESSION_SECRET", session_secret);
                 }
@@ -245,7 +257,7 @@ impl<A: Agent> TestWorldBuilder<A> {
                 Some(RunningServer {
                     _server_container: server_container,
                     _postgres_container: postgres_container,
-                    url: "http://localhost:8080".to_owned(),
+                    url,
                     token,
                 })
             }

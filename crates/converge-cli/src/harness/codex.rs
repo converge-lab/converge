@@ -124,6 +124,7 @@ impl Harness for CodexCli {
     fn parse(&self, raw: &Value) -> Payload {
         Payload {
             cwd: cwd_or_current(raw["cwd"].as_str()),
+            tool_name: raw["tool_name"].as_str().map(str::to_owned),
             tool_input: raw["tool_input"].clone(),
             tool_response: raw["tool_response"].clone(),
             transcript: raw["transcript_path"]

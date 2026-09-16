@@ -127,6 +127,8 @@ impl Harness for OpenCode {
     fn parse(&self, raw: &Value) -> Payload {
         Payload {
             cwd: cwd_or_current(raw["cwd"].as_str()),
+            // The shim has already filtered to converge's tools.
+            tool_name: None,
             tool_input: raw["tool_input"].clone(),
             tool_response: raw["tool_response"].clone(),
             // Not a file: opencode keeps the conversation in SQLite and

@@ -21,6 +21,7 @@
 
 mod claude;
 mod codex;
+mod cursor;
 mod hooks_file;
 mod opencode;
 mod wire;
@@ -45,11 +46,14 @@ pub enum Kind {
     Codex,
     /// opencode.
     Opencode,
+    /// Cursor.
+    Cursor,
 }
 
 static CLAUDE: claude::ClaudeCode = claude::ClaudeCode;
 static CODEX: codex::CodexCli = codex::CodexCli;
 static OPENCODE: opencode::OpenCode = opencode::OpenCode;
+static CURSOR: cursor::Cursor = cursor::Cursor;
 
 impl Kind {
     pub fn harness(self) -> &'static dyn Harness {
@@ -57,6 +61,7 @@ impl Kind {
             Kind::Claude => &CLAUDE,
             Kind::Codex => &CODEX,
             Kind::Opencode => &OPENCODE,
+            Kind::Cursor => &CURSOR,
         }
     }
 }
@@ -80,6 +85,12 @@ pub struct Payload {
     /// The working directory the session runs in — what resolves the
     /// marker, and therefore the project.
     pub cwd: PathBuf,
+    /// Which tool is being called, when the harness says. Present so the
+    /// entrypoints can refuse to touch a tool that is not ours: a
+    /// harness whose config cannot express "only converge's MCP tools"
+    /// hands us every call instead, and rewriting an unrelated tool's
+    /// arguments would be worse than doing nothing.
+    pub tool_name: Option<String>,
     /// Pre-tool: the arguments the model chose.
     pub tool_input: Value,
     /// Post-tool: what the tool answered.
@@ -172,9 +183,41 @@ pub trait Harness: Sync {
 
 /// The `cwd` fallback every harness shares: the field if it sent one,
 /// otherwise wherever the hook process happens to be.
+/// Is this one of converge's own MCP tools? The server is registered as
+/// `converge` everywhere, so its name is in the tool's, whatever the
+/// harness composes ids from (`mcp__converge__x`, `converge_x`, …). A
+/// harness that filters in its own config sends no name, which passes:
+/// it already decided.
+pub(crate) fn ours(tool: Option<&str>) -> bool {
+    tool.is_none_or(|tool| tool.contains("converge"))
+}
+
 pub(crate) fn cwd_or_current(field: Option<&str>) -> PathBuf {
     field
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_converges_own_tools_are_ours() {
+        // A harness that filters in its own config sends no name.
+        assert!(ours(None));
+        // The spellings the four harnesses actually produce.
+        for tool in [
+            "mcp__converge__project_bind",
+            "converge_project_match",
+            "converge.decision_add",
+        ] {
+            assert!(ours(Some(tool)), "{tool}");
+        }
+        // Everything else is someone else's call to make.
+        for tool in ["Shell", "Read", "mcp__github__create_issue", "bash"] {
+            assert!(!ours(Some(tool)), "{tool}");
+        }
+    }
 }

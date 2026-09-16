@@ -479,6 +479,12 @@ async fn try_sync(harness: &dyn Harness) -> Result<()> {
 pub fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
+    // Someone else's tool call: say nothing rather than graft `cwd` onto
+    // arguments that never asked for it.
+    if !crate::harness::ours(payload.tool_name.as_deref()) {
+        respond(harness, Response::Silent);
+        return Ok(());
+    }
 
     let mut merged = payload.tool_input;
     if !merged.is_object() {
@@ -512,6 +518,10 @@ fn remote(cwd: &Path) -> Option<String> {
 pub fn mark(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
+    if !crate::harness::ours(payload.tool_name.as_deref()) {
+        respond(harness, Response::Silent);
+        return Ok(());
+    }
     let root = marker::root(&payload.cwd);
 
     let response = tool_json(&payload.tool_response);

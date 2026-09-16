@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use toml_edit::{DocumentMut, InlineTable, Item, Table, value};
 
@@ -137,7 +137,12 @@ impl Harness for CodexCli {
     }
 
     fn transcript(&self, at: &Transcript) -> Result<Parsed> {
-        let Transcript::File(path) = at;
+        let Transcript::File(path) = at else {
+            bail!(
+                "{} records conversations to a file, not a session id",
+                self.label()
+            );
+        };
         transcript::codex(path)
     }
 }

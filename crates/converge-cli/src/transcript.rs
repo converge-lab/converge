@@ -217,6 +217,92 @@ pub fn codex(path: &Path) -> Result<Parsed> {
     Ok(parsed)
 }
 
+// ─── opencode: `opencode export` JSON ──────────────────────────────────
+
+/// What `opencode export <session>` prints: session info, then messages
+/// whose visible prose lives in `text` parts.
+#[derive(Deserialize)]
+struct Export {
+    info: Option<ExportInfo>,
+    #[serde(default)]
+    messages: Vec<ExportMessage>,
+}
+
+#[derive(Deserialize)]
+struct ExportInfo {
+    id: Option<String>,
+    directory: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ExportMessage {
+    info: Option<ExportMessageInfo>,
+    #[serde(default)]
+    parts: Vec<ExportPart>,
+}
+
+#[derive(Deserialize)]
+struct ExportMessageInfo {
+    role: Option<String>,
+    time: Option<ExportTime>,
+}
+
+#[derive(Deserialize)]
+struct ExportTime {
+    /// Milliseconds since the epoch — opencode's own clock format.
+    created: Option<i128>,
+}
+
+#[derive(Deserialize)]
+struct ExportPart {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+}
+
+/// Parse an `opencode export` payload. Unlike the JSONL formats this is
+/// one document: a malformed one is an error rather than a skipped line,
+/// because there is nothing partial to salvage.
+pub fn opencode(json: &[u8]) -> Result<Parsed> {
+    let export: Export =
+        serde_json::from_slice(json).context("parse the `opencode export` payload")?;
+    let mut parsed = Parsed::default();
+    if let Some(info) = export.info {
+        parsed.session_id = info.id;
+        parsed.cwd = info.directory;
+    }
+    for message in export.messages {
+        let info = message.info.unwrap_or(ExportMessageInfo {
+            role: None,
+            time: None,
+        });
+        let speaker = match info.role.as_deref() {
+            Some("user") => "user",
+            Some("assistant") => "assistant",
+            _ => continue,
+        };
+        let body = message
+            .parts
+            .iter()
+            .filter(|p| p.kind == "text")
+            .filter_map(|p| p.text.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if body.trim().is_empty() {
+            continue;
+        }
+        parsed.turns.push(Turn {
+            speaker: speaker.into(),
+            body,
+            sent_at: info
+                .time
+                .and_then(|t| t.created)
+                .and_then(|ms| OffsetDateTime::from_unix_timestamp_nanos(ms * 1_000_000).ok()),
+        });
+    }
+    Ok(parsed)
+}
+
 // ─── shared ────────────────────────────────────────────────────────────
 
 /// Visible prose only: `text` blocks (plain strings, or the text of a
@@ -334,5 +420,31 @@ mod tests {
         );
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn opencode_export_keeps_text_parts_only() {
+        // The shape `opencode export` actually prints, trimmed.
+        let json = br#"{
+          "info": { "id": "ses_abc", "directory": "/repo", "title": "Greeting" },
+          "messages": [
+            { "info": { "role": "user", "time": { "created": 1789593180822 } },
+              "parts": [ { "type": "text", "text": "split the trait?" } ] },
+            { "info": { "role": "assistant", "time": { "created": 1789593181108 } },
+              "parts": [ { "type": "reasoning", "text": "hmm" },
+                         { "type": "text", "text": "yes - per-resource" } ] },
+            { "info": { "role": "assistant", "time": { "created": 1789593181200 } },
+              "parts": [] }
+          ]
+        }"#;
+
+        let parsed = opencode(json).unwrap();
+        assert_eq!(parsed.session_id.as_deref(), Some("ses_abc"));
+        assert_eq!(parsed.cwd.as_deref(), Some("/repo"));
+        // The empty assistant message and the reasoning part are dropped.
+        assert_eq!(parsed.turns.len(), 2);
+        assert_eq!(parsed.turns[0].body, "split the trait?");
+        assert_eq!(parsed.turns[1].body, "yes - per-resource");
+        assert!(parsed.turns[0].sent_at.is_some());
     }
 }

@@ -22,6 +22,7 @@
 mod claude;
 mod codex;
 mod hooks_file;
+mod opencode;
 mod wire;
 
 use std::path::PathBuf;
@@ -42,16 +43,20 @@ pub enum Kind {
     Claude,
     /// Codex CLI.
     Codex,
+    /// opencode.
+    Opencode,
 }
 
 static CLAUDE: claude::ClaudeCode = claude::ClaudeCode;
 static CODEX: codex::CodexCli = codex::CodexCli;
+static OPENCODE: opencode::OpenCode = opencode::OpenCode;
 
 impl Kind {
     pub fn harness(self) -> &'static dyn Harness {
         match self {
             Kind::Claude => &CLAUDE,
             Kind::Codex => &CODEX,
+            Kind::Opencode => &OPENCODE,
         }
     }
 }
@@ -88,14 +93,17 @@ pub struct Payload {
 #[derive(Debug, Clone)]
 pub enum Transcript {
     File(PathBuf),
+    Session(String),
 }
 
 impl Transcript {
     /// The sync watermark key. Stable across runs — it is what decides
-    /// which turns were already sent.
+    /// which turns were already sent. Prefixed per variant so a session
+    /// id can never collide with a path.
     pub fn key(&self) -> String {
         match self {
             Transcript::File(path) => path.to_string_lossy().into_owned(),
+            Transcript::Session(id) => format!("session:{id}"),
         }
     }
 }

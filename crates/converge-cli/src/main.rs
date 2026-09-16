@@ -1,10 +1,11 @@
 //! `converge` — the client-side integration for coding agents.
 //!
-//! This binary lives on the *developer's* machine, next to Claude Code;
-//! the server runs elsewhere. The main per-repository path is in-session
-//! (the POC flow): hooks surface project suggestions to the agent, the
-//! human decides in conversation, and hooks materialize the `.converge`
-//! marker. The commands here are the scaffolding around that:
+//! This binary lives on the *developer's* machine, next to the agent
+//! tool it integrates with; the server runs elsewhere. The main
+//! per-repository path is in-session (the POC flow): hooks surface
+//! project suggestions to the agent, the human decides in conversation,
+//! and hooks materialize the `.converge` marker. The commands here are
+//! the scaffolding around that:
 //!
 //! - `converge project init` — the manual fallback: bind, rebind, or
 //!   disable a repository interactively from the terminal.
@@ -17,6 +18,7 @@
 
 mod config;
 mod device;
+mod harness;
 mod hook;
 mod marker;
 mod project;
@@ -26,7 +28,9 @@ mod transcript;
 mod update;
 mod watermark;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use crate::harness::Kind;
 
 #[derive(Parser)]
 #[command(name = "converge", version, about = "Converge agent integration", long_about = None)]
@@ -73,14 +77,24 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum HookCmd {
-    /// SessionStart: emit the context block for the marker's state.
-    Inject,
-    /// PreToolUse (converge tools): merge cwd + git remote into the call.
-    Ctx,
-    /// PostToolUse (binding tools): write the marker from the response.
-    Mark,
-    /// SessionEnd: push new transcript turns into the evidence layer.
-    Sync,
+    /// Session start: emit the context block for the marker's state.
+    Inject(Caller),
+    /// Pre-tool (converge tools): merge cwd + git remote into the call.
+    Ctx(Caller),
+    /// Post-tool (binding tools): write the marker from the response.
+    Mark(Caller),
+    /// Session end: push new transcript turns into the evidence layer.
+    Sync(Caller),
+}
+
+/// Which agent tool is calling — it decides how the payload is read and
+/// how the answer is shaped. `converge init` writes the flag into the
+/// command it registers, so a hook never guesses; the default keeps
+/// every already-installed Claude Code command working unflagged.
+#[derive(Args)]
+struct Caller {
+    #[arg(long = "harness", value_enum, default_value_t = Kind::Claude)]
+    kind: Kind,
 }
 
 #[derive(Subcommand)]
@@ -110,9 +124,9 @@ async fn main() -> anyhow::Result<()> {
             force,
         } => update::run(version, from, rollback, force).await,
         Cmd::Project(ProjectCmd::Init { rebind, off }) => project::run(rebind, off).await,
-        Cmd::Hook(HookCmd::Inject) => hook::inject().await,
-        Cmd::Hook(HookCmd::Ctx) => hook::ctx(),
-        Cmd::Hook(HookCmd::Mark) => hook::mark(),
-        Cmd::Hook(HookCmd::Sync) => hook::sync().await,
+        Cmd::Hook(HookCmd::Inject(c)) => hook::inject(c.kind).await,
+        Cmd::Hook(HookCmd::Ctx(c)) => hook::ctx(c.kind),
+        Cmd::Hook(HookCmd::Mark(c)) => hook::mark(c.kind),
+        Cmd::Hook(HookCmd::Sync(c)) => hook::sync(c.kind).await,
     }
 }

@@ -1,4 +1,9 @@
-//! Parsing Claude Code JSONL transcripts into evidence turns.
+//! Parsing recorded conversations into evidence turns.
+//!
+//! One parser per transcript format, named for the harness that writes
+//! it; [`Parsed`] and [`Turn`] are what they all produce.
+//!
+//! **Claude Code** — [`claude`]:
 //!
 //! Each line is a JSON record; only `user`/`assistant` entries with
 //! visible text become turns (tool calls, tool results, and thinking are
@@ -65,9 +70,10 @@ struct Block {
     text: Option<String>,
 }
 
-/// Parse the whole transcript. Unparseable lines are skipped (a partial
-/// trailing line from a concurrent write is simply left for next time).
-pub fn read(path: &Path) -> Result<Parsed> {
+/// Parse a whole Claude Code transcript. Unparseable lines are skipped
+/// (a partial trailing line from a concurrent write is simply left for
+/// next time).
+pub fn claude(path: &Path) -> Result<Parsed> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let mut parsed = Parsed::default();
     for line in text.lines() {
@@ -109,6 +115,110 @@ pub fn read(path: &Path) -> Result<Parsed> {
     Ok(parsed)
 }
 
+// ─── Codex CLI: rollout JSONL ────────────────────────────────────────
+
+/// Codex records a rollout: a `session_meta` header line carrying the
+/// session id and cwd, then `response_item` lines of which only
+/// `message` payloads are conversation.
+#[derive(Deserialize)]
+struct Rollout {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    timestamp: Option<String>,
+    payload: Option<RolloutPayload>,
+}
+
+#[derive(Deserialize)]
+struct RolloutPayload {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    // `session_meta`
+    session_id: Option<String>,
+    cwd: Option<String>,
+    // `message`
+    role: Option<String>,
+    #[serde(default)]
+    content: Vec<RolloutBlock>,
+}
+
+#[derive(Deserialize)]
+struct RolloutBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+}
+
+/// Blocks Codex injects into the conversation as if a human had typed
+/// them. `developer` messages are all scaffolding and drop wholesale;
+/// these arrive wearing the `user` role, so they are matched by name.
+/// An unknown future block leaks into evidence rather than swallowing a
+/// human turn — the right way round to be wrong.
+const SCAFFOLDING: [&str; 4] = [
+    "<environment_context>",
+    "<skills_instructions>",
+    "<user_instructions>",
+    "<turn_aborted>",
+];
+
+/// Parse a whole Codex rollout. As with Claude, unparseable lines are
+/// skipped rather than fatal.
+pub fn codex(path: &Path) -> Result<Parsed> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut parsed = Parsed::default();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(raw) = serde_json::from_str::<Rollout>(line) else {
+            continue;
+        };
+        let Some(payload) = raw.payload else {
+            continue;
+        };
+        match (raw.kind.as_deref(), payload.kind.as_deref()) {
+            (Some("session_meta"), _) => {
+                if parsed.session_id.is_none() {
+                    parsed.session_id = payload.session_id;
+                }
+                if parsed.cwd.is_none() {
+                    parsed.cwd = payload.cwd;
+                }
+            }
+            (Some("response_item"), Some("message")) => {
+                // `developer` is the harness talking to the model.
+                let speaker = match payload.role.as_deref() {
+                    Some("user") => "user",
+                    Some("assistant") => "assistant",
+                    _ => continue,
+                };
+                let body = payload
+                    .content
+                    .iter()
+                    .filter(|b| b.kind == "input_text" || b.kind == "output_text")
+                    .filter_map(|b| b.text.as_deref())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let trimmed = body.trim();
+                if trimmed.is_empty() || SCAFFOLDING.iter().any(|tag| trimmed.starts_with(tag)) {
+                    continue;
+                }
+                parsed.turns.push(Turn {
+                    speaker: speaker.into(),
+                    body,
+                    sent_at: raw
+                        .timestamp
+                        .as_deref()
+                        .and_then(|t| OffsetDateTime::parse(t, &Rfc3339).ok()),
+                });
+            }
+            _ => continue,
+        }
+    }
+    Ok(parsed)
+}
+
+// ─── shared ────────────────────────────────────────────────────────────
+
 /// Visible prose only: `text` blocks (plain strings, or the text of a
 /// blocks array). Tool calls, tool results, and thinking are dropped.
 fn flatten(content: &Content) -> String {
@@ -123,8 +233,9 @@ fn flatten(content: &Content) -> String {
     }
 }
 
-/// A short session title from the first user turn's first line.
-pub fn title(turns: &[Turn]) -> String {
+/// A short session title from the first user turn's first line;
+/// `fallback` names the harness when there is no prose to take it from.
+pub fn title(turns: &[Turn], fallback: &str) -> String {
     let first = turns
         .iter()
         .find(|t| t.speaker == "user")
@@ -132,7 +243,7 @@ pub fn title(turns: &[Turn]) -> String {
         .unwrap_or("")
         .trim();
     if first.is_empty() {
-        return "Claude Code session".into();
+        return fallback.to_string();
     }
     let capped: String = first.chars().take(80).collect();
     if first.chars().count() > 80 {
@@ -172,14 +283,55 @@ mod tests {
         writeln!(f, "not json").unwrap();
         f.flush().unwrap();
 
-        let parsed = read(&path).unwrap();
+        let parsed = claude(&path).unwrap();
         assert_eq!(parsed.session_id.as_deref(), Some("s-1"));
         assert_eq!(parsed.cwd.as_deref(), Some("/repo"));
         assert_eq!(parsed.turns.len(), 2);
         assert_eq!(parsed.turns[0].speaker, "user");
         assert_eq!(parsed.turns[1].body, "yes — per-resource");
         assert!(parsed.turns[0].sent_at.is_some());
-        assert_eq!(title(&parsed.turns), "split the trait?");
+        assert_eq!(
+            title(&parsed.turns, "Claude Code session"),
+            "split the trait?"
+        );
+        assert_eq!(title(&[], "Claude Code session"), "Claude Code session");
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn codex_rollout_keeps_prose_and_drops_scaffolding() {
+        let path = std::env::temp_dir().join(format!("cvg-rollout-{}.jsonl", std::process::id()));
+        let mut f = std::fs::File::create(&path).unwrap();
+        // Header; a developer block; an <environment_context> wearing the
+        // user role; the one real question; the answer; a function_call
+        // (not conversation); one unparseable line.
+        for line in [
+            r#"{"type":"session_meta","timestamp":"2026-09-16T14:25:46.754Z","payload":{"session_id":"01a0","cwd":"/repo","cli_version":"0.154.0"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-09-16T14:25:46.761Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\nuse skills\n</skills_instructions>"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-09-16T14:25:46.762Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-09-16T14:25:47.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"split the trait?"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-09-16T14:25:58.916Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"yes \u2014 per-resource"}]}}"#,
+            r#"{"type":"response_item","timestamp":"2026-09-16T14:26:00.000Z","payload":{"type":"function_call","name":"shell"}}"#,
+            "not json",
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+        f.flush().unwrap();
+
+        let parsed = codex(&path).unwrap();
+        assert_eq!(parsed.session_id.as_deref(), Some("01a0"));
+        assert_eq!(parsed.cwd.as_deref(), Some("/repo"));
+        assert_eq!(parsed.turns.len(), 2, "scaffolding leaked into evidence");
+        assert_eq!(parsed.turns[0].speaker, "user");
+        assert_eq!(parsed.turns[0].body, "split the trait?");
+        assert_eq!(parsed.turns[1].speaker, "assistant");
+        assert_eq!(parsed.turns[1].body, "yes \u{2014} per-resource");
+        assert!(parsed.turns[0].sent_at.is_some());
+        assert_eq!(
+            title(&parsed.turns, "Codex CLI session"),
+            "split the trait?"
+        );
 
         std::fs::remove_file(&path).unwrap();
     }

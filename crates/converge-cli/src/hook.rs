@@ -1,17 +1,22 @@
-//! The hook entrypoints — Claude Code invokes these; they never prompt
-//! and they never fail the session (best-effort output, always exit 0
-//! from `run`).
+//! The hook entrypoints — the harness invokes these, directly (a hook
+//! command) or through a shim (opencode's plugin); they never prompt and
+//! they never fail the session (best-effort output, always exit 0 from
+//! `run`).
+//!
+//! Everything tool-specific — which fields arrive, what the answer must
+//! look like, where the transcript lives — belongs to [`crate::harness`].
+//! What is left here is the part that is the same everywhere.
 //!
 //! Ported from the validated POC (`poc-mapping`): the inject rules
 //! wording is contract-like — agents act on it — so it changes carefully.
 //!
-//! - `inject` (SessionStart): read the three-state marker, emit the
+//! - `inject` (session start): read the three-state marker, emit the
 //!   context block — bound (binding + decision index), disabled
 //!   (stay-quiet rules), unbound (the mapping rules), or unreadable.
-//! - `ctx` (PreToolUse, matched on converge tools): merge `cwd` + git
+//! - `ctx` (pre-tool, matched on converge tools): merge `cwd` + git
 //!   remote into the tool input, so the server ranks candidates without
 //!   the LLM gathering anything.
-//! - `mark` (PostToolUse, matched on the binding tools): perform the
+//! - `mark` (post-tool, matched on the binding tools): perform the
 //!   **local effect** — parse the tool response and write the marker at
 //!   the git root. The LLM only ever chose; the write is deterministic.
 
@@ -24,10 +29,11 @@ use converge_client::{DecisionFilter, Pagination, ProjectId, SignalFilter, Signa
 use serde_json::{Value, json};
 
 use crate::config::Config;
+use crate::harness::{Harness, Kind, Response};
 use crate::marker::{self, State};
 
-/// The stdin payload Claude Code hands every hook (fields we use).
-fn payload() -> Value {
+/// Whatever the harness put on stdin, before it means anything.
+fn raw() -> Value {
     let mut text = String::new();
     if std::io::stdin().read_to_string(&mut text).is_err() {
         return Value::Null;
@@ -35,25 +41,21 @@ fn payload() -> Value {
     serde_json::from_str(&text).unwrap_or(Value::Null)
 }
 
-fn cwd_of(payload: &Value) -> PathBuf {
-    payload["cwd"]
-        .as_str()
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."))
+/// Answer in the harness's own dialect — or stay quiet, which is not
+/// the same as answering `null`.
+fn respond(harness: &dyn Harness, response: Response) {
+    if let Some(value) = harness.emit(response) {
+        println!("{value}");
+    }
 }
 
-fn emit(value: &Value) {
-    println!("{value}");
-}
+// ─── session start ───────────────────────────────────────────────────────────
 
-// ─── SessionStart ───────────────────────────────────────────────────────────
+pub async fn inject(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
 
-pub async fn inject() -> Result<()> {
-    let payload = payload();
-    let cwd = cwd_of(&payload);
-
-    let (context, system) = match marker::find(&cwd) {
+    let (context, system) = match marker::find(&payload.cwd) {
         // The visible line comes from bound() too: it must reflect what
         // the fetch actually found, not just that a marker exists.
         Ok(State::Bound { project, .. }) => bound(project).await,
@@ -87,13 +89,7 @@ pub async fn inject() -> Result<()> {
         Some(notice) => format!("{system} · {notice}"),
         None => system,
     };
-    emit(&json!({
-        "systemMessage": system,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context,
-        },
-    }));
+    respond(harness, Response::Inject { context, system });
     Ok(())
 }
 
@@ -400,40 +396,47 @@ async fn bound(project: ProjectId) -> (String, String) {
     (block, system)
 }
 
-// ─── SessionEnd: transcript → evidence ──────────────────────────────────────
+// ─── session end: transcript → evidence ──────────────────────────────────────
 
-pub async fn sync() -> Result<()> {
+pub async fn sync(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
     // Best effort throughout: a sync problem must never surface as a
     // session failure. The quiet paths just return.
-    if let Err(e) = try_sync().await {
-        emit(&json!({ "systemMessage": format!("Converge: sync skipped — {e}") }));
+    if let Err(e) = try_sync(harness).await {
+        respond(
+            harness,
+            Response::Notice {
+                system: format!("Converge: sync skipped — {e}"),
+            },
+        );
     }
     Ok(())
 }
 
-async fn try_sync() -> Result<()> {
-    let payload = payload();
-    let cwd = cwd_of(&payload);
-    let Some(transcript) = payload["transcript_path"].as_str() else {
+async fn try_sync(harness: &dyn Harness) -> Result<()> {
+    let payload = harness.parse(&raw());
+    // A harness that records nothing readable has no evidence to push.
+    let Some(transcript) = payload.transcript.as_ref() else {
         return Ok(());
     };
 
     // Only bound repos sync; unbound and disabled stay quiet.
-    let State::Bound { project, .. } = marker::find(&cwd)? else {
+    let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
 
-    let parsed = crate::transcript::read(std::path::Path::new(transcript))?;
+    let parsed = harness.transcript(transcript)?;
     let Some(external) = parsed.session_id.clone() else {
         return Ok(()); // no session id in the content — nothing to key on
     };
 
     let mut marks = crate::watermark::Watermarks::load()?;
-    let already = marks.synced(transcript);
+    let key = transcript.key();
+    let already = marks.synced(&key);
     // A shrunk/rewritten transcript (fewer turns than synced) is left
     // alone rather than re-sent, to avoid duplicating evidence.
     let Some(fresh) = parsed.turns.get(already..).filter(|f| !f.is_empty()) else {
-        marks.set(transcript, parsed.turns.len());
+        marks.set(&key, parsed.turns.len());
         marks.save()?;
         return Ok(());
     };
@@ -446,7 +449,7 @@ async fn try_sync() -> Result<()> {
             project_id: project,
             kind: converge_client::SessionKind::Transcript,
             external,
-            title: crate::transcript::title(&parsed.turns),
+            title: crate::transcript::title(&parsed.turns, &format!("{} session", harness.label())),
         })
         .await?;
     let messages: Vec<_> = fresh
@@ -460,35 +463,33 @@ async fn try_sync() -> Result<()> {
     let added = messages.len();
     client.message_add(session, &messages).await?;
 
-    marks.set(transcript, parsed.turns.len());
+    marks.set(&key, parsed.turns.len());
     marks.save()?;
-    emit(&json!({
-        "systemMessage": format!("Converge: synced {added} message(s) to evidence ✓"),
-    }));
+    respond(
+        harness,
+        Response::Notice {
+            system: format!("Converge: synced {added} message(s) to evidence ✓"),
+        },
+    );
     Ok(())
 }
 
-// ─── PreToolUse: context collector ──────────────────────────────────────────
+// ─── pre-tool: context collector ──────────────────────────────────────────
 
-pub fn ctx() -> Result<()> {
-    let payload = payload();
-    let cwd = cwd_of(&payload);
+pub fn ctx(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
 
-    let mut merged = payload["tool_input"].clone();
+    let mut merged = payload.tool_input;
     if !merged.is_object() {
         merged = json!({});
     }
-    merged["cwd"] = json!(cwd.to_string_lossy());
-    if let Some(remote) = remote(&cwd) {
+    merged["cwd"] = json!(payload.cwd.to_string_lossy());
+    if let Some(remote) = remote(&payload.cwd) {
         merged["remote"] = json!(remote);
     }
 
-    emit(&json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "updatedInput": merged,
-        },
-    }));
+    respond(harness, Response::Ctx { tool_input: merged });
     Ok(())
 }
 
@@ -506,27 +507,29 @@ fn remote(cwd: &Path) -> Option<String> {
     (!url.is_empty()).then_some(url)
 }
 
-// ─── PostToolUse: the local effect ──────────────────────────────────────────
+// ─── post-tool: the local effect ──────────────────────────────────────────
 
-pub fn mark() -> Result<()> {
-    let payload = payload();
-    let cwd = cwd_of(&payload);
-    let root = marker::root(&cwd);
+pub fn mark(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    let root = marker::root(&payload.cwd);
 
-    let response = tool_json(&payload["tool_response"]);
-    let message = match effect(&response, &root) {
-        Effect::Bound(name) => {
-            format!("Converge: linked this repo to \"{name}\" (wrote .converge) ✓")
-        }
-        Effect::Disabled => "Converge: disabled for this repo (wrote .converge)".to_string(),
-        Effect::Nothing => {
-            // Session-scoped dismiss, a skip, or an unrecognized payload:
-            // deliberately no local effect and no noise.
-            return Ok(());
-        }
-        Effect::Failed(err) => format!("Converge: could not write .converge — {err}"),
+    let response = tool_json(&payload.tool_response);
+    let said = match effect(&response, &root) {
+        Effect::Bound(name) => Response::Notice {
+            system: format!("Converge: linked this repo to \"{name}\" (wrote .converge) ✓"),
+        },
+        Effect::Disabled => Response::Notice {
+            system: "Converge: disabled for this repo (wrote .converge)".to_string(),
+        },
+        // Session-scoped dismiss, a skip, or an unrecognized payload:
+        // deliberately no local effect and no noise.
+        Effect::Nothing => Response::Silent,
+        Effect::Failed(err) => Response::Notice {
+            system: format!("Converge: could not write .converge — {err}"),
+        },
     };
-    emit(&json!({ "systemMessage": message }));
+    respond(harness, said);
     Ok(())
 }
 

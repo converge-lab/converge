@@ -1,5 +1,6 @@
 //! `converge init` — the one interactive moment, once per machine:
-//! credentials → agent-tool integration (hooks + MCP registration).
+//! credentials → agent-tool integration (hooks or plugin, + MCP
+//! registration), for every agent tool found on the machine.
 //! Idempotent: every step detects "already done" and moves on, so
 //! re-running after an upgrade or a moved binary is the repair path.
 //!
@@ -8,14 +9,11 @@
 //! the marker. No further terminal rituals.
 
 use std::io::{BufRead, IsTerminal, Write as _};
-use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
 
 use crate::config::{self, Config};
-use crate::device;
+use crate::{device, harness};
 
 /// The managed cloud — the Enter-accepts default of the server prompt.
 /// Self-hosters type their own URL over it.
@@ -96,7 +94,7 @@ fn plain(prompt: &str) -> Result<String> {
 }
 
 pub async fn run(force: bool) -> Result<()> {
-    // ── credentials ────────────────────────────────────────────────────
+    // ── credentials ───────────────────────────────────────────────────────
     let config = match Config::load() {
         Ok(config) if force => {
             // Reinit: redo credentials even though the stored ones may
@@ -123,64 +121,76 @@ pub async fn run(force: bool) -> Result<()> {
         println!("⚠ {warning}");
     }
 
-    // ── agent tool ─────────────────────────────────────────────────────
-    if !claude_code_present() {
+    // ── agent tools ──────────────────────────────────────────────────
+    // Every tool on the machine gets wired — people run more than one,
+    // and a tool installed later is what `converge init` is re-run for.
+    let present = harness::present();
+    if present.is_empty() {
+        let known: Vec<_> = harness::all().map(|h| h.label()).collect();
         println!(
-            "\nno Claude Code found (no `claude` in PATH, no ~/.claude). \
-             Install it, then re-run `converge init`; other agent tools: \
-             wire the four hook commands (`converge hook inject|ctx|mark|sync`) \
-             and add the MCP server {}/mcp manually.",
+            "\nno supported agent tool found (looked for {}). Install one, \
+             then re-run `converge init`; anything else: wire the four hook \
+             commands (`converge hook inject|ctx|mark|sync`) and add the MCP \
+             server {}/mcp manually.",
+            known.join(", "),
             config.server
         );
         return Ok(());
     }
+
     let exe = std::env::current_exe().context("resolve own path")?;
-    let settings = claude_settings_path().context("locate ~/.claude/settings.json")?;
-    let changed = install_hooks(&settings, &exe.to_string_lossy())?;
-    if changed.is_empty() {
-        println!("✓ hooks: already installed ({})", settings.display());
-    } else {
-        println!(
-            "✓ hooks: installed {} ({})",
-            changed.join(", "),
-            settings.display()
-        );
-    }
-
-    // ── MCP registration ───────────────────────────────────────────────
-    // A registration bakes in the server URL and bearer, so a forced
-    // reinit must replace it, not keep it.
-    let registered = mcp_registered();
-    if registered && !force {
-        println!("✓ mcp: `converge` server already registered");
-    } else if confirm("register the MCP server with Claude Code?", true)? {
-        if registered {
-            unregister_mcp()?;
+    let exe = exe.to_string_lossy();
+    for tool in &present {
+        let installed = tool.install(&exe)?;
+        if installed.changed.is_empty() {
+            println!(
+                "✓ {}: already installed ({})",
+                installed.noun,
+                installed.path.display()
+            );
+        } else {
+            println!(
+                "✓ {}: installed {} ({})",
+                installed.noun,
+                installed.changed.join(", "),
+                installed.path.display()
+            );
         }
-        register_mcp(&config)?;
-        println!("✓ mcp: registered {}/mcp as `converge`", config.server);
-    } else {
-        println!(
-            "skipped — register later with:\n  claude mcp add --transport http \
-             --scope user converge {}/mcp --header \"Authorization: Bearer <token>\"",
-            config.server
-        );
+
+        // ── MCP registration ─────────────────────────────────────────
+        // A registration bakes in the server URL and bearer, so a forced
+        // reinit must replace it, not keep it.
+        let registered = tool.mcp_registered();
+        if registered && !force {
+            println!("✓ mcp: `converge` server already registered");
+        } else if confirm(
+            &format!("register the MCP server with {}?", tool.label()),
+            true,
+        )? {
+            if registered {
+                tool.mcp_unregister()?;
+            }
+            tool.mcp_register(&config)?;
+            println!("✓ mcp: registered {}/mcp as `converge`", config.server);
+        } else {
+            println!(
+                "skipped — register later with:\n  {}",
+                tool.mcp_manual_hint(&config)
+            );
+        }
     }
 
+    let labels: Vec<_> = present.iter().map(|h| h.label()).collect();
     println!(
-        "\ndone. Open any repository in Claude Code — the session will \
-         suggest a project binding (or run `converge project init` yourself)."
+        "\ndone. Open any repository in {} — the session will \
+         suggest a project binding (or run `converge project init` yourself).",
+        labels.join(" or ")
     );
-    // Account connectors can't be added programmatically (claude.ai UI
-    // only; they sync down to Claude Code, never up) — the best we can
-    // do is point at the documented settings page.
-    println!(
-        "\nwant converge on claude.ai web and mobile too? Add a custom \
-         connector at https://claude.ai/customize/connectors with URL \
-         {}/mcp — it signs in via your browser and also appears in \
-         Claude Code automatically.",
-        config.server
-    );
+    for tool in &present {
+        for note in tool.notes(&config) {
+            println!("\n{note}");
+        }
+    }
     Ok(())
 }
 
@@ -243,222 +253,4 @@ async fn stored(config: Config) -> Result<Config> {
 /// One `/users/me` round trip proves server and token together.
 async fn verified(config: &Config) -> Result<String> {
     Ok(config.client()?.me().await?.handle)
-}
-
-fn claude_code_present() -> bool {
-    let in_path = Command::new("sh")
-        .args(["-c", "command -v claude"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    in_path || claude_settings_path().map(|p| p.parent().is_some_and(|d| d.exists())) == Some(true)
-}
-
-fn claude_settings_path() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| PathBuf::from(home).join(".claude/settings.json"))
-}
-
-/// The four hook registrations this integration needs. `exe` is this
-/// binary's absolute path — re-run `converge init` after moving it.
-fn wanted(exe: &str) -> [(&'static str, Option<&'static str>, String); 4] {
-    [
-        ("SessionStart", None, format!("{exe} hook inject")),
-        ("SessionEnd", None, format!("{exe} hook sync")),
-        (
-            "PreToolUse",
-            Some("mcp__converge__"),
-            format!("{exe} hook ctx"),
-        ),
-        (
-            "PostToolUse",
-            Some("mcp__converge__(project_bind|project_dismiss)"),
-            format!("{exe} hook mark"),
-        ),
-    ]
-}
-
-/// Merge our hooks into the settings file, conservatively: existing
-/// content is never touched; an entry whose command ends with the same
-/// `converge hook …` subcommand counts as present (so a moved binary
-/// updates in place). Returns which events changed.
-fn install_hooks(settings: &std::path::Path, exe: &str) -> Result<Vec<String>> {
-    let mut root: Value = match std::fs::read_to_string(settings) {
-        Ok(text) => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", settings.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(e) => return Err(e).with_context(|| format!("read {}", settings.display())),
-    };
-    if !root.is_object() {
-        bail!("{} is not a JSON object", settings.display());
-    }
-    if !root["hooks"].is_object() {
-        root["hooks"] = json!({});
-    }
-
-    let mut changed = Vec::new();
-    for (event, matcher, command) in wanted(exe) {
-        let suffix = command
-            .rsplit_once(" hook ")
-            .map(|(_, sub)| format!(" hook {sub}"))
-            .expect("wanted commands contain ` hook `");
-        let entries = &mut root["hooks"][event];
-        if !entries.is_array() {
-            *entries = json!([]);
-        }
-        let list = entries.as_array_mut().expect("just ensured");
-
-        // Present already? Update the command in place (binary may have
-        // moved); otherwise append a fresh entry.
-        let mut found = false;
-        for group in list.iter_mut() {
-            let Some(hooks) = group["hooks"].as_array_mut() else {
-                continue;
-            };
-            for hook in hooks.iter_mut() {
-                let is_ours = hook["command"]
-                    .as_str()
-                    .is_some_and(|c| c.ends_with(&suffix));
-                if is_ours {
-                    found = true;
-                    if hook["command"].as_str() != Some(command.as_str()) {
-                        hook["command"] = json!(command);
-                        changed.push(format!("{event} (path updated)"));
-                    }
-                }
-            }
-        }
-        if !found {
-            let mut group = json!({ "hooks": [{ "type": "command", "command": command }] });
-            if let Some(matcher) = matcher {
-                group["matcher"] = json!(matcher);
-            }
-            list.push(group);
-            changed.push(event.to_string());
-        }
-    }
-
-    if !changed.is_empty() {
-        if let Some(dir) = settings.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(settings, serde_json::to_string_pretty(&root)?)
-            .with_context(|| format!("write {}", settings.display()))?;
-    }
-    Ok(changed)
-}
-
-/// Is a `converge` MCP server already known to Claude Code?
-fn mcp_registered() -> bool {
-    Command::new("claude")
-        .args(["mcp", "get", "converge"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Drop the existing `converge` registration (reinit replaces it).
-fn unregister_mcp() -> Result<()> {
-    quiet_claude(&["mcp", "remove", "--scope", "user", "converge"])
-}
-
-fn register_mcp(config: &Config) -> Result<()> {
-    quiet_claude(&[
-        "mcp",
-        "add",
-        "--transport",
-        "http",
-        "--scope",
-        "user",
-        "converge",
-        &format!("{}/mcp", config.server),
-        "--header",
-        &format!("Authorization: Bearer {}", config.token),
-    ])
-}
-
-/// Run the claude CLI with its chatter captured: our own status line is
-/// the UX; claude's output surfaces only when the command fails.
-fn quiet_claude(args: &[&str]) -> Result<()> {
-    let output = Command::new("claude")
-        .args(args)
-        .output()
-        .with_context(|| format!("run `claude {} …` (is the claude CLI installed?)", args[0]))?;
-    if !output.status.success() {
-        bail!(
-            "`claude {} {}` failed with {}:\n{}{}",
-            args[0],
-            args[1],
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hook_install_is_conservative_and_idempotent() {
-        let dir = std::env::temp_dir().join(format!("cvg-setup-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let settings = dir.join("settings.json");
-
-        // Existing user content that must survive untouched.
-        std::fs::write(
-            &settings,
-            serde_json::to_string(&json!({
-                "permissions": { "allow": ["Bash"] },
-                "hooks": {
-                    "SessionStart": [
-                        { "hooks": [{ "type": "command", "command": "echo hi" }] }
-                    ]
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let changed = install_hooks(&settings, "/usr/bin/converge").unwrap();
-        assert_eq!(changed.len(), 4, "{changed:?}");
-
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        // Untouched neighbors.
-        assert_eq!(root["permissions"]["allow"][0], "Bash");
-        assert_eq!(
-            root["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-            "echo hi"
-        );
-        // Ours appended, matcher where wanted.
-        assert_eq!(
-            root["hooks"]["SessionStart"][1]["hooks"][0]["command"],
-            "/usr/bin/converge hook inject"
-        );
-        assert_eq!(root["hooks"]["PreToolUse"][0]["matcher"], "mcp__converge__");
-
-        // Idempotent.
-        assert!(
-            install_hooks(&settings, "/usr/bin/converge")
-                .unwrap()
-                .is_empty()
-        );
-
-        // A moved binary updates the command in place, no duplicates.
-        let changed = install_hooks(&settings, "/opt/converge").unwrap();
-        assert_eq!(changed.len(), 4);
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            root["hooks"]["SessionStart"][1]["hooks"][0]["command"],
-            "/opt/converge hook inject"
-        );
-
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 }

@@ -99,6 +99,10 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
+# Editing *someone else's* config file (codex's config.toml): toml_edit
+# keeps their comments and formatting, which a Value round-trip destroys.
+# Already in the tree as toml 0.8's own backend, so this costs nothing.
+toml_edit = "0.22"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

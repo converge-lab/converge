@@ -28,7 +28,7 @@ use converge_expert::signals::{Entry, Request, discover};
 use converge_expert::{Client, Registry, Turn};
 use converge_storage::{
     AgentId, Author, Decision, DecisionFilter, DecisionId, GroupId, NewSignal, Pagination, Scope,
-    Signal, SignalFilter, SignalStatus, Storage, StoreError,
+    Signal, SignalFilter, SignalStatus, Storage, StoreError, Tier,
 };
 use futures::Stream;
 use tracing::{debug, info, warn};
@@ -234,7 +234,7 @@ impl<S: Storage + 'static> Expert<S> {
         decisions.reverse();
         for decision in decisions {
             stats.examined += 1;
-            match self.run(decision.id).await {
+            match self.run_from(decision.id, "backfill").await {
                 Ok(written) => {
                     stats.written += written;
                     if written > 0 {
@@ -253,6 +253,13 @@ impl<S: Storage + 'static> Expert<S> {
     /// The detection pass itself, awaitable — public so tests (and a
     /// future backfill command) can run it to completion.
     pub async fn run(&self, id: DecisionId) -> Result<usize, StoreError> {
+        self.run_from(id, "live").await
+    }
+
+    /// `source` says whether this is a decision landing now or the
+    /// day-one backfill sweep — the metric keeps them apart so a deadline
+    /// is set from live passes only.
+    async fn run_from(&self, id: DecisionId, source: &'static str) -> Result<usize, StoreError> {
         let Some(client) = self.registry.job("signals") else {
             return Ok(0);
         };
@@ -263,15 +270,24 @@ impl<S: Storage + 'static> Expert<S> {
             .unwrap_or(0);
         let mut model_ms = None;
         let result = self.pass(id, &client, &mut model_ms).await;
-        let total_ms = started.elapsed().as_millis() as u64;
+        // One reading, so the log line, the ring and the scrape agree.
+        let total = started.elapsed();
+        let total_ms = total.as_millis() as u64;
         let (written, outcome) = match &result {
             Ok(n) if *n > 0 => (*n, "written"),
             Ok(_) if model_ms.is_some() => (0, "nothing"),
             Ok(_) => (0, "no_candidates"),
             Err(_) => (0, "error"),
         };
-        // The durable record: one structured line per pass.
+        // The durable record: one structured line per pass, and the
+        // histogram a scraper turns into p95.
         info!(%id, total_ms, model_ms, written, outcome, "signal detection timed");
+        crate::metrics::detection(
+            total.as_secs_f64(),
+            model_ms.map(|ms| ms as f64 / 1000.0),
+            outcome,
+            source,
+        );
         self.record(RunTiming {
             decision: id,
             started_at,
@@ -345,14 +361,26 @@ impl<S: Storage + 'static> Expert<S> {
                 recommendation: draft.recommendation,
                 produced_by: Author::Agent(self.agent),
             };
+            let tier = match new.tier {
+                Tier::Watch => "watch",
+                Tier::Coordinate => "coordinate",
+                Tier::Conflict => "conflict",
+            };
             match self.store.signal_add(Scope::System, new).await {
-                Ok(_) => written += 1,
+                Ok(_) => {
+                    written += 1;
+                    crate::metrics::signal_draft(tier, "written");
+                }
                 // Already observed (possibly dismissed): the re-raise
                 // ban working as designed — not an error.
                 Err(StoreError::Conflict(_)) => {
+                    crate::metrics::signal_draft(tier, "duplicate");
                     debug!(source = %id, "draft already observed — skipped")
                 }
-                Err(error) => warn!(source = %id, %error, "draft rejected by storage"),
+                Err(error) => {
+                    crate::metrics::signal_draft(tier, "rejected");
+                    warn!(source = %id, %error, "draft rejected by storage")
+                }
             }
         }
         Ok(written)

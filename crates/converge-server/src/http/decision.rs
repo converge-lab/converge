@@ -33,6 +33,7 @@ async fn add<S: Storage + 'static>(
     Json(new): Json<NewDecision>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let id = store.decision_add(Scope::User(caller.user), new).await?;
+    crate::metrics::decision_recorded("rest");
     expert.detect(id);
     // Prevention: hand the author same-project near-matches in the write
     // response — the one moment "did you mean to supersede?" is cheap.

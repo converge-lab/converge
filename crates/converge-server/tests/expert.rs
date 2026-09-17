@@ -61,6 +61,8 @@ fn registry(addr: std::net::SocketAddr) -> Registry {
 
 #[tokio::test]
 async fn detection_writes_stamped_signals_once() {
+    // Installed before anything records, so the pass below is measured.
+    let metrics = common::metrics();
     let (_pg, store, app) = server().await;
 
     // Two projects; the subject in one, the expected target in the other,
@@ -124,7 +126,72 @@ async fn detection_writes_stamped_signals_once() {
     let expert = Expert::new(store.clone(), registry(addr), agent);
 
     // The pass: one draft becomes one stored signal, expert-stamped.
+    let before = metrics.render();
     let written = expert.run(subject.parse().unwrap()).await.unwrap();
+    // The pass reached the model, so both phases were recorded exactly
+    // once, as a live pass, on the shared bucket ladder — with the 8 s
+    // deadline as one of its edges — and each written signal counted by
+    // tier. The decisions this test recorded over HTTP went through the
+    // request histogram keyed by the route template, never the path.
+    let after = metrics.render();
+    let delta = |series: &str, labels: &[&str]| {
+        series_value(&after, series, labels) - series_value(&before, series, labels)
+    };
+    let live = |phase: &'static str| {
+        [
+            format!("phase=\"{phase}\""),
+            "outcome=\"written\"".to_owned(),
+            "source=\"live\"".to_owned(),
+        ]
+    };
+    let model = live("model");
+    let total = live("total");
+    assert_eq!(
+        delta(
+            "converge_signal_detection_seconds_count",
+            &model.iter().map(String::as_str).collect::<Vec<_>>()
+        ),
+        1.0,
+        "{after}"
+    );
+    assert_eq!(
+        delta(
+            "converge_signal_detection_seconds_count",
+            &total.iter().map(String::as_str).collect::<Vec<_>>()
+        ),
+        1.0
+    );
+    assert_eq!(
+        delta("converge_signal_drafts_total", &["outcome=\"written\""]),
+        written as f64
+    );
+    assert!(
+        after.contains("le=\"8\""),
+        "the deadline bucket edge is missing"
+    );
+    assert!(
+        series_value(
+            &after,
+            "converge_http_request_seconds_count",
+            &["route=\"/api/v1/decisions\"", "method=\"POST\""]
+        ) >= 1.0,
+        "{after}"
+    );
+    assert!(
+        series_value(
+            &after,
+            "converge_decisions_recorded_total",
+            &["via=\"rest\""]
+        ) >= 1.0
+    );
+    assert!(
+        after.contains("# HELP converge_signal_detection_seconds"),
+        "no help text"
+    );
+    assert!(
+        !after.contains(&subject),
+        "a decision id leaked into a metric label:\n{after}"
+    );
     assert_eq!(written, 1);
     let (_, page) = send(
         &app,
@@ -300,4 +367,15 @@ async fn ask_guardrails() {
     )
     .await;
     assert_eq!(status.as_u16(), 404);
+}
+
+/// The summed value of the series of `name` whose label sets contain
+/// all of `labels` (order-independent); 0 when absent.
+fn series_value(scrape: &str, name: &str, labels: &[&str]) -> f64 {
+    scrape
+        .lines()
+        .filter(|l| l.starts_with(name) && l.as_bytes().get(name.len()) == Some(&b'{'))
+        .filter(|l| labels.iter().all(|want| l.contains(want)))
+        .filter_map(|l| l.rsplit(' ').next()?.parse::<f64>().ok())
+        .sum()
 }

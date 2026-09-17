@@ -128,3 +128,24 @@ pub async fn send_as(
     };
     (status, value)
 }
+
+/// The process-wide metrics recorder for a test binary: installed once,
+/// rendered on demand. Only one recorder can exist per process, so tests
+/// share it and assert on names, never on counts.
+#[allow(dead_code)] // shared by the test binaries that measure; unused by the rest
+pub fn metrics() -> &'static metrics_exporter_prometheus::PrometheusHandle {
+    static HANDLE: std::sync::OnceLock<metrics_exporter_prometheus::PrometheusHandle> =
+        std::sync::OnceLock::new();
+    HANDLE.get_or_init(|| {
+        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .set_buckets_for_metric(
+                metrics_exporter_prometheus::Matcher::Suffix("_seconds".into()),
+                &converge_server::metrics::SECONDS_BUCKETS,
+            )
+            .expect("buckets")
+            .install_recorder()
+            .expect("install the test metrics recorder");
+        converge_server::metrics::describe();
+        handle
+    })
+}

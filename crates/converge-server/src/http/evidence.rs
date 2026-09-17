@@ -77,6 +77,7 @@ async fn append<S: Storage>(
     Json(new): Json<Vec<NewMessage>>,
 ) -> Result<(StatusCode, Json<Value>)> {
     let ids = store.message_add(Scope::User(caller.user), id, new).await?;
+    crate::metrics::evidence_messages("rest", ids.len());
     Ok((StatusCode::CREATED, Json(json!({ "ids": ids }))))
 }
 

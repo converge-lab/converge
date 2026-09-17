@@ -81,12 +81,16 @@ pub fn app<S: Storage + 'static>(
         .merge(signin::routes().with_state((store.clone(), sessions.clone(), oidc)))
         .merge(session::routes().with_state((store, sessions)))
         .merge(protected);
-    match web {
+    let router = match web {
         Some(dist) => router.fallback_service(
             ServeDir::new(dist).fallback(ServeFile::new(dist.join("index.html"))),
         ),
         None => router,
-    }
+    };
+    // Last, over the finished router: a layer added before the fallback
+    // would not wrap it, and the fallback is where the SPA and every 404
+    // live in a deployment.
+    router.layer(middleware::from_fn(crate::metrics::http))
 }
 
 /// Process liveness only. Storage connectivity is proven at startup

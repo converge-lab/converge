@@ -38,7 +38,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_handler, tool_router};
+use rmcp::{RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Caller;
@@ -606,6 +606,7 @@ impl<S: Storage + 'static> Memory<S> {
             .message_add(self.scope(&context)?, session, messages)
             .await
             .map_err(map_err)?;
+        crate::metrics::evidence_messages("mcp", ids.len());
         json_result(&serde_json::json!({ "message_ids": ids }))
     }
 
@@ -667,6 +668,7 @@ impl<S: Storage + 'static> Memory<S> {
             )
             .await
             .map_err(map_err)?;
+        crate::metrics::decision_recorded("mcp");
         self.expert.detect(id);
         // Prevention: same-project near-matches ride the tool result so
         // the agent can raise "supersede instead?" while the author still
@@ -932,8 +934,40 @@ fn user(context: &RequestContext<RoleServer>) -> Result<UserId, McpError> {
         })
 }
 
-#[tool_handler]
 impl<S: Storage + 'static> ServerHandler for Memory<S> {
+    // What `#[tool_handler]` would generate, plus one histogram per call
+    // — the agent's view of this server, by tool.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        Ok(rmcp::model::ListToolsResult {
+            tools: self.tool_router.list_all(),
+            ..Default::default()
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tool = crate::metrics::tool_label(&request.name);
+        let started = std::time::Instant::now();
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(call).await;
+        // rmcp turns an argument mismatch into a successful transport
+        // reply that carries `is_error` — the failure most worth seeing.
+        let ok = result.as_ref().is_ok_and(|r| r.is_error != Some(true));
+        crate::metrics::tool_call(tool, ok, started);
+        result
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.tool_router.get(name).cloned()
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -1050,6 +1084,26 @@ fn map_err(e: StoreError) -> McpError {
         StoreError::Unavailable(_) | StoreError::Backend(_) => {
             tracing::error!(error = %e, "storage failure in mcp tool");
             McpError::internal_error("storage failure", None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod metric_labels {
+    use super::Memory;
+
+    /// Every tool the router has must have its own metric label: a new
+    /// `#[tool]` without an arm in `metrics::tool_label` would be timed
+    /// as `other`, silently.
+    #[test]
+    fn every_tool_has_a_label() {
+        for tool in Memory::<converge_storage_postgres::PgStorage>::tool_router().list_all() {
+            assert_eq!(
+                crate::metrics::tool_label(&tool.name),
+                tool.name,
+                "tool {} is not in metrics::tool_label",
+                tool.name
+            );
         }
     }
 }

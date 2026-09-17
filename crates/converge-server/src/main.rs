@@ -171,6 +171,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(oidc) = &oidc {
         info!(provider = %oidc.label(), "identity-provider sign-in enabled");
     }
+    if let Some(metrics) = config.metrics.listen {
+        converge_server::metrics::install(metrics).context("start the metrics listener")?;
+        info!(listen = %metrics, "metrics listening");
+    }
     let listener = TcpListener::bind(config.listen).await?;
     info!(listen = %config.listen, "converge-server listening");
     axum::serve(

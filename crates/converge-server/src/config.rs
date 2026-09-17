@@ -71,6 +71,9 @@ pub struct Config {
     /// Authentication (`[auth]` table).
     #[serde(default)]
     pub auth: Auth,
+    /// Prometheus metrics (`[metrics]` table). Off unless `listen` is set.
+    #[serde(default)]
+    pub metrics: Metrics,
     /// The expert-model layer (`[expert]` table): named model endpoints
     /// (`[expert.models.<name>]`) and per-job bindings (`[expert.jobs]`).
     /// Absent → every expert job is disabled and no model is ever called.
@@ -133,6 +136,17 @@ pub struct Auth {
     /// header (fine for dev; set it behind a proxy).
     #[serde(default)]
     pub public_url: Option<String>,
+}
+
+/// `[metrics]` — where Prometheus can scrape. The listener has no
+/// authentication, so do not publish that port beyond the scraper: on a
+/// host, loopback; in a container, a port the scraper alone can reach.
+/// Metric names alone say more about a deployment than should be public.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Metrics {
+    /// `host:port` for the `/metrics` listener; unset means no metrics.
+    #[serde(default)]
+    pub listen: Option<SocketAddr>,
 }
 
 /// Logging configuration.

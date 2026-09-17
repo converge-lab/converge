@@ -107,6 +107,12 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# Metrics: the `metrics` facade at every call site (a histogram! is a
+# histogram! whatever collects it), Prometheus as the first exporter — it
+# brings its own loopback HTTP listener, so /metrics never touches the
+# app's router or nginx.
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
 
 # PostgreSQL — the bundled storage backend. tls-rustls keeps it pure-Rust
 # and cross-compilable.

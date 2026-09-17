@@ -60,14 +60,25 @@ async fn ask<S: Storage + 'static>(
             text: t.text,
         })
         .collect();
-    let (briefing, answer) = expert
+    let started = std::time::Instant::now();
+    let prepared = expert
         .ask(
             Scope::User(caller.user),
             req.group_id,
             history,
             &req.question,
         )
-        .await?;
+        .await;
+    crate::metrics::expert_ask(
+        "prepare",
+        if prepared.is_ok() { "ok" } else { "error" },
+        started,
+    );
+    let (briefing, answer) = prepared?;
+    // The model request is dispatched on the first poll of `answer`, so
+    // the timings that matter — first chunk, whole answer, whether it
+    // failed or the client left — ride the stream itself.
+    let answer = crate::metrics::AskStream::new(Box::pin(answer), started);
 
     let head = futures::stream::once(async move {
         Ok(Event::default().event("context").data(

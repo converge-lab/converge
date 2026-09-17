@@ -120,8 +120,10 @@ impl Harness for Cursor {
             tool_response: raw["tool_output"].clone(),
             // Null unless the user has transcripts enabled, in which
             // case evidence sync simply has nothing to read.
-            // CONFIRM ON A REAL CURSOR: `conversation_id` is documented
-            // for the tool events; nothing here depends on it yet.
+            // No per-prompt seam that injects context: the event has no
+            // reader here. CONFIRM ON A REAL CURSOR: `conversation_id`
+            // is documented for the tool events.
+            event: None,
             session: raw["conversation_id"].as_str().map(str::to_owned),
             transcript: raw["transcript_path"]
                 .as_str()
@@ -135,6 +137,9 @@ impl Harness for Cursor {
             // visible line is dropped rather than smuggled into the
             // model's context.
             Response::Inject { context, .. } => json!({ "additional_context": context }),
+            // No hook of Cursor's injects context per prompt: signals
+            // wait for the tool-result envelope.
+            Response::Signals { .. } => return None,
             Response::Ctx { tool_input } => json!({ "updated_input": tool_input }),
             // CONFIRM ON A REAL CURSOR: `user_message` is documented for
             // preToolUse; on postToolUse and sessionEnd it is most

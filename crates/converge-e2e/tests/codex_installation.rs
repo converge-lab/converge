@@ -95,6 +95,11 @@ async fn codex_init_installs_hooks_into_clean_home() -> Result<()> {
             Some("mcp__converge__(project_bind|project_dismiss)"),
             "/usr/local/bin/converge hook mark --harness codex",
         ),
+        (
+            "UserPromptSubmit",
+            None,
+            "/usr/local/bin/converge hook poll --harness codex",
+        ),
     ] {
         let groups = hooks["hooks"][event].as_array().map(Vec::len);
         assert_eq!(groups, Some(1), "{event}: {}", hooks_file.stdout);

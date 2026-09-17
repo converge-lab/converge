@@ -67,8 +67,7 @@ impl Kind {
     }
 
     /// The value `--harness` takes for this kind: what `converge init`
-    /// writes into hook commands, and what the server records a session
-    /// under.
+    /// writes into hook commands, and what a repair hint has to say.
     pub fn flag(self) -> &'static str {
         match self {
             Kind::Claude => "claude",
@@ -87,7 +86,7 @@ pub fn all() -> impl Iterator<Item = &'static dyn Harness> {
 }
 
 /// One invocation, normalized. Whatever a harness hands us, only these
-/// four things mean anything to Converge.
+/// few things mean anything to Converge.
 #[derive(Debug, Default)]
 pub struct Payload {
     /// The working directory the session runs in — what resolves the
@@ -105,8 +104,12 @@ pub struct Payload {
     pub tool_response: Value,
     /// Session end: where the conversation can be read back, if at all.
     pub transcript: Option<Transcript>,
-    /// The harness's id for this conversation, when it says. Receipts
-    /// are keyed by it: no session, nothing to draw a line for.
+    /// Which of the harness's events fired, in its own spelling, when it
+    /// says. Claude Code and Codex discard an answer tagged with the
+    /// wrong event name, so the answer repeats what fired.
+    pub event: Option<String>,
+    /// The harness's id for this conversation, when it says. The
+    /// delivery ledger is keyed by it: no session, nothing to poll for.
     pub session: Option<String>,
 }
 
@@ -148,6 +151,14 @@ pub enum Response {
         /// `unbound` or `unreadable`. A harness that treats subagents
         /// differently needs it: they get the index, nothing else.
         state: &'static str,
+    },
+    /// Per prompt: the signals that arrived since the last one, framed
+    /// for the model, and the line a human sees. `event` names the hook
+    /// event that fired, for wire formats that tag the answer with it.
+    Signals {
+        context: String,
+        system: String,
+        event: String,
     },
     /// Pre-tool: the tool arguments, enriched.
     Ctx { tool_input: Value },
@@ -216,6 +227,14 @@ pub trait Harness: Sync {
 
     /// Anything the human still has to do by hand afterwards.
     fn notes(&self, _config: &Config) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Registrations `install` would add today that are not in place —
+    /// the hooks an older install predates. Empty for a harness with
+    /// nothing to check. The session-start hook, which every install
+    /// has, is where a missing newer hook gets said, once per start.
+    fn missing(&self, _exe: &str) -> Vec<&'static str> {
         Vec::new()
     }
 

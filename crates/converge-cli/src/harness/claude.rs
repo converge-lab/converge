@@ -39,6 +39,12 @@ impl Harness for ClaudeCode {
         })
     }
 
+    fn missing(&self, exe: &str) -> Vec<&'static str> {
+        settings_path()
+            .map(|path| hooks_file::missing(&path, &hooks_file::wanted(exe, "")))
+            .unwrap_or_default()
+    }
+
     fn ask_tool(&self) -> Option<&'static str> {
         Some("AskUserQuestion")
     }
@@ -100,6 +106,7 @@ impl Harness for ClaudeCode {
             transcript: raw["transcript_path"]
                 .as_str()
                 .map(|path| Transcript::File(PathBuf::from(path))),
+            event: raw["hook_event_name"].as_str().map(str::to_owned),
             session: raw["session_id"].as_str().map(str::to_owned),
         }
     }

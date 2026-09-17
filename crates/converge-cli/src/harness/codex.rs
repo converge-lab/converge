@@ -60,10 +60,16 @@ impl Harness for CodexCli {
         })
     }
 
+    fn missing(&self, exe: &str) -> Vec<&'static str> {
+        hooks_path()
+            .map(|path| hooks_file::missing(&path, &hooks_file::wanted(exe, " --harness codex")))
+            .unwrap_or_default()
+    }
+
     fn notes(&self, _config: &Config) -> Vec<String> {
         vec![
             "one more step for Codex: it skips hooks nobody has vouched \
-             for. Open Codex, run `/hooks`, and trust the four `converge \
+             for. Open Codex, run `/hooks`, and trust the five `converge \
              hook …` entries — until then they are installed but inert. \
              The trust is recorded against the exact hook definition, so \
              repeat it if `converge init` ever rewrites the commands (a \
@@ -130,6 +136,7 @@ impl Harness for CodexCli {
             transcript: raw["transcript_path"]
                 .as_str()
                 .map(|path| Transcript::File(PathBuf::from(path))),
+            event: raw["hook_event_name"].as_str().map(str::to_owned),
             session: raw["session_id"].as_str().map(str::to_owned),
         }
     }
@@ -271,7 +278,7 @@ mod tests {
         // Hooks land in codex's own file, flagged so the entrypoint knows
         // whose payload it is reading.
         let installed = CodexCli.install("/usr/bin/converge").unwrap();
-        assert_eq!(installed.changed.len(), 4);
+        assert_eq!(installed.changed.len(), 5);
         let hooks: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("hooks.json")).unwrap())
                 .unwrap();

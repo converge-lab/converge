@@ -21,6 +21,7 @@ mod device;
 mod harness;
 mod hook;
 mod marker;
+mod poll;
 mod project;
 mod setup;
 mod skew;
@@ -89,6 +90,8 @@ enum HookCmd {
     Mark(Caller),
     /// Session end: push new transcript turns into the evidence layer.
     Sync(Caller),
+    /// Per prompt: hand the session the signals raised since its last one.
+    Poll(Caller),
 }
 
 /// Which agent tool is calling — it decides how the payload is read and
@@ -132,5 +135,6 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Hook(HookCmd::Ctx(c)) => hook::ctx(c.kind),
         Cmd::Hook(HookCmd::Mark(c)) => hook::mark(c.kind),
         Cmd::Hook(HookCmd::Sync(c)) => hook::sync(c.kind).await,
+        Cmd::Hook(HookCmd::Poll(c)) => hook::poll(c.kind).await,
     }
 }

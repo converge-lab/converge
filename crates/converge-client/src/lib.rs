@@ -392,6 +392,33 @@ impl Client {
         .await
     }
 
+    /// What `session` has not been shown: proposed signals visible to
+    /// this user and newer than the session's watermark, oldest first,
+    /// at most `limit`, with the watermark advanced past them. A
+    /// session's first claim seeds the watermark and returns nothing.
+    pub async fn signal_claim(
+        &self,
+        session: &str,
+        harness: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Signal>, StoreError> {
+        #[derive(Serialize)]
+        struct Claim<'a> {
+            session: &'a str,
+            harness: Option<&'a str>,
+            limit: u32,
+        }
+        self.post(
+            "signals/claim",
+            &Claim {
+                session,
+                harness,
+                limit,
+            },
+        )
+        .await
+    }
+
     /// Resolve a signal — `Confirmed` or `Dismissed` — stamping who
     /// judged it.
     pub async fn signal_resolve(
@@ -669,6 +696,24 @@ impl Client {
             .authed(self.http.get(self.url(path)))
             .query(filter)
             .query(page)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::OK => Ok(response.json().await.map_err(transport)?),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// POST that answers with a body; the server answers `200`.
+    async fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &(impl Serialize + ?Sized),
+    ) -> Result<T, StoreError> {
+        let response = self
+            .authed(self.http.post(self.url(path)))
+            .json(body)
             .send()
             .await
             .map_err(transport)?;

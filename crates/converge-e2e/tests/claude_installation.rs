@@ -133,6 +133,18 @@ async fn claude_init_installs_hooks_into_clean_home() -> Result<()> {
         "/usr/local/bin/converge hook sync"
     );
 
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert!(settings["hooks"]["UserPromptSubmit"][0]["matcher"].is_null());
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "/usr/local/bin/converge hook poll"
+    );
+
     Ok(())
 }
 

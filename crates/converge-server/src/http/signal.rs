@@ -25,6 +25,7 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/signals", post(add::<S>).get(list::<S>))
         .route("/api/v1/signals/receipts", post(receive::<S>))
+        .route("/api/v1/signals/claim", post(claim::<S>))
         .route("/api/v1/signals/{id}", get(fetch::<S>).patch(resolve::<S>))
         .route("/api/v1/decisions/{id}/signals", get(by_decision::<S>))
 }
@@ -94,6 +95,48 @@ async fn receive<S: Storage>(
         )
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A session asking what it has not been shown.
+#[derive(Deserialize)]
+struct Claim {
+    /// The harness's session id: the receipts key, with the caller.
+    session: String,
+    /// claude | codex | opencode | cursor.
+    #[serde(default)]
+    harness: Option<String>,
+    /// At most this many, oldest first; the ledger advances past what is
+    /// returned, and only that. Capped, so a client cannot drain a burst
+    /// into one prompt.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+const CLAIM_DEFAULT: u32 = 3;
+const CLAIM_CAP: u32 = 20;
+
+/// What one (caller, session) has not been shown: proposed signals
+/// recorded after the session began, with no receipt for it, oldest
+/// first, receipted as they go. A session first seen here opens its row
+/// and gets `[]`. This is the poll's
+/// endpoint — a hook on the harness's per-prompt seam calls it — and it
+/// is where deliveries and their age are counted.
+async fn claim<S: Storage>(
+    State(store): State<S>,
+    Extension(caller): Extension<Caller>,
+    Json(claim): Json<Claim>,
+) -> Result<Json<Vec<Signal>>> {
+    let limit = claim.limit.unwrap_or(CLAIM_DEFAULT).min(CLAIM_CAP);
+    let signals = store
+        .signal_claim(
+            Scope::User(caller.user),
+            &claim.session,
+            claim.harness.as_deref(),
+            limit,
+        )
+        .await?;
+    crate::metrics::delivered("poll", &signals);
+    Ok(Json(signals))
 }
 
 /// The resolution: a verdict and who judged it.

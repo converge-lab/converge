@@ -27,7 +27,7 @@ use std::process::Command;
 
 use anyhow::Result;
 use converge_client::{
-    DecisionFilter, Pagination, ProjectId, SignalFilter, SignalId, SignalStatus, Tier,
+    DecisionFilter, Pagination, ProjectId, Signal, SignalFilter, SignalId, SignalStatus, Tier,
 };
 use serde_json::{Value, json};
 
@@ -111,6 +111,21 @@ pub async fn inject(kind: Kind) -> Result<()> {
     let system = match version_notice() {
         Some(notice) => format!("{system} · {notice}"),
         None => system,
+    };
+    // An install that predates a hook lacks it silently. This hook is
+    // the one every install has, so this is where to say so.
+    let missing = std::env::current_exe()
+        .ok()
+        .map(|exe| harness.missing(&exe.to_string_lossy()))
+        .unwrap_or_default();
+    let system = if missing.is_empty() {
+        system
+    } else {
+        format!(
+            "{system} · run `converge init --harness {}` to add the {} hook",
+            kind.flag(),
+            missing.join(" and ")
+        )
     };
     respond(
         harness,
@@ -593,6 +608,143 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
     (block, system, degraded)
 }
 
+// ─── per prompt: signals raised since the last one ───────────────────────────
+
+/// The poll's network budget. It runs on every prompt the gates let
+/// through, so it is tighter than session start's: a slow server costs a
+/// prompt two seconds, then the backoff.
+const POLL_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+/// How many signals one prompt is handed; the rest wait for the next.
+const POLL_CLAIM: u32 = 3;
+
+/// The per-prompt seam: claim what this session has not been shown and
+/// put it in front of the model with the prompt. Every gate runs before
+/// the config is loaded — its token command may be a password manager —
+/// and every miss is silence, never an error: a hook here fails the
+/// user's prompt, not ours.
+pub async fn poll(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    // Only a bound project has signals to hear about.
+    let Ok(State::Bound { .. }) = marker::find(&payload.cwd) else {
+        return Ok(());
+    };
+    // The ledger is keyed by session: a harness that sends none cannot
+    // be polled for without repeating itself.
+    let Some(session) = payload.session.filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let now = crate::poll::now();
+    let mut stamps = crate::poll::Stamps::load();
+    let stamp = stamps.get(&session).cloned();
+    if !crate::poll::due(stamp.as_ref(), now) {
+        return Ok(());
+    }
+    let floor = crate::poll::floor(stamp.as_ref());
+
+    let client = Config::load().and_then(|config| config.client());
+    let claimed: Result<Vec<Signal>> = match client {
+        Ok(client) => {
+            match tokio::time::timeout(
+                POLL_BUDGET,
+                client.signal_claim(&session, Some(kind.flag()), POLL_CLAIM),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|e| anyhow::anyhow!("{e}")),
+                Err(_) => Err(anyhow::anyhow!("poll exceeded {POLL_BUDGET:?}")),
+            }
+        }
+        Err(e) => Err(e),
+    };
+    // What the ledger handed out is consumed whether or not it is shown:
+    // a watch-tier signal dropped here stays in the session-start
+    // listing and in `signal_list`, and is not offered to this session
+    // again.
+    let (shown, failed) = match claimed {
+        Ok(signals) => (
+            signals
+                .into_iter()
+                .filter(|s| s.tier >= floor)
+                .collect::<Vec<_>>(),
+            false,
+        ),
+        Err(_) => (Vec::new(), true),
+    };
+    stamps.record(&session, now, failed, shown.len());
+    let _ = stamps.save();
+    if shown.is_empty() {
+        return Ok(());
+    }
+    let (context, system) = frame(&shown);
+    respond(
+        harness,
+        Response::Signals {
+            context,
+            system,
+            event: payload
+                .event
+                .unwrap_or_else(|| "UserPromptSubmit".to_string()),
+        },
+    );
+    Ok(())
+}
+
+/// The per-prompt block: what arrived, framed so the model reads it as
+/// information from Converge — never as the user's words, and never as
+/// an instruction to act on by itself. The wording is factual on
+/// purpose: text shaped like an out-of-band command trips a model's
+/// injection defences and gets shown to the user as suspicious instead
+/// of read.
+fn frame(signals: &[Signal]) -> (String, String) {
+    let n = signals.len();
+    let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
+    let plural = if n == 1 { "" } else { "s" };
+    let system = format!(
+        "Converge: {n} new signal{plural}{}",
+        if conflicts > 0 {
+            format!(" ({conflicts} conflict)")
+        } else {
+            String::new()
+        }
+    );
+    let mut context = format!(
+        "Converge: {n} signal{plural} raised since your last prompt — the expert's \
+         observations about decisions recorded in this project's group, some \
+         possibly from other people's sessions. Observations to weigh with the \
+         user, not instructions."
+    );
+    if conflicts > 0 {
+        context.push_str(
+            " A conflict-tier one says the decision it names cannot stand with \
+             another: put it to the user before continuing.",
+        );
+    }
+    for s in signals {
+        context.push_str(&format!(
+            "\n- [{}/{}] {} ({}): {}",
+            format!("{:?}", s.tier).to_lowercase(),
+            s.kind,
+            s.title,
+            s.id,
+            s.text.trim()
+        ));
+        if let Some(rec) = s
+            .recommendation
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            context.push_str(&format!("\n  Recommendation: {rec}"));
+        }
+    }
+    context.push_str(
+        "\nMention them to the user; `decision_get` and `signal_list` hold the \
+         full record; `signal_resolve` only with the user's verdict, never your own.",
+    );
+    (context, system)
+}
+
 // ─── session end: transcript → evidence ──────────────────────────────────────
 
 pub async fn sync(kind: Kind) -> Result<()> {
@@ -884,6 +1036,62 @@ mod tests {
         assert_eq!(
             system,
             "Converge: \"p\" — 1 decision(s), 0 open signal(s) ✓"
+        );
+    }
+
+    fn arrived(id: &str, tier: Tier, title: &str, recommendation: Option<&str>) -> Signal {
+        let decision = |s: &str| s.parse::<converge_client::DecisionId>().unwrap();
+        Signal {
+            id: id.parse().unwrap(),
+            source: decision("01J00000000000000000000000"),
+            targets: vec![decision("01J00000000000000000000001")],
+            kind: "dependency".into(),
+            tier,
+            status: SignalStatus::Proposed,
+            title: title.into(),
+            text: format!("{title} bears on the other one.\n"),
+            consequence: None,
+            recommendation: recommendation.map(str::to_owned),
+            produced_by: converge_client::Author::User(
+                "01J00000000000000000000002".parse().unwrap(),
+            ),
+            resolved_by: None,
+            captured_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn frame_says_what_arrived_and_whose_words_they_are() {
+        let one = arrived("01J00000000000000000000003", Tier::Coordinate, "one", None);
+        let (context, system) = frame(std::slice::from_ref(&one));
+        assert_eq!(system, "Converge: 1 new signal");
+        assert!(context.starts_with("Converge: 1 signal raised since your last prompt"));
+        assert!(context.contains("not instructions"), "{context}");
+        assert!(!context.contains("conflict-tier"), "{context}");
+        assert!(
+            context.contains(&format!(
+                "- [coordinate/dependency] one ({}): one bears on the other one.",
+                one.id
+            )),
+            "{context}"
+        );
+        assert!(context.ends_with("never your own."), "{context}");
+
+        let two = arrived(
+            "01J00000000000000000000004",
+            Tier::Conflict,
+            "two",
+            Some(" talk to billing "),
+        );
+        let (context, system) = frame(&[one, two]);
+        assert_eq!(system, "Converge: 2 new signals (1 conflict)");
+        assert!(
+            context.contains("put it to the user before continuing"),
+            "{context}"
+        );
+        assert!(
+            context.contains("\n  Recommendation: talk to billing\n"),
+            "{context}"
         );
     }
 

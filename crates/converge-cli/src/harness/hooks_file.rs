@@ -88,7 +88,7 @@ pub fn merge(path: &Path, wanted: &[Wanted]) -> Result<Vec<String>> {
     Ok(changed)
 }
 
-/// The four registrations the integration needs, for a harness whose
+/// The five registrations the integration needs, for a harness whose
 /// hook commands carry `suffix` (empty for Claude Code, whose installed
 /// base predates the flag). `exe` is this binary's absolute path.
 pub fn wanted(exe: &str, suffix: &str) -> Vec<Wanted> {
@@ -114,13 +114,47 @@ pub fn wanted(exe: &str, suffix: &str) -> Vec<Wanted> {
             matcher: Some("mcp__converge__(project_bind|project_dismiss)"),
             command: command("mark"),
         },
+        Wanted {
+            event: "UserPromptSubmit",
+            matcher: None,
+            command: command("poll"),
+        },
     ]
+}
+
+/// Which of `wanted` are not in `path`: the events an older install
+/// predates. An unreadable or absent file lacks all of them.
+pub fn missing(path: &Path, wanted: &[Wanted]) -> Vec<&'static str> {
+    let Ok((root, _)) = super::json_file::read(path, json!({})) else {
+        return wanted.iter().map(|w| w.event).collect();
+    };
+    wanted
+        .iter()
+        .filter(|want| {
+            let tail = want.tail();
+            let present = root["hooks"][want.event].as_array().is_some_and(|groups| {
+                groups.iter().any(|group| {
+                    group["hooks"].as_array().is_some_and(|hooks| {
+                        hooks
+                            .iter()
+                            .any(|h| h["command"].as_str().is_some_and(|c| c.ends_with(tail)))
+                    })
+                })
+            });
+            !present
+        })
+        .map(|w| w.event)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    fn root_of(file: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
+    }
 
     #[test]
     fn merge_is_conservative_and_idempotent() {
@@ -143,8 +177,20 @@ mod tests {
         )
         .unwrap();
 
+        // An older install lacks the newer hook; nothing else is missing.
+        let older = &wanted("/usr/bin/converge", "")[..4];
+        merge(&file, older).unwrap();
+        assert_eq!(
+            missing(&file, &wanted("/usr/bin/converge", "")),
+            ["UserPromptSubmit"]
+        );
         let changed = merge(&file, &wanted("/usr/bin/converge", "")).unwrap();
-        assert_eq!(changed.len(), 4, "{changed:?}");
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert!(missing(&file, &wanted("/usr/bin/converge", "")).is_empty());
+        assert_eq!(
+            root_of(&file)["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            "/usr/bin/converge hook poll"
+        );
 
         let root: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         // Untouched neighbors.
@@ -169,7 +215,7 @@ mod tests {
 
         // A moved binary updates the command in place, no duplicates.
         let changed = merge(&file, &wanted("/opt/converge", "")).unwrap();
-        assert_eq!(changed.len(), 4);
+        assert_eq!(changed.len(), 5);
         let root: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
         assert_eq!(
@@ -180,7 +226,7 @@ mod tests {
         // A flagged harness is a *different* entry, not a path update of
         // the unflagged one: the tails differ, so both can coexist.
         let changed = merge(&file, &wanted("/opt/converge", " --harness codex")).unwrap();
-        assert_eq!(changed.len(), 4, "{changed:?}");
+        assert_eq!(changed.len(), 5, "{changed:?}");
         let root: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 3);
         assert!(

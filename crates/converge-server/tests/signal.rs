@@ -154,6 +154,52 @@ async fn signal_round_trip() {
         .collect();
     assert_eq!(unseen, vec![second.as_str()]);
 
+    // The poll's endpoint: the receipts above opened sess-1's row, so
+    // nothing recorded before it is handed out; what comes after arrives
+    // once.
+    let claim = |session: &'static str| {
+        let app = app.clone();
+        async move {
+            let (status, got) = send(
+                &app,
+                "POST",
+                "/api/v1/signals/claim",
+                Some(json!({ "session": session, "harness": "codex", "limit": 3 })),
+            )
+            .await;
+            assert_eq!(status, 200, "{got}");
+            got.as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(claim("sess-1").await, Vec::<String>::new());
+    let (_, third) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": a, "targets": [c], "kind": "divergence", "tier": "coordinate",
+            "title": "a and c drift", "text": "two answers to one question",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": user },
+        })),
+    )
+    .await;
+    let third = third["id"].as_str().unwrap().to_string();
+    assert_eq!(claim("sess-1").await, vec![third]);
+    assert_eq!(claim("sess-1").await, Vec::<String>::new());
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/signals/claim",
+        Some(json!({ "session": " " })),
+    )
+    .await;
+    assert_eq!(status, 400);
+
     // The decision projection: bound by the path, parent must exist.
     let (status, page) = send(&app, "GET", &format!("/api/v1/decisions/{b}/signals"), None).await;
     assert_eq!(status, 200);

@@ -141,6 +141,7 @@ impl Harness for OpenCode {
             tool_name: None,
             tool_input: raw["tool_input"].clone(),
             tool_response: raw["tool_response"].clone(),
+            event: None,
             session: raw["session_id"].as_str().map(str::to_owned),
             // Not a file: opencode keeps the conversation in SQLite and
             // identifies it by session id.
@@ -168,6 +169,9 @@ impl Harness for OpenCode {
                 "degraded": degraded,
                 "state": state,
             }),
+            Response::Signals {
+                context, system, ..
+            } => json!({ "context": context, "system": system }),
             Response::Ctx { tool_input } => json!({ "tool_input": tool_input }),
             Response::Notice { system } => json!({ "system": system }),
             Response::Marked { effect, system } => json!({

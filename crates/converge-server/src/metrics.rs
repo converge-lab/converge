@@ -23,11 +23,13 @@ use std::time::Instant;
 use axum::extract::{MatchedPath, Request};
 use axum::middleware::Next;
 use axum::response::Response;
+use converge_storage::Signal;
 use futures::Stream;
 use metrics::{
     Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
+use time::OffsetDateTime;
 use tracing::warn;
 
 /// The bucket ladder for every `_seconds` histogram. A millisecond floor
@@ -38,6 +40,14 @@ use tracing::warn;
 pub const SECONDS_BUCKETS: [f64; 21] = [
     0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
     8.0, 12.0, 16.0, 32.0, 64.0,
+];
+
+/// The ladder for how long a signal waited to be delivered: seconds to
+/// a day. A different question from a request's latency — the poll
+/// runs once per prompt and a session may be idle for hours — so a
+/// different ladder, matched by full name ahead of the `_seconds` rule.
+pub const AGE_BUCKETS: [f64; 13] = [
+    1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0, 14400.0, 43200.0, 86400.0,
 ];
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -55,6 +65,10 @@ pub fn install(listen: SocketAddr) -> anyhow::Result<()> {
     }
     PrometheusBuilder::new()
         .with_http_listener(listen)
+        .set_buckets_for_metric(
+            Matcher::Full("converge_signal_delivery_age_seconds".into()),
+            &AGE_BUCKETS,
+        )?
         .set_buckets_for_metric(Matcher::Suffix("_seconds".into()), &SECONDS_BUCKETS)?
         .install()?;
     describe();
@@ -93,6 +107,15 @@ pub fn describe() {
         Unit::Seconds,
         "An expert question, from the request: phase=prepare until the briefing is built and the model request dispatched, first_token until the first streamed chunk, total until the stream ends; outcome=aborted when the client left first"
     );
+    describe_counter!(
+        "converge_signal_deliveries_total",
+        "Signals handed to a live session, by the channel that carried them: poll is the per-prompt hook"
+    );
+    describe_histogram!(
+        "converge_signal_delivery_age_seconds",
+        Unit::Seconds,
+        "How long a signal waited between being recorded and reaching a session, by channel — the number that says whether a channel is fast enough"
+    );
     describe_histogram!(
         "converge_http_request_seconds",
         Unit::Seconds,
@@ -111,6 +134,7 @@ pub fn describe() {
         counter!("converge_decisions_recorded_total", "via" => via).increment(0);
         counter!("converge_evidence_messages_total", "via" => via).increment(0);
     }
+    counter!("converge_signal_deliveries_total", "via" => "poll").increment(0);
     gauge!("converge_build_info", "version" => env!("CARGO_PKG_VERSION")).set(1.0);
     gauge!("converge_process_start_time_seconds").set(
         std::time::SystemTime::now()
@@ -236,6 +260,16 @@ pub fn signal_draft(tier: &'static str, outcome: &'static str) {
     counter!("converge_signal_drafts_total", "tier" => tier, "outcome" => outcome).increment(1);
 }
 
+/// Signals handed to a session, and how long each one waited for it.
+pub fn delivered(via: &'static str, signals: &[Signal]) {
+    counter!("converge_signal_deliveries_total", "via" => via).increment(signals.len() as u64);
+    let now = OffsetDateTime::now_utc();
+    for signal in signals {
+        let age = (now - signal.captured_at).as_seconds_f64().max(0.0);
+        histogram!("converge_signal_delivery_age_seconds", "via" => via).record(age);
+    }
+}
+
 /// One phase of an expert question, measured from the request.
 pub fn expert_ask(phase: &'static str, outcome: &'static str, started: Instant) {
     histogram!(
@@ -336,5 +370,8 @@ mod tests {
         assert!(ladder.contains(&8.0));
         assert!(ladder.first().is_some_and(|floor| *floor <= 0.001));
         assert!(ladder.windows(2).all(|w| w[0] < w[1]));
+        let ages = AGE_BUCKETS.to_vec();
+        assert!(ages.windows(2).all(|w| w[0] < w[1]));
+        assert!(ages.contains(&86400.0), "a day is the last edge");
     }
 }

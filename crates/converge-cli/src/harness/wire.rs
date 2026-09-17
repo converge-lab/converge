@@ -24,6 +24,17 @@ pub fn emit(response: Response) -> Option<Value> {
                 "additionalContext": context,
             },
         }),
+        Response::Signals {
+            context,
+            system,
+            event,
+        } => json!({
+            "systemMessage": system,
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": context,
+            },
+        }),
         Response::Ctx { tool_input } => json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

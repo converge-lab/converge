@@ -13,7 +13,8 @@ use std::io::{BufRead, IsTerminal, Write as _};
 use anyhow::{Context, Result, bail};
 
 use crate::config::{self, Config};
-use crate::{device, harness};
+use crate::device;
+use crate::harness::{self, Harness, Kind};
 
 /// The managed cloud — the Enter-accepts default of the server prompt.
 /// Self-hosters type their own URL over it.
@@ -93,7 +94,7 @@ fn plain(prompt: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
-pub async fn run(force: bool) -> Result<()> {
+pub async fn run(force: bool, only: Vec<Kind>) -> Result<()> {
     // ── credentials ───────────────────────────────────────────────────────
     let config = match Config::load() {
         Ok(config) if force => {
@@ -122,11 +123,120 @@ pub async fn run(force: bool) -> Result<()> {
     }
 
     // ── agent tools ──────────────────────────────────────────────────
-    // Every tool on the machine gets wired — people run more than one,
-    // and a tool installed later is what `converge init` is re-run for.
-    let present = harness::present();
+    let Some(chosen) = chosen(&only, &config)? else {
+        return Ok(());
+    };
+
+    let exe = std::env::current_exe().context("resolve own path")?;
+    let exe = exe.to_string_lossy();
+    for tool in &chosen {
+        // One group per tool: what was written, the MCP question, and
+        // whatever that tool still needs a human for — together, so the
+        // Codex trust step is read next to the Codex hooks it gates.
+        let label = tool.label();
+        println!(
+            "\n── {label} {}",
+            "─".repeat(46usize.saturating_sub(label.len()))
+        );
+
+        let installed = tool.install(&exe)?;
+        if installed.changed.is_empty() {
+            println!(
+                "  ✓ {}: already installed ({})",
+                installed.noun,
+                installed.path.display()
+            );
+        } else {
+            println!(
+                "  ✓ {}: installed {} ({})",
+                installed.noun,
+                installed.changed.join(", "),
+                installed.path.display()
+            );
+        }
+
+        // A registration bakes in the server URL and bearer, so a forced
+        // reinit must replace it, not keep it.
+        let registered = tool.mcp_registered();
+        if registered && !force {
+            println!("  ✓ mcp: `converge` server already registered");
+        } else if confirm(&format!("  register the MCP server with {label}?"), true)? {
+            if registered {
+                tool.mcp_unregister()?;
+            }
+            tool.mcp_register(&config)?;
+            println!("  ✓ mcp: registered {}/mcp as `converge`", config.server);
+        } else {
+            println!(
+                "  skipped — register later with:\n    {}",
+                tool.mcp_manual_hint(&config)
+            );
+        }
+
+        for note in tool.notes(&config) {
+            println!("  → {note}");
+        }
+    }
+
+    let labels: Vec<_> = chosen.iter().map(|h| h.label()).collect();
+    let labels = match labels.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => labels.join(""),
+    };
+    println!(
+        "\ndone. Open any repository in {labels} — the session will \
+         suggest a project binding (or run `converge project init` yourself)."
+    );
+    Ok(())
+}
+
+/// Which agent tools to wire. `--harness` decides outright. On a
+/// terminal, a picker pre-checked with what is installed — tools that
+/// were not found stay listed, unchecked, for the install `detect`
+/// missed. On a pipe there is no one to ask: everything found gets
+/// wired, which is what scripts and the e2e harness depend on.
+fn chosen(only: &[Kind], config: &Config) -> Result<Option<Vec<&'static dyn Harness>>> {
+    if !only.is_empty() {
+        return Ok(Some(only.iter().map(|kind| kind.harness()).collect()));
+    }
+    let all: Vec<_> = harness::all().collect();
+    let found: Vec<bool> = all.iter().map(|tool| tool.detect()).collect();
+
+    if interactive() {
+        let items: Vec<String> = all
+            .iter()
+            .zip(&found)
+            .map(|(tool, found)| {
+                if *found {
+                    tool.label().to_string()
+                } else {
+                    format!("{} (not found)", tool.label())
+                }
+            })
+            .collect();
+        let theme = dialoguer::theme::ColorfulTheme::default();
+        let picks = dialoguer::MultiSelect::with_theme(&theme)
+            .with_prompt("integrate with")
+            .items(&items)
+            .defaults(&found)
+            .interact()?;
+        if picks.is_empty() {
+            println!(
+                "nothing selected — re-run `converge init` when you want to wire an agent tool."
+            );
+            return Ok(None);
+        }
+        return Ok(Some(picks.into_iter().map(|i| all[i]).collect()));
+    }
+
+    let present: Vec<_> = all
+        .iter()
+        .zip(&found)
+        .filter(|(_, found)| **found)
+        .map(|(tool, _)| *tool)
+        .collect();
     if present.is_empty() {
-        let known: Vec<_> = harness::all().map(|h| h.label()).collect();
+        let known: Vec<_> = all.iter().map(|tool| tool.label()).collect();
         println!(
             "\nno supported agent tool found (looked for {}). Install one, \
              then re-run `converge init`; anything else: wire the four hook \
@@ -135,63 +245,9 @@ pub async fn run(force: bool) -> Result<()> {
             known.join(", "),
             config.server
         );
-        return Ok(());
+        return Ok(None);
     }
-
-    let exe = std::env::current_exe().context("resolve own path")?;
-    let exe = exe.to_string_lossy();
-    for tool in &present {
-        let installed = tool.install(&exe)?;
-        if installed.changed.is_empty() {
-            println!(
-                "✓ {}: already installed ({})",
-                installed.noun,
-                installed.path.display()
-            );
-        } else {
-            println!(
-                "✓ {}: installed {} ({})",
-                installed.noun,
-                installed.changed.join(", "),
-                installed.path.display()
-            );
-        }
-
-        // ── MCP registration ─────────────────────────────────────────
-        // A registration bakes in the server URL and bearer, so a forced
-        // reinit must replace it, not keep it.
-        let registered = tool.mcp_registered();
-        if registered && !force {
-            println!("✓ mcp: `converge` server already registered");
-        } else if confirm(
-            &format!("register the MCP server with {}?", tool.label()),
-            true,
-        )? {
-            if registered {
-                tool.mcp_unregister()?;
-            }
-            tool.mcp_register(&config)?;
-            println!("✓ mcp: registered {}/mcp as `converge`", config.server);
-        } else {
-            println!(
-                "skipped — register later with:\n  {}",
-                tool.mcp_manual_hint(&config)
-            );
-        }
-    }
-
-    let labels: Vec<_> = present.iter().map(|h| h.label()).collect();
-    println!(
-        "\ndone. Open any repository in {} — the session will \
-         suggest a project binding (or run `converge project init` yourself).",
-        labels.join(" or ")
-    );
-    for tool in &present {
-        for note in tool.notes(&config) {
-            println!("\n{note}");
-        }
-    }
-    Ok(())
+    Ok(Some(present))
 }
 
 /// Obtain and store a credential: the browser-pairing device flow when

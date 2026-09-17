@@ -48,6 +48,10 @@ enum Cmd {
         /// ones work — switch servers, or re-pair as someone else.
         #[arg(long)]
         force: bool,
+        /// Wire only these agent tools (repeatable). Without it, a
+        /// terminal gets a picker and a pipe wires everything found.
+        #[arg(long = "harness", value_enum)]
+        harness: Vec<Kind>,
     },
     /// Self-update from a signed release (or roll back to the kept
     /// previous binary).
@@ -116,7 +120,7 @@ enum ProjectCmd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Cmd::Init { force } => setup::run(force).await,
+        Cmd::Init { force, harness } => setup::run(force, harness).await,
         Cmd::Update {
             version,
             from,

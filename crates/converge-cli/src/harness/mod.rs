@@ -74,11 +74,6 @@ pub fn all() -> impl Iterator<Item = &'static dyn Harness> {
     Kind::value_variants().iter().copied().map(Kind::harness)
 }
 
-/// The harnesses actually present on this machine.
-pub fn present() -> Vec<&'static dyn Harness> {
-    all().filter(|harness| harness.detect()).collect()
-}
-
 /// One invocation, normalized. Whatever a harness hands us, only these
 /// four things mean anything to Converge.
 #[derive(Debug, Default)]

@@ -65,6 +65,18 @@ impl Kind {
             Kind::Cursor => &CURSOR,
         }
     }
+
+    /// The value `--harness` takes for this kind: what `converge init`
+    /// writes into hook commands, and what the server records a session
+    /// under.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Kind::Claude => "claude",
+            Kind::Codex => "codex",
+            Kind::Opencode => "opencode",
+            Kind::Cursor => "cursor",
+        }
+    }
 }
 
 /// Every harness, in the order `converge init` considers them. Driven
@@ -93,6 +105,9 @@ pub struct Payload {
     pub tool_response: Value,
     /// Session end: where the conversation can be read back, if at all.
     pub transcript: Option<Transcript>,
+    /// The harness's id for this conversation, when it says. Receipts
+    /// are keyed by it: no session, nothing to draw a line for.
+    pub session: Option<String>,
 }
 
 /// Where a harness keeps the conversation. Deliberately not a path:

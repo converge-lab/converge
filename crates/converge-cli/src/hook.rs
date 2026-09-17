@@ -20,12 +20,15 @@
 //!   **local effect** — parse the tool response and write the marker at
 //!   the git root. The LLM only ever chose; the write is deterministic.
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use converge_client::{DecisionFilter, Pagination, ProjectId, SignalFilter, SignalStatus};
+use converge_client::{
+    DecisionFilter, Pagination, ProjectId, SignalFilter, SignalId, SignalStatus, Tier,
+};
 use serde_json::{Value, json};
 
 use crate::config::Config;
@@ -64,7 +67,8 @@ pub async fn inject(kind: Kind) -> Result<()> {
         // The visible line comes from bound() too: it must reflect what
         // the fetch actually found, not just that a marker exists.
         Ok(State::Bound { project, .. }) => {
-            let (context, system, fallback) = bound(project).await;
+            let (context, system, fallback) =
+                bound(project, payload.session.as_deref(), kind.flag()).await;
             sticky = true;
             degraded = fallback;
             state = "bound";
@@ -180,9 +184,120 @@ right away."
 /// signals, fetched best-effort (a hook must not fail the session
 /// because the server is down — the binding itself is local knowledge).
 /// What the bound block fetches: the project name, the decision index
-/// lines, and the proposed-signal lines. `None` = the server answered
-/// but doesn't know the project for this account.
-type Index = Option<(String, Vec<String>, Vec<String>)>;
+/// lines, and the open signals. `None` = the server answered but
+/// doesn't know the project for this account.
+type Index = Option<(String, Vec<String>, Vec<Open>)>;
+
+/// An open signal as the block shows it.
+#[derive(Debug, Clone, PartialEq)]
+struct Open {
+    id: SignalId,
+    tier: Tier,
+    kind: String,
+    title: String,
+    /// Never shown to this user before, in any session on any machine:
+    /// the server holds no receipt for it.
+    new: bool,
+}
+
+/// The bound block and its visible line, from what the server said.
+/// Pure, so the wording and the order are testable without a server.
+/// This listing is deliberately unfiltered by receipts: it is the one
+/// place every open signal shows, whatever a poll handed out or dropped.
+fn render(
+    project: ProjectId,
+    name: &str,
+    decisions: &[String],
+    signals: &[Open],
+) -> (String, String) {
+    let is_new = |s: &Open| s.new;
+    let new = signals.iter().filter(|s| is_new(s)).count();
+    let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
+    // The list limits cap what we can count; say "N+" at the cap
+    // instead of understating a bigger corpus as exactly N.
+    let counted = |n: usize, cap: usize| {
+        if n >= cap {
+            format!("{n}+")
+        } else {
+            n.to_string()
+        }
+    };
+    let mut detail = Vec::new();
+    if new > 0 {
+        detail.push(format!("{new} new"));
+    }
+    if conflicts > 0 {
+        detail.push(format!("{conflicts} conflict"));
+    }
+    let detail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", detail.join(", "))
+    };
+    let system = format!(
+        "Converge: \"{name}\" — {} decision(s), {} open signal(s){detail} ✓",
+        counted(decisions.len(), 30),
+        counted(signals.len(), 10),
+    );
+    let mut block = if decisions.is_empty() {
+        format!(
+            "## Converge memory — project \"{name}\" ({project})\n\
+             This working tree is bound to converge project `{project}`; \
+             project memory is active. No decisions are recorded yet — use \
+             `decision_add` when a design decision lands, and record the \
+             conversation (`session_ensure` + `message_add`) so decisions \
+             can cite their evidence."
+        )
+    } else {
+        format!(
+            "## Converge memory — project \"{name}\" ({project})\n\
+             This working tree is bound to converge project `{project}`; \
+             project memory is active. Decisions below are in force — \
+             `decision_get` for the full record before re-deciding a \
+             settled topic; `decision_add` (with `supersedes`/`evidence`) \
+             when a new decision lands.\n\nDecisions:\n{}",
+            decisions.join("\n")
+        )
+    };
+    if !signals.is_empty() {
+        // What changed since the last start leads; a conflict leads
+        // within that; newest first after.
+        let mut shown: Vec<&Open> = signals.iter().collect();
+        shown.sort_by_key(|s| {
+            (
+                std::cmp::Reverse(is_new(s)),
+                std::cmp::Reverse(s.tier),
+                std::cmp::Reverse(s.id),
+            )
+        });
+        let lines: Vec<String> = shown
+            .iter()
+            .map(|s| {
+                format!(
+                    "- [{}/{}] {} ({}){}",
+                    format!("{:?}", s.tier).to_lowercase(),
+                    s.kind,
+                    s.title,
+                    s.id,
+                    if is_new(s) { " ← NEW" } else { "" }
+                )
+            })
+            .collect();
+        let legend = if new > 0 {
+            "; ← NEW = not shown to you before, in any session"
+        } else {
+            ""
+        };
+        block.push_str(&format!(
+            "\n\nProposed signals (unjudged observations touching this \
+             project{legend} — raise conflict-tier ones with the user \
+             proactively; `signal_list` for the full record, then \
+             `signal_resolve` with THEIR verdict, never your own):\n{}",
+            lines.join("\n")
+        ));
+    }
+    (block, system)
+}
 
 /// Index-fetch budget. Past it, degrade to the cached index (marked
 /// stale) or the unavailable line — a session start must never hang on
@@ -280,7 +395,11 @@ const SKEW_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Also answers whether the block is a fallback (the third element): a
 /// cached or unavailable index, or a project the server disowns.
-async fn bound(project: ProjectId) -> (String, String, bool) {
+/// Receipts budget: after the block is settled, one small request that
+/// says what this session was shown — and, first time, that it began.
+const RECEIPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (String, String, bool) {
     // Loaded once: `Config::load` may run a `token_cmd` (a password
     // manager call), and it used to run twice per session start.
     let loaded = Config::load();
@@ -319,29 +438,35 @@ async fn bound(project: ProjectId) -> (String, String, bool) {
                 )
             })
             .collect();
-        let signals = client
-            .signal_list(
-                &SignalFilter {
-                    project: Some(project),
-                    status: Some(SignalStatus::Proposed),
-                    ..Default::default()
-                },
-                &Pagination {
-                    limit: Some(10),
-                    cursor: None,
-                },
-            )
-            .await?
+        // The open signals, and which of them this user has never been
+        // shown: two reads of one list, the second narrowed by receipts.
+        let open = SignalFilter {
+            project: Some(project),
+            status: Some(SignalStatus::Proposed),
+            ..Default::default()
+        };
+        let unseen = SignalFilter {
+            unseen: true,
+            ..open.clone()
+        };
+        let page = Pagination {
+            limit: Some(10),
+            cursor: None,
+        };
+        let (listed, fresh) = tokio::try_join!(
+            client.signal_list(&open, &page),
+            client.signal_list(&unseen, &page)
+        )?;
+        let fresh: BTreeSet<SignalId> = fresh.items.iter().map(|s| s.id).collect();
+        let signals = listed
             .items
             .iter()
-            .map(|s| {
-                format!(
-                    "- [{}/{}] {} ({})",
-                    format!("{:?}", s.tier).to_lowercase(),
-                    s.kind,
-                    s.title,
-                    s.id
-                )
+            .map(|s| Open {
+                id: s.id,
+                tier: s.tier,
+                kind: s.kind.clone(),
+                title: s.title.clone(),
+                new: fresh.contains(&s.id),
             })
             .collect();
         Ok(Some((name, decisions, signals)))
@@ -357,6 +482,7 @@ async fn bound(project: ProjectId) -> (String, String, bool) {
     // Skipped when the index fetch failed — a wedged server would hang
     // this call too, and the budget already spent its patience.
     let fetch_ok = fetched.is_ok();
+    let mut listed: Vec<SignalId> = Vec::new();
     let (block, system, degraded) = match fetched {
         Ok(None) => {
             // The server disowned the project; a lingering cached index
@@ -382,49 +508,8 @@ async fn bound(project: ProjectId) -> (String, String, bool) {
             )
         }
         Ok(Some((name, decisions, signals))) => {
-            // The list limits cap what we can count; say "N+" at the cap
-            // instead of understating a bigger corpus as exactly N.
-            let counted = |n: usize, cap: usize| {
-                if n >= cap {
-                    format!("{n}+")
-                } else {
-                    n.to_string()
-                }
-            };
-            let system = format!(
-                "Converge: \"{name}\" — {} decision(s), {} open signal(s) ✓",
-                counted(decisions.len(), 30),
-                counted(signals.len(), 10),
-            );
-            let mut block = if decisions.is_empty() {
-                format!(
-                    "## Converge memory — project \"{name}\" ({project})\n\
-                     This working tree is bound to converge project `{project}`; \
-                     project memory is active. No decisions are recorded yet — use \
-                     `decision_add` when a design decision lands, and record the \
-                     conversation (`session_ensure` + `message_add`) so decisions \
-                     can cite their evidence."
-                )
-            } else {
-                format!(
-                    "## Converge memory — project \"{name}\" ({project})\n\
-                     This working tree is bound to converge project `{project}`; \
-                     project memory is active. Decisions below are in force — \
-                     `decision_get` for the full record before re-deciding a \
-                     settled topic; `decision_add` (with `supersedes`/`evidence`) \
-                     when a new decision lands.\n\nDecisions:\n{}",
-                    decisions.join("\n")
-                )
-            };
-            if !signals.is_empty() {
-                block.push_str(&format!(
-                    "\n\nProposed signals (unjudged observations touching this \
-                     project — raise conflict-tier ones with the user \
-                     proactively; `signal_list` for the full record, then \
-                     `signal_resolve` with THEIR verdict, never your own):\n{}",
-                    signals.join("\n")
-                ));
-            }
+            listed = signals.iter().map(|s| s.id).collect();
+            let (block, system) = render(project, &name, &decisions, &signals);
             // Last-good cache: written on success, served on failure.
             // A ghost binding (Ok(None)) clears it instead — the server
             // authoritatively disowned the project.
@@ -486,6 +571,18 @@ async fn bound(project: ProjectId) -> (String, String, bool) {
     // auto-update has something to do. Fire-and-forget, at most daily.
     if skew.is_some() {
         maybe_self_update(auto_update);
+    }
+    // What this session was shown, receipted — and the session's row
+    // created if this is its first sight, which is the line the poll
+    // draws: nothing recorded before it is handed out later. Only on a
+    // fresh index (a cached one says nothing about receipts), only with
+    // a session to key it, and its failure is silence.
+    if let (Ok(client), Some(session), true) = (&client, session, fetch_ok) {
+        let _ = tokio::time::timeout(
+            RECEIPT_BUDGET,
+            client.signal_receive(session, Some(harness), &listed),
+        )
+        .await;
     }
     // The nudge is for the operator, not the model: it says to run
     // commands, and it goes in the visible line only.
@@ -724,6 +821,70 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn open(id: &str, tier: Tier, title: &str, new: bool) -> Open {
+        Open {
+            id: id.parse().unwrap(),
+            tier,
+            kind: "dependency".into(),
+            title: title.into(),
+            new,
+        }
+    }
+
+    #[test]
+    fn render_marks_what_the_user_was_never_shown() {
+        let project: ProjectId = "01J00000000000000000000000".parse().unwrap();
+        let lo = open("01J00000000000000000000001", Tier::Conflict, "lo", false);
+        let mid = open("01J00000000000000000000002", Tier::Watch, "mid", false);
+        let hi = open("01J00000000000000000000003", Tier::Coordinate, "hi", true);
+        let signals = [lo.clone(), mid.clone(), hi.clone()];
+        let decisions = ["- one [accepted]".to_string()];
+
+        // Only `hi` has no receipt: it is new and leads; the conflict
+        // leads the rest; the visible line counts both.
+        let (block, system) = render(project, "p", &decisions, &signals);
+        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- [")).collect();
+        assert_eq!(
+            lines,
+            [
+                format!("- [coordinate/dependency] hi ({}) ← NEW", hi.id),
+                format!("- [conflict/dependency] lo ({})", lo.id),
+                format!("- [watch/dependency] mid ({})", mid.id),
+            ]
+        );
+        assert!(block.contains("← NEW = not shown to you before"), "{block}");
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 1 decision(s), 3 open signal(s) (1 new, 1 conflict) ✓"
+        );
+
+        // Everything receipted: nothing is new, no legend, and the order
+        // is tier then newest.
+        let seen: Vec<Open> = signals
+            .iter()
+            .cloned()
+            .map(|s| Open { new: false, ..s })
+            .collect();
+        let (block, system) = render(project, "p", &decisions, &seen);
+        assert!(!block.contains("NEW"), "{block}");
+        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- [")).collect();
+        assert!(
+            lines[0].contains(" lo ") && lines[1].contains(" hi ") && lines[2].contains(" mid ")
+        );
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 1 decision(s), 3 open signal(s) (1 conflict) ✓"
+        );
+
+        // Nothing open: no signal section, no parenthetical.
+        let (block, system) = render(project, "p", &decisions, &[]);
+        assert!(!block.contains("Proposed signals"));
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 1 decision(s), 0 open signal(s) ✓"
+        );
     }
 
     #[test]

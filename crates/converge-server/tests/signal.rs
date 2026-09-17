@@ -135,6 +135,25 @@ async fn signal_round_trip() {
     .await;
     assert_eq!(status, 400);
 
+    // Receipts: what a session was shown stops being unseen for this
+    // user, in any session, and the rest stays.
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/signals/receipts",
+        Some(json!({ "session": "sess-1", "harness": "codex", "signal_ids": [id] })),
+    )
+    .await;
+    assert_eq!(status, 204);
+    let (_, page) = send(&app, "GET", "/api/v1/signals?unseen=true", None).await;
+    let unseen: Vec<&str> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(unseen, vec![second.as_str()]);
+
     // The decision projection: bound by the path, parent must exist.
     let (status, page) = send(&app, "GET", &format!("/api/v1/decisions/{b}/signals"), None).await;
     assert_eq!(status, 200);

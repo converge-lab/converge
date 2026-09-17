@@ -120,6 +120,9 @@ impl Harness for Cursor {
             tool_response: raw["tool_output"].clone(),
             // Null unless the user has transcripts enabled, in which
             // case evidence sync simply has nothing to read.
+            // CONFIRM ON A REAL CURSOR: `conversation_id` is documented
+            // for the tool events; nothing here depends on it yet.
+            session: raw["conversation_id"].as_str().map(str::to_owned),
             transcript: raw["transcript_path"]
                 .as_str()
                 .map(|path| Transcript::File(PathBuf::from(path))),

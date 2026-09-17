@@ -100,6 +100,7 @@ impl Harness for ClaudeCode {
             transcript: raw["transcript_path"]
                 .as_str()
                 .map(|path| Transcript::File(PathBuf::from(path))),
+            session: raw["session_id"].as_str().map(str::to_owned),
         }
     }
 

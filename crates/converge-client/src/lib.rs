@@ -364,6 +364,34 @@ impl Client {
             .await
     }
 
+    /// Say that `session` was shown `ids` — through `harness` for an
+    /// agent tool's session, or `""` for this user reading on the web.
+    /// Creates the session's row on first sight, so a session-start hook
+    /// calls it with what it listed, or with nothing, to draw the line
+    /// before which no poll hands it anything.
+    pub async fn signal_receive(
+        &self,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[SignalId],
+    ) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct Receipts<'a> {
+            session: &'a str,
+            harness: Option<&'a str>,
+            signal_ids: &'a [SignalId],
+        }
+        self.submit(
+            "signals/receipts",
+            &Receipts {
+                session,
+                harness,
+                signal_ids: ids,
+            },
+        )
+        .await
+    }
+
     /// Resolve a signal — `Confirmed` or `Dismissed` — stamping who
     /// judged it.
     pub async fn signal_resolve(

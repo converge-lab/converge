@@ -54,10 +54,7 @@ pub async fn check_cached(client: &Client) -> Option<String> {
 }
 
 fn path() -> Option<PathBuf> {
-    let base = std::env::var("XDG_STATE_HOME")
-        .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/state")))
-        .ok()?;
-    Some(PathBuf::from(base).join("converge/version.json"))
+    Some(crate::watermark::state_dir()?.join("version.json"))
 }
 
 fn load() -> Option<Cached> {

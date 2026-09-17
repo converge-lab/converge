@@ -111,10 +111,18 @@ impl Watermarks {
 }
 
 fn path() -> Option<PathBuf> {
+    Some(state_dir()?.join("sync.json"))
+}
+
+/// Where this machine keeps what it has done and seen:
+/// `$XDG_STATE_HOME/converge` (default `~/.local/state/converge`).
+/// State, not cache — nothing here is safe to delete without a
+/// consequence, which is why the index cache lives elsewhere.
+pub(crate) fn state_dir() -> Option<PathBuf> {
     let base = std::env::var("XDG_STATE_HOME")
         .or_else(|_| std::env::var("HOME").map(|home| format!("{home}/.local/state")))
         .ok()?;
-    Some(PathBuf::from(base).join("converge/sync.json"))
+    Some(PathBuf::from(base).join("converge"))
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use std::convert::Infallible;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use converge_expert::Turn;
 use converge_storage::{GroupId, Scope, Storage};
@@ -25,7 +25,9 @@ use crate::auth::Caller;
 use crate::expert::Expert;
 
 pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
-    Router::new().route("/api/v1/expert/ask", post(ask::<S>))
+    Router::new()
+        .route("/api/v1/expert/ask", post(ask::<S>))
+        .route("/api/v1/expert/timing", get(timing::<S>))
 }
 
 #[derive(Deserialize)]
@@ -90,4 +92,13 @@ async fn ask<S: Storage + 'static>(
     let done = futures::stream::once(async { Ok(Event::default().event("done").data("{}")) });
 
     Ok(Sse::new(head.chain(deltas).chain(done)).keep_alive(KeepAlive::default()))
+}
+
+/// How long signal detection takes on this server, from the last few
+/// hundred passes — the number a delivery deadline must be set from.
+async fn timing<S: Storage + 'static>(
+    State((_store, expert)): State<(S, Expert<S>)>,
+    Extension(_caller): Extension<Caller>,
+) -> Json<crate::expert::TimingReport> {
+    Json(expert.timing_report(20))
 }

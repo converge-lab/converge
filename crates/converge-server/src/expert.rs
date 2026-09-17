@@ -20,12 +20,12 @@
 //! the decision write already succeeded, and enrichment must not
 //! retroactively complicate it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use converge_expert::signals::{Entry, Request, discover};
-use converge_expert::{Registry, Turn};
+use converge_expert::{Client, Registry, Turn};
 use converge_storage::{
     AgentId, Author, Decision, DecisionFilter, DecisionId, GroupId, NewSignal, Pagination, Scope,
     Signal, SignalFilter, SignalStatus, Storage, StoreError,
@@ -103,6 +103,53 @@ pub struct Expert<S> {
     agent: AgentId,
     /// Per-group memoized index (the stable prompt prefix).
     indexes: Arc<Mutex<HashMap<GroupId, Index>>>,
+    /// The last detection passes, timed. Kept so p50/p95 can be read off
+    /// a live server instead of assumed; the structured log line per run
+    /// is the durable copy.
+    timings: Arc<std::sync::Mutex<VecDeque<RunTiming>>>,
+}
+
+/// How many timed runs the ring keeps.
+const TIMINGS_KEPT: usize = 512;
+
+/// One detection pass, timed.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RunTiming {
+    pub decision: DecisionId,
+    /// Unix seconds when the pass started.
+    pub started_at: u64,
+    /// Wall time of the whole pass: retrieval, the model call, writes.
+    pub total_ms: u64,
+    /// The model call alone; `None` when the pass never reached it.
+    pub model_ms: Option<u64>,
+    pub written: usize,
+    /// `written`, `nothing`, `no_candidates`, `error`.
+    pub outcome: &'static str,
+}
+
+/// What the ring says, for the operator setting a delivery deadline.
+/// Percentiles are over passes that reached the model — the others are
+/// short-circuits that no deadline has to cover.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct TimingReport {
+    pub runs: usize,
+    pub with_model: usize,
+    pub errors: usize,
+    pub total_p50_ms: Option<u64>,
+    pub total_p95_ms: Option<u64>,
+    pub total_max_ms: Option<u64>,
+    pub model_p50_ms: Option<u64>,
+    pub model_p95_ms: Option<u64>,
+    pub recent: Vec<RunTiming>,
+}
+
+/// Nearest-rank percentile of a sorted sample; `None` when empty.
+fn percentile(sorted: &[u64], p: u64) -> Option<u64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let rank = (p as usize * sorted.len()).div_ceil(100).max(1);
+    sorted.get(rank - 1).copied()
 }
 
 impl<S: Storage + 'static> Expert<S> {
@@ -112,7 +159,40 @@ impl<S: Storage + 'static> Expert<S> {
             registry,
             agent,
             indexes: Arc::new(Mutex::new(HashMap::new())),
+            timings: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(TIMINGS_KEPT))),
         }
+    }
+
+    /// The timing ring, summarised; `recent` holds the last `last` passes.
+    pub fn timing_report(&self, last: usize) -> TimingReport {
+        let ring = self.timings.lock().unwrap_or_else(|e| e.into_inner());
+        let mut totals: Vec<u64> = ring
+            .iter()
+            .filter(|t| t.model_ms.is_some())
+            .map(|t| t.total_ms)
+            .collect();
+        let mut models: Vec<u64> = ring.iter().filter_map(|t| t.model_ms).collect();
+        totals.sort_unstable();
+        models.sort_unstable();
+        TimingReport {
+            runs: ring.len(),
+            with_model: totals.len(),
+            errors: ring.iter().filter(|t| t.outcome == "error").count(),
+            total_p50_ms: percentile(&totals, 50),
+            total_p95_ms: percentile(&totals, 95),
+            total_max_ms: totals.last().copied(),
+            model_p50_ms: percentile(&models, 50),
+            model_p95_ms: percentile(&models, 95),
+            recent: ring.iter().rev().take(last).cloned().collect(),
+        }
+    }
+
+    fn record(&self, timing: RunTiming) {
+        let mut ring = self.timings.lock().unwrap_or_else(|e| e.into_inner());
+        if ring.len() >= TIMINGS_KEPT {
+            ring.pop_front();
+        }
+        ring.push_back(timing);
     }
 
     /// A decision landed — judge its impact, asynchronously. Returns at
@@ -176,6 +256,40 @@ impl<S: Storage + 'static> Expert<S> {
         let Some(client) = self.registry.job("signals") else {
             return Ok(0);
         };
+        let started = Instant::now();
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut model_ms = None;
+        let result = self.pass(id, &client, &mut model_ms).await;
+        let total_ms = started.elapsed().as_millis() as u64;
+        let (written, outcome) = match &result {
+            Ok(n) if *n > 0 => (*n, "written"),
+            Ok(_) if model_ms.is_some() => (0, "nothing"),
+            Ok(_) => (0, "no_candidates"),
+            Err(_) => (0, "error"),
+        };
+        // The durable record: one structured line per pass.
+        info!(%id, total_ms, model_ms, written, outcome, "signal detection timed");
+        self.record(RunTiming {
+            decision: id,
+            started_at,
+            total_ms,
+            model_ms,
+            written,
+            outcome,
+        });
+        result
+    }
+
+    /// The pass itself; `model_ms` is filled once the model has answered.
+    async fn pass(
+        &self,
+        id: DecisionId,
+        client: &Client,
+        model_ms: &mut Option<u64>,
+    ) -> Result<usize, StoreError> {
         let subject = self
             .store
             .decision_get(Scope::System, id)
@@ -213,9 +327,10 @@ impl<S: Storage + 'static> Expert<S> {
             signals,
         };
 
-        let drafts = discover(&client, &request)
-            .await
-            .map_err(|e| StoreError::Backend(format!("signals job: {e}")))?;
+        let model_started = Instant::now();
+        let drafts = discover(client, &request).await;
+        *model_ms = Some(model_started.elapsed().as_millis() as u64);
+        let drafts = drafts.map_err(|e| StoreError::Backend(format!("signals job: {e}")))?;
 
         let mut written = 0;
         for draft in drafts {
@@ -662,4 +777,23 @@ fn render(d: &Decision) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::percentile;
+
+    #[test]
+    fn nearest_rank_percentiles() {
+        assert_eq!(percentile(&[], 50), None);
+        assert_eq!(percentile(&[7], 50), Some(7));
+        assert_eq!(percentile(&[7], 95), Some(7));
+        let sorted: Vec<u64> = (1..=100).collect();
+        assert_eq!(percentile(&sorted, 50), Some(50));
+        assert_eq!(percentile(&sorted, 95), Some(95));
+        assert_eq!(percentile(&sorted, 100), Some(100));
+        // Small samples round up to the rank that covers p% of them.
+        assert_eq!(percentile(&[10, 20, 30, 40], 95), Some(40));
+        assert_eq!(percentile(&[10, 20, 30, 40], 50), Some(20));
+    }
 }

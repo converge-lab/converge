@@ -30,6 +30,30 @@ impl Agent {
         }
     }
 
+    pub fn codex_cli(version: &str) -> Self {
+        Self {
+            tag: format!("codex-{version}"),
+            base_image: "node:22-bookworm-slim".to_owned(),
+            install: format!(
+                "npm install --global @openai/codex@{version} \
+                 && npm cache clean --force"
+            ),
+            env: Vec::new(),
+        }
+    }
+
+    pub fn opencode(version: &str) -> Self {
+        Self {
+            tag: format!("opencode-{version}"),
+            base_image: "node:22-bookworm-slim".to_owned(),
+            install: format!(
+                "npm install --global opencode-ai@{version} \
+                 && npm cache clean --force"
+            ),
+            env: Vec::new(),
+        }
+    }
+
     pub fn pointed_at(mut self, endpoint: &str) -> Self {
         self.env
             .push(("ANTHROPIC_BASE_URL".to_owned(), endpoint.to_owned()));

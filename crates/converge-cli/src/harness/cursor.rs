@@ -20,7 +20,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use super::{Harness, Installed, Payload, Response, Transcript, cwd_or_current};
+use super::{Harness, Installed, Payload, Response, Transcript, cwd_or_current, json_file};
 use crate::config::Config;
 use crate::transcript::{self, Parsed};
 
@@ -67,12 +67,12 @@ impl Harness for Cursor {
     fn mcp_registered(&self) -> bool {
         mcp_json()
             .ok()
-            .is_some_and(|doc| doc["mcpServers"].get(SERVER).is_some())
+            .is_some_and(|(doc, _)| doc["mcpServers"].get(SERVER).is_some())
     }
 
     fn mcp_register(&self, config: &Config) -> Result<()> {
         let path = mcp_path().context("locate ~/.cursor/mcp.json")?;
-        let mut doc = mcp_json()?;
+        let (mut doc, like) = mcp_json()?;
         if !doc.is_object() {
             bail!("{} is not a JSON object", path.display());
         }
@@ -83,16 +83,16 @@ impl Harness for Cursor {
             "url": format!("{}/mcp", config.server),
             "headers": { "Authorization": format!("Bearer {}", config.token) },
         });
-        write_json(&path, &doc)
+        json_file::write(&path, &doc, &like)
     }
 
     fn mcp_unregister(&self) -> Result<()> {
         let path = mcp_path().context("locate ~/.cursor/mcp.json")?;
-        let mut doc = mcp_json()?;
+        let (mut doc, like) = mcp_json()?;
         if let Some(servers) = doc.get_mut("mcpServers").and_then(Value::as_object_mut) {
             servers.remove(SERVER);
         }
-        write_json(&path, &doc)
+        json_file::write(&path, &doc, &like)
     }
 
     fn mcp_manual_hint(&self, config: &Config) -> String {
@@ -187,12 +187,7 @@ fn wanted(exe: &str) -> [(&'static str, String); 4] {
 /// never touch what we did not write, recognise our own entry by the
 /// `hook …` tail so a moved binary updates in place.
 fn merge_hooks(path: &std::path::Path, exe: &str) -> Result<Vec<String>> {
-    let mut root: Value = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", path.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({ "version": 1 }),
-        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
-    };
+    let (mut root, like) = json_file::read(path, json!({ "version": 1 }))?;
     if !root.is_object() {
         bail!("{} is not a JSON object", path.display());
     }
@@ -230,29 +225,16 @@ fn merge_hooks(path: &std::path::Path, exe: &str) -> Result<Vec<String>> {
     }
 
     if !changed.is_empty() {
-        write_json(path, &root)?;
+        json_file::write(path, &root, &like)?;
     }
     Ok(changed)
 }
 
-fn mcp_json() -> Result<Value> {
+fn mcp_json() -> Result<(Value, String)> {
     let Some(path) = mcp_path() else {
         bail!("HOME is not set");
     };
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
-    }
-}
-
-fn write_json(path: &std::path::Path, doc: &Value) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(doc)?))
-        .with_context(|| format!("write {}", path.display()))
+    json_file::read(&path, json!({}))
 }
 
 #[cfg(test)]

@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use anyhow::{Result, bail};
+use serde_json::json;
 
 /// One registration we want present.
 pub struct Wanted {
@@ -37,12 +37,7 @@ impl Wanted {
 /// counts as present (so a moved binary updates in place). Returns which
 /// events changed.
 pub fn merge(path: &Path, wanted: &[Wanted]) -> Result<Vec<String>> {
-    let mut root: Value = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", path.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
-    };
+    let (mut root, like) = super::json_file::read(path, json!({}))?;
     if !root.is_object() {
         bail!("{} is not a JSON object", path.display());
     }
@@ -88,11 +83,7 @@ pub fn merge(path: &Path, wanted: &[Wanted]) -> Result<Vec<String>> {
     }
 
     if !changed.is_empty() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, serde_json::to_string_pretty(&root)?)
-            .with_context(|| format!("write {}", path.display()))?;
+        super::json_file::write(path, &root, &like)?;
     }
     Ok(changed)
 }
@@ -129,6 +120,7 @@ pub fn wanted(exe: &str, suffix: &str) -> Vec<Wanted> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn merge_is_conservative_and_idempotent() {

@@ -23,6 +23,7 @@ mod claude;
 mod codex;
 mod cursor;
 mod hooks_file;
+mod json_file;
 mod opencode;
 mod wire;
 

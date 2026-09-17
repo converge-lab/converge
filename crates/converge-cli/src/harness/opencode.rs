@@ -22,7 +22,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use super::{Harness, Installed, Payload, Response, Transcript, cwd_or_current};
+use super::{Harness, Installed, Payload, Response, Transcript, cwd_or_current, json_file};
 use crate::config::Config;
 use crate::transcript::{self, Parsed};
 
@@ -85,12 +85,12 @@ impl Harness for OpenCode {
     fn mcp_registered(&self) -> bool {
         config_json()
             .ok()
-            .is_some_and(|doc| doc["mcp"].get(SERVER).is_some())
+            .is_some_and(|(doc, _)| doc["mcp"].get(SERVER).is_some())
     }
 
     fn mcp_register(&self, config: &Config) -> Result<()> {
         let path = config_path().context("locate opencode.json")?;
-        let mut doc = config_json()?;
+        let (mut doc, like) = config_json()?;
         if !doc.is_object() {
             bail!("{} is not a JSON object", path.display());
         }
@@ -103,16 +103,16 @@ impl Harness for OpenCode {
             "enabled": true,
             "headers": { "Authorization": format!("Bearer {}", config.token) },
         });
-        write_config(&path, &doc)
+        json_file::write(&path, &doc, &like)
     }
 
     fn mcp_unregister(&self) -> Result<()> {
         let path = config_path().context("locate opencode.json")?;
-        let mut doc = config_json()?;
+        let (mut doc, like) = config_json()?;
         if let Some(mcp) = doc.get_mut("mcp").and_then(Value::as_object_mut) {
             mcp.remove(SERVER);
         }
-        write_config(&path, &doc)
+        json_file::write(&path, &doc, &like)
     }
 
     fn mcp_manual_hint(&self, config: &Config) -> String {
@@ -197,26 +197,16 @@ fn config_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("opencode.json"))
 }
 
-fn config_json() -> Result<Value> {
+/// The config plus its raw text, so a write can match the owner's
+/// formatting — this file is hand-maintained and hundreds of lines.
+fn config_json() -> Result<(Value, String)> {
     let Some(path) = config_path() else {
         bail!("neither OPENCODE_CONFIG_DIR, XDG_CONFIG_HOME nor HOME is set");
     };
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({
-            "$schema": "https://opencode.ai/config.json",
-        })),
-        Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
-    }
-}
-
-fn write_config(path: &std::path::Path, doc: &Value) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(doc)?))
-        .with_context(|| format!("write {}", path.display()))
+    json_file::read(
+        &path,
+        json!({ "$schema": "https://opencode.ai/config.json" }),
+    )
 }
 
 #[cfg(test)]

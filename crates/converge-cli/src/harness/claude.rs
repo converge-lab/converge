@@ -39,6 +39,10 @@ impl Harness for ClaudeCode {
         })
     }
 
+    fn ask_tool(&self) -> Option<&'static str> {
+        Some("AskUserQuestion")
+    }
+
     fn notes(&self, config: &Config) -> Vec<String> {
         // Account connectors can't be added programmatically (claude.ai
         // UI only; they sync down to Claude Code, never up) — the best we
@@ -167,6 +171,9 @@ mod tests {
             .emit(Response::Inject {
                 context: "ctx".into(),
                 system: "line".into(),
+                sticky: true,
+                degraded: false,
+                state: "bound",
             })
             .unwrap();
         assert_eq!(inject["systemMessage"], "line");

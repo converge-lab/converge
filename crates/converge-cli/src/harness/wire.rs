@@ -15,7 +15,9 @@ use super::Response;
 
 pub fn emit(response: Response) -> Option<Value> {
     Some(match response {
-        Response::Inject { context, system } => json!({
+        Response::Inject {
+            context, system, ..
+        } => json!({
             "systemMessage": system,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
@@ -29,6 +31,10 @@ pub fn emit(response: Response) -> Option<Value> {
             },
         }),
         Response::Notice { system } => json!({ "systemMessage": system }),
-        Response::Silent => return None,
+        Response::Marked {
+            system: Some(system),
+            ..
+        } => json!({ "systemMessage": system }),
+        Response::Marked { system: None, .. } | Response::Silent => return None,
     })
 }

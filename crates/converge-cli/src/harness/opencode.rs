@@ -8,8 +8,10 @@
 //! Three consequences shape the code below:
 //!
 //! - **No session-start event.** The shim injects through
-//!   `experimental.chat.system.transform`, which fires before *every*
-//!   request, and dedupes per session id.
+//!   `experimental.chat.system.transform`, which runs while the system
+//!   prompt is assembled — for *every* request, since that prompt is
+//!   rebuilt each time rather than kept in the conversation. So the block
+//!   is pushed on every request and `hook inject` is cached per session.
 //! - **No session-end event.** Evidence syncs on `session.idle`, i.e.
 //!   every lull. Watermarks make that cheap and it loses less than a
 //!   single end-of-session push would.
@@ -71,13 +73,21 @@ impl Harness for OpenCode {
         })
     }
 
+    fn ask_tool(&self) -> Option<&'static str> {
+        // Registered as `question`; not every agent is allowed it, which
+        // is why the wording treats it as a preference.
+        Some("question")
+    }
+
     fn notes(&self, _config: &Config) -> Vec<String> {
         vec![
             "note for opencode: it has no session-start hook, so the \
              context block rides `experimental.chat.system.transform`. \
              If a future opencode drops that API, sessions stop getting \
              the decision index — the tools keep working, and `converge \
-             update` will carry the fix."
+             update` will carry the fix. Its status lines (\"linked this \
+             repo\", sync counts, write failures) show as TUI toasts; a \
+             headless `opencode run`/`serve` has nowhere to show them."
                 .to_string(),
         ]
     }
@@ -144,12 +154,25 @@ impl Harness for OpenCode {
         // exactly these keys. No `hookSpecificOutput` envelope to ape —
         // that belongs to harnesses that defined one.
         Some(match response {
-            Response::Inject { context, system } => json!({
+            Response::Inject {
+                context,
+                system,
+                sticky,
+                degraded,
+                state,
+            } => json!({
                 "context": context,
                 "system": system,
+                "sticky": sticky,
+                "degraded": degraded,
+                "state": state,
             }),
             Response::Ctx { tool_input } => json!({ "tool_input": tool_input }),
             Response::Notice { system } => json!({ "system": system }),
+            Response::Marked { effect, system } => json!({
+                "effect": effect.as_str(),
+                "system": system,
+            }),
             Response::Silent => return None,
         })
     }

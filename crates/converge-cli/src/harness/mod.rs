@@ -118,13 +118,63 @@ impl Transcript {
 /// What an entrypoint decided to say back, before any harness dialect.
 pub enum Response {
     /// Session start: the context block, plus the one line a human sees.
-    Inject { context: String, system: String },
+    /// `sticky` says the block is reference material worth carrying in
+    /// every request (a bound project's decision index) rather than
+    /// instructions to give once (unbound, disabled, unreadable) — a
+    /// harness that rebuilds its prompt per request needs the
+    /// difference. `degraded` marks a fallback (cached or unavailable
+    /// index) that such a harness should refresh sooner.
+    Inject {
+        context: String,
+        system: String,
+        sticky: bool,
+        degraded: bool,
+        /// The marker state the block describes: `bound`, `disabled`,
+        /// `unbound` or `unreadable`. A harness that treats subagents
+        /// differently needs it: they get the index, nothing else.
+        state: &'static str,
+    },
     /// Pre-tool: the tool arguments, enriched.
     Ctx { tool_input: Value },
     /// A visible line and nothing else.
     Notice { system: String },
+    /// Post-tool: what `mark` did to the marker, and the line for it. A
+    /// harness that keeps state of its own (opencode's shim) needs the
+    /// effect, not just the prose: a session-scoped dismiss writes no
+    /// marker but must still silence that session.
+    Marked {
+        effect: Effect,
+        system: Option<String>,
+    },
     /// Nothing to say — emit stays quiet rather than printing `null`.
     Silent,
+}
+
+/// What `hook mark` did with a binding tool's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Wrote a bound marker.
+    Bound,
+    /// Wrote a disabled marker.
+    Disabled,
+    /// The user declined for this session only; nothing on disk.
+    DismissedSession,
+    /// A skip or an unrecognised answer; nothing to do.
+    Nothing,
+    /// The marker could not be written.
+    Failed,
+}
+
+impl Effect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effect::Bound => "bound",
+            Effect::Disabled => "disabled",
+            Effect::DismissedSession => "dismissed_session",
+            Effect::Nothing => "nothing",
+            Effect::Failed => "failed",
+        }
+    }
 }
 
 /// What [`Harness::install`] did, for the line `converge init` prints.
@@ -152,6 +202,14 @@ pub trait Harness: Sync {
     /// Anything the human still has to do by hand afterwards.
     fn notes(&self, _config: &Config) -> Vec<String> {
         Vec::new()
+    }
+
+    /// The tool this harness gives the model for asking the user to pick
+    /// from options, if it has one. The mapping instructions name it;
+    /// naming another harness's tool sends the model after something it
+    /// cannot call.
+    fn ask_tool(&self) -> Option<&'static str> {
+        None
     }
 
     /// Is the converge MCP server already known to this tool?

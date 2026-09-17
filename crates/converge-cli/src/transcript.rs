@@ -27,6 +27,10 @@ pub struct Turn {
     pub speaker: String,
     pub body: String,
     pub sent_at: Option<OffsetDateTime>,
+    /// The harness's own id for the message, when it has one. A sync
+    /// watermark keyed on ids survives a transcript that is edited in
+    /// place (opencode reverts); a count does not.
+    pub id: Option<String>,
 }
 
 /// A parsed transcript.
@@ -110,6 +114,7 @@ pub fn claude(path: &Path) -> Result<Parsed> {
                 .timestamp
                 .as_deref()
                 .and_then(|t| OffsetDateTime::parse(t, &Rfc3339).ok()),
+            id: None,
         });
     }
     Ok(parsed)
@@ -209,6 +214,7 @@ pub fn codex(path: &Path) -> Result<Parsed> {
                         .timestamp
                         .as_deref()
                         .and_then(|t| OffsetDateTime::parse(t, &Rfc3339).ok()),
+                    id: None,
                 });
             }
             _ => continue,
@@ -243,6 +249,7 @@ struct ExportMessage {
 
 #[derive(Deserialize)]
 struct ExportMessageInfo {
+    id: Option<String>,
     role: Option<String>,
     time: Option<ExportTime>,
 }
@@ -258,6 +265,13 @@ struct ExportPart {
     #[serde(rename = "type")]
     kind: String,
     text: Option<String>,
+    /// opencode's own scaffolding wearing the user role — the
+    /// "Continue if you have next steps…" it writes after a compaction.
+    /// A decision must never cite it as something the human said.
+    #[serde(default)]
+    synthetic: bool,
+    #[serde(default)]
+    ignored: bool,
 }
 
 /// Parse an `opencode export` payload. Unlike the JSONL formats this is
@@ -273,6 +287,7 @@ pub fn opencode(json: &[u8]) -> Result<Parsed> {
     }
     for message in export.messages {
         let info = message.info.unwrap_or(ExportMessageInfo {
+            id: None,
             role: None,
             time: None,
         });
@@ -284,7 +299,7 @@ pub fn opencode(json: &[u8]) -> Result<Parsed> {
         let body = message
             .parts
             .iter()
-            .filter(|p| p.kind == "text")
+            .filter(|p| p.kind == "text" && !p.synthetic && !p.ignored)
             .filter_map(|p| p.text.as_deref())
             .collect::<Vec<_>>()
             .join("\n\n");
@@ -298,6 +313,7 @@ pub fn opencode(json: &[u8]) -> Result<Parsed> {
                 .time
                 .and_then(|t| t.created)
                 .and_then(|ms| OffsetDateTime::from_unix_timestamp_nanos(ms * 1_000_000).ok()),
+            id: info.id,
         });
     }
     Ok(parsed)
@@ -428,23 +444,27 @@ mod tests {
         let json = br#"{
           "info": { "id": "ses_abc", "directory": "/repo", "title": "Greeting" },
           "messages": [
-            { "info": { "role": "user", "time": { "created": 1789593180822 } },
+            { "info": { "id": "msg_1", "role": "user", "time": { "created": 1789593180822 } },
               "parts": [ { "type": "text", "text": "split the trait?" } ] },
             { "info": { "role": "assistant", "time": { "created": 1789593181108 } },
               "parts": [ { "type": "reasoning", "text": "hmm" },
                          { "type": "text", "text": "yes - per-resource" } ] },
             { "info": { "role": "assistant", "time": { "created": 1789593181200 } },
-              "parts": [] }
+              "parts": [] },
+            { "info": { "id": "msg_synth", "role": "user", "time": { "created": 1789593181300 } },
+              "parts": [ { "type": "text", "synthetic": true, "text": "Continue if you have next steps..." } ] }
           ]
         }"#;
 
         let parsed = opencode(json).unwrap();
         assert_eq!(parsed.session_id.as_deref(), Some("ses_abc"));
         assert_eq!(parsed.cwd.as_deref(), Some("/repo"));
-        // The empty assistant message and the reasoning part are dropped.
+        // The empty assistant message, the reasoning part and opencode's
+        // synthetic auto-continue are all dropped.
         assert_eq!(parsed.turns.len(), 2);
         assert_eq!(parsed.turns[0].body, "split the trait?");
         assert_eq!(parsed.turns[1].body, "yes - per-resource");
         assert!(parsed.turns[0].sent_at.is_some());
+        assert_eq!(parsed.turns[0].id.as_deref(), Some("msg_1"));
     }
 }

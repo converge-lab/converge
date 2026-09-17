@@ -137,7 +137,11 @@ impl Harness for Cursor {
             // preToolUse; on postToolUse and sessionEnd it is most
             // likely ignored, which is the harmless outcome.
             Response::Notice { system } => json!({ "user_message": system }),
-            Response::Silent => return None,
+            Response::Marked {
+                system: Some(system),
+                ..
+            } => json!({ "user_message": system }),
+            Response::Marked { system: None, .. } | Response::Silent => return None,
         })
     }
 
@@ -300,6 +304,9 @@ mod tests {
             .emit(Response::Inject {
                 context: "ctx".into(),
                 system: "dropped".into(),
+                sticky: true,
+                degraded: false,
+                state: "bound",
             })
             .unwrap();
         assert_eq!(inject["additional_context"], "ctx");

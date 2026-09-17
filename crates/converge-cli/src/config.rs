@@ -120,13 +120,37 @@ pub fn write(server: &str, token: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// How long a `token_cmd` may take. Hooks run inside an agent's turn
+/// with budgets of a few seconds; a password manager waiting on an
+/// unlock prompt would otherwise hold the whole session.
+const TOKEN_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Run a `token_cmd` and take its stdout as the secret.
 fn run(cmd: &str) -> Result<String> {
-    let output = Command::new("sh")
+    use std::process::Stdio;
+    let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| format!("run token_cmd `{cmd}`"))?;
+    let started = std::time::Instant::now();
+    loop {
+        if child.try_wait().context("wait for token_cmd")?.is_some() {
+            break;
+        }
+        if started.elapsed() > TOKEN_CMD_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("token_cmd `{cmd}` did not finish within {TOKEN_CMD_TIMEOUT:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let output = child
+        .wait_with_output()
+        .with_context(|| format!("collect token_cmd `{cmd}`"))?;
     if !output.status.success() {
         bail!("token_cmd `{cmd}` failed with {}", output.status);
     }

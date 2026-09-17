@@ -11,22 +11,64 @@ import { execFile } from "node:child_process";
 
 const CONVERGE = "__CONVERGE_BIN__";
 
-// Sessions whose context block has already been injected. opencode has
-// no session-start event: the closest hook fires before *every* request,
-// so without this the decision index would be re-injected each turn.
-const injected = new Set();
+// How long a context block is trusted before `converge hook inject` is
+// asked again — a decision recorded mid-session should show up without
+// a restart. A degraded answer (the server was unreachable) and a failed
+// run are retried on a backoff ladder, so an unreachable server costs a
+// stall now and then rather than one per turn.
+const FRESH_MS = 5 * 60 * 1000;
+const RETRY_MS = 30 * 1000;
+
+// Two different numbers. The kill switch is for a wedged machine and
+// sits above `converge hook inject`'s own worst case (3s token command
+// + 4s index + 2s version check); the wait is how long a request may be
+// held for a block that is not there yet — past it the fetch keeps
+// running and the next model call picks the block up.
+const INJECT_TIMEOUT_MS = 12000;
+const INJECT_WAIT_MS = 2500;
+const SYNC_TIMEOUT_MS = 60 * 1000;
+const SYNC_DEBOUNCE_MS = 5000;
+const SYNC_MAX_INFLIGHT = 2;
+const CLASSIFY_WAIT_MS = 500;
+
+// How many user turns a non-sticky block (the mapping instructions)
+// stays in for. opencode rebuilds the system prompt per model call and
+// runs several calls per turn, so the unit has to be the turn; the
+// marker changing (bind/dismiss) ends it sooner.
+const SHEET_TURNS = 4;
+
+// What admits a request: opencode's environment preamble. Every real
+// conversation request carries it in the system prompt; the hidden
+// agents that reuse the conversation's session id (title generator,
+// summarizer, compaction) are built with an empty system list and never
+// do. The prompt sentences below are only belt and braces for the same
+// three — a user can override their wording, the preamble they cannot.
+const ENV_PREAMBLE = "<env>";
+const HIDDEN_AGENT =
+  /You are a title generator\. You output ONLY a thread title|You are a context summarization agent|Summarize what was done in this conversation/;
+// A compaction flag that outlived its request (an aborted compaction
+// publishes no `session.compacted`) expires rather than eating a turn.
+const COMPACTING_TTL_MS = 60 * 1000;
+// Loopback calls into opencode's own API are bounded too.
+const API_WAIT_MS = 3000;
 
 /// Feed a payload to an entrypoint and parse whatever it says back.
 /// Never throws and never blocks the agent: a converge problem must not
-/// break someone's session, so failure is silence.
-function hook(sub, payload) {
+/// break someone's session, so failure is `null`.
+function hook(sub, payload, timeout) {
+  let body;
+  try {
+    body = JSON.stringify(payload);
+  } catch {
+    return Promise.resolve(null);
+  }
   return new Promise((resolve) => {
     let child;
     try {
       child = execFile(
         CONVERGE,
         ["hook", sub, "--harness", "opencode"],
-        { timeout: 10_000, maxBuffer: 8 << 20 },
+        { timeout, maxBuffer: 8 << 20 },
         (error, stdout) => {
           if (error) return resolve(null);
           try {
@@ -40,61 +82,398 @@ function hook(sub, payload) {
       return resolve(null);
     }
     child.stdin.on("error", () => resolve(null));
-    child.stdin.end(JSON.stringify(payload));
+    child.stdin.end(body);
   });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Which tools are ours. The MCP server is registered under the name
 // `converge`, and opencode composes tool ids from the server name, so
-// the name is in the id whatever separator it picks. Matching the
-// substring rather than a guessed `converge_x` / `mcp__converge__x`
-// spelling means this keeps working if that spelling changes.
+// the name is in the id whatever separator it picks.
 const isOurs = (tool) => typeof tool === "string" && tool.includes("converge");
 const isBinding = (tool) =>
   isOurs(tool) && (tool.endsWith("project_bind") || tool.endsWith("project_dismiss"));
 
-export const server = async ({ directory }) => ({
-  // Session start, as close as opencode gets to one.
-  "experimental.chat.system.transform": async (input, output) => {
-    const session = input.sessionID;
-    if (!session || injected.has(session)) return;
-    injected.add(session);
-    const said = await hook("inject", { cwd: directory, session_id: session });
-    if (said && said.context) output.system.push(said.context);
-  },
+// Per-session bookkeeping must not grow without bound in a long-lived
+// server. Past a few thousand ids the oldest half goes — Sets and Maps
+// keep insertion order — rather than everything at once, which would
+// un-dismiss every session that asked for quiet.
+const bounded = (collection) => {
+  if (collection.size <= 5000) return;
+  for (const key of [...collection.keys()].slice(0, 2500)) collection.delete(key);
+};
 
-  // Pre-tool: hand the server cwd and git remote so it can rank project
-  // candidates without the model gathering anything.
-  "tool.execute.before": async (input, output) => {
-    if (!isOurs(input.tool)) return;
-    const said = await hook("ctx", {
-      cwd: directory,
-      session_id: input.sessionID,
-      tool_input: output.args,
-    });
-    if (said && said.tool_input && typeof said.tool_input === "object") {
-      Object.assign(output.args, said.tool_input);
+export const server = async ({ directory, client }) => {
+  // One block per workspace, not per session: `hook inject` reads only
+  // the working directory, and opencode mints a session id per subagent
+  // and throwaway ids for name generation — keying on those would mean
+  // a converge round trip for each, and a map that never stops growing.
+  let block = null; // { text, system, sticky, degraded, at, fails, weak }
+  let inflight = null; // the fetch in progress, shared by concurrent requests
+  let epoch = 0; // bumped by forget(): an older fetch's answer is discarded
+
+  // Which session ids are conversations: `chat.message` fires only for a
+  // real user turn. Anything else with a session id — name generation,
+  // agent generation — is not the conversation and gets nothing.
+  const conversations = new Set();
+  // Root or subagent. Subagents run as child sessions: the decision
+  // index is useful to them, the mapping instructions and the toasts are
+  // not. The event bus says which is which, but a subagent's first
+  // request can beat the event, so an unknown id is looked up once and
+  // treated as a child until the answer comes back.
+  const kinds = new Map(); // session -> "root" | "child" | "pending"
+  const turns = new Map(); // session -> user turns seen
+  const latched = new Map(); // session -> the text pushed this turn (byte-stable within a turn)
+  const quiet = new Set(); // sessions that dismissed converge for the session
+  const toasted = new Map(); // session -> the last line shown
+  const compacting = new Map(); // session -> when the summarizer was announced
+  const sheetTurns = new Map(); // session -> the user turns that actually got the sheet
+  const syncing = new Set();
+  const synced = new Map(); // session -> { at, updated }
+  const syncSaid = new Map(); // session -> the last sync line shown
+  let syncsInFlight = 0;
+
+  // opencode drops the `system` line every other harness shows; a toast
+  // is the zero-token way to surface it — in the TUI. The endpoint
+  // answers `true` whether or not anything is listening, so a headless
+  // `opencode run`/`serve` has nowhere to show these, and this does not
+  // pretend otherwise (`notes()` says so to the user).
+  const say = async (session, message, variant) => {
+    try {
+      if (session && quiet.has(session)) return;
+      if (client && client.tui && client.tui.showToast) {
+        await client.tui.showToast({ body: { message, variant: variant || "info" } });
+      }
+    } catch {}
+  };
+  const bounded_wait = (promise, ms, fallback) =>
+    Promise.race([promise, sleep(ms).then(() => fallback)]);
+
+  // Root or child, looked up once through opencode's own API when the
+  // event bus has not said yet. The lookup is in-process and fast; a
+  // request waits for it briefly and otherwise assumes root, so a slow
+  // answer costs a subagent one sheet rather than a user their first.
+  const lookups = new Map(); // session -> Promise<"root"|"child">
+  const classify = async (session) => {
+    const known = kinds.get(session);
+    if (known && known !== "pending") return known;
+    let lookup = lookups.get(session);
+    if (!lookup) {
+      kinds.set(session, "pending");
+      bounded(kinds);
+      lookup = (async () => {
+        try {
+          const answer =
+            client && client.session && client.session.get
+              ? await bounded_wait(client.session.get({ path: { id: session } }), API_WAIT_MS, null)
+              : null;
+          const info = answer && (answer.data || answer);
+          const parent = info && typeof info === "object" ? info.parentID : undefined;
+          return parent ? "child" : "root";
+        } catch {
+          return "root";
+        }
+      })().then((kind) => {
+        if (kinds.get(session) === "pending") kinds.set(session, kind);
+        lookups.delete(session);
+        return kinds.get(session);
+      });
+      lookups.set(session, lookup);
     }
-  },
+    const kind = await Promise.race([lookup, sleep(CLASSIFY_WAIT_MS).then(() => "root")]);
+    return kind === "pending" ? "root" : kind;
+  };
 
-  // Post-tool: the local effect. The marker is written by converge, not
-  // by the model, so a binding is deterministic.
-  "tool.execute.after": async (input, output) => {
-    if (!isBinding(input.tool)) return;
-    await hook("mark", {
-      cwd: directory,
-      session_id: input.sessionID,
-      tool_response: output.output,
-    });
-  },
+  // Single-flight: the title request and the conversation request for a
+  // new session arrive together, and both must ride one fetch. An answer
+  // that arrives after forget() is dropped — it describes the old marker.
+  const refresh = () => {
+    if (inflight) return inflight;
+    const mine = epoch;
+    const run = hook("inject", { cwd: directory }, INJECT_TIMEOUT_MS)
+      .catch(() => null)
+      .then((said) => {
+        if (mine !== epoch) return block;
+        const prev = block;
+        if (said && typeof said === "object") {
+          const text = typeof said.context === "string" && said.context ? said.context : null;
+          // An empty answer is not "nothing to say" — every marker state
+          // has something to say — so it is treated as degraded.
+          const degraded = !!said.degraded || !text;
+          block = {
+            text: text || (prev ? prev.text : null),
+            system: typeof said.system === "string" ? said.system : null,
+            sticky: text ? !!said.sticky : prev ? prev.sticky : false,
+            state: typeof said.state === "string" ? said.state : prev ? prev.state : "unbound",
+            degraded,
+            at: Date.now(),
+            fails: 0,
+            weak: degraded ? (prev ? prev.weak : 0) + 1 : 0,
+          };
+        } else {
+          // Keep serving the last good block; a blip must not blank it.
+          block = {
+            ...(prev || { text: null, system: null, sticky: false, state: "unbound", degraded: true, weak: 0 }),
+            at: Date.now(),
+            fails: (prev ? prev.fails : 0) + 1,
+          };
+        }
+        return block;
+      })
+      .catch(() => block)
+      .finally(() => {
+        if (inflight === run) inflight = null;
+      });
+    inflight = run;
+    return run;
+  };
+  const ladder = (n) => Math.min(RETRY_MS * 2 ** Math.max(0, n - 1), FRESH_MS);
+  const ttl = (b) => (b.fails ? ladder(b.fails) : b.degraded ? ladder(b.weak || 1) : FRESH_MS);
+  const stale = (b) => Date.now() - b.at > ttl(b);
+  // Wait for a fetch, but not past what a request can bear.
+  const awaited = () => Promise.race([refresh(), sleep(INJECT_WAIT_MS).then(() => block)]);
+  const forget = () => {
+    epoch += 1;
+    block = null;
+    inflight = null;
+    latched.clear();
+    toasted.clear();
+    turns.clear();
+    sheetTurns.clear();
+    // A marker change is a newer, stronger decision than any session's
+    // "not now".
+    quiet.clear();
+  };
 
-  // Evidence. opencode has no session-end event either; `session.idle`
-  // is every lull, which is fine — sync is incremental by watermark, so
-  // syncing often costs nothing and loses less than syncing once would.
-  event: async ({ event }) => {
-    if (!event || event.type !== "session.idle") return;
-    const session = event.properties && event.properties.sessionID;
-    if (!session) return;
-    await hook("sync", { cwd: directory, session_id: session });
-  },
-});
+  return {
+    // A real user turn: the only way a session id becomes a conversation,
+    // and the boundary at which the pushed text may change.
+    "chat.message": async (input) => {
+      try {
+        const session = input && input.sessionID;
+        if (!session) return;
+        conversations.add(session);
+        bounded(conversations);
+        turns.set(session, (turns.get(session) || 0) + 1);
+        bounded(turns);
+        latched.delete(session);
+      } catch {}
+    },
+
+    // The summarizer's request comes next for this session; it must not
+    // carry instructions it cannot act on into a summary that persists.
+    "experimental.session.compacting": async (input) => {
+      try {
+        if (input && input.sessionID) {
+          compacting.set(input.sessionID, Date.now());
+          bounded(compacting);
+        }
+      } catch {}
+    },
+
+    // Session start, as close as opencode gets to one: this runs while the
+    // system prompt is assembled, for every model call. That prompt is
+    // rebuilt each time rather than kept in the conversation, so a sticky
+    // block (the decision index, the disabled rule) is pushed every call;
+    // the mapping instructions for a few user turns, until the marker
+    // changes. The text is latched per turn: a refresh landing inside a
+    // tool loop must not rewrite the prompt prefix mid-turn.
+    // Only in-place mutation of `output.system` reaches opencode.
+    "experimental.chat.system.transform": async (input, output) => {
+      try {
+        const session = input.sessionID;
+        if (!session || quiet.has(session)) return;
+        const all = output.system.filter((s) => typeof s === "string").join("\n");
+        // The summarizer is next for this session, whichever request that
+        // turns out to be; any hidden agent clears the flag so it cannot
+        // leak onto the first real turn after compaction, and it expires
+        // on its own when a compaction never reaches the model.
+        const announced = compacting.get(session);
+        const wasCompacting = announced !== undefined && Date.now() - announced < COMPACTING_TTL_MS;
+        if (announced !== undefined) compacting.delete(session);
+        if (!all.includes(ENV_PREAMBLE) || HIDDEN_AGENT.test(all) || wasCompacting) return;
+
+        let text = latched.get(session);
+        // The latched text is pushed as is, but a stale block still
+        // refreshes now so the next turn starts from a fresh one.
+        if (text !== undefined && block && block.text && stale(block)) refresh().catch(() => {});
+        if (text === undefined) {
+          let b = block;
+          if (!b) b = await awaited(); // nothing to show yet: the one wait
+          else if (stale(b)) {
+            // Refresh off the critical path — unless there is nothing to
+            // show, in which case this request is the one to wait.
+            if (b.text) refresh().catch(() => {});
+            else b = await awaited();
+          }
+          if (!b || !b.text) {
+            // Waited once this turn; the rest of the turn does not.
+            latched.set(session, null);
+            return;
+          }
+          const kind = await classify(session);
+          // The visible line is independent of whether the text goes in:
+          // a one-time notice consumed by `hook inject` must not be eaten
+          // by a request that pushes nothing.
+          if (kind === "root" && b.system && toasted.get(session) !== b.system) {
+            toasted.set(session, b.system);
+            bounded(toasted);
+            void say(session, b.system);
+          }
+          if (kind !== "root" && b.state !== "bound") {
+            // A subagent gets the decision index and nothing else.
+            latched.set(session, null);
+            return;
+          }
+          if (!b.sticky) {
+            // Budgeted in user turns that actually received it: a cold
+            // turn that pushed nothing does not count.
+            const turn = turns.get(session) || 1;
+            const got = sheetTurns.get(session) || new Set();
+            if (!got.has(turn) && got.size >= SHEET_TURNS) {
+              latched.set(session, null);
+              return;
+            }
+            got.add(turn);
+            sheetTurns.set(session, got);
+            bounded(sheetTurns);
+          }
+          text = b.text;
+          latched.set(session, text);
+          bounded(latched);
+        }
+        if (text) output.system.push(text);
+      } catch {}
+    },
+
+    // Pre-tool: hand the server cwd and git remote so it can rank project
+    // candidates without the model gathering anything.
+    "tool.execute.before": async (input, output) => {
+      try {
+        if (!isOurs(input.tool)) return;
+        const said = await hook(
+          "ctx",
+          { cwd: directory, session_id: input.sessionID, tool_input: output.args },
+          INJECT_TIMEOUT_MS,
+        );
+        if (said && said.tool_input && typeof said.tool_input === "object") {
+          Object.assign(output.args, said.tool_input);
+        }
+      } catch {}
+    },
+
+    // Post-tool: the local effect. The marker is written by converge, not
+    // by the model, so a binding is deterministic — and `mark` says what
+    // it did, so the shim never re-parses the tool's answer itself.
+    "tool.execute.after": async (input, output) => {
+      try {
+        if (!isBinding(input.tool)) return;
+        // Code mode hands over the raw tool result rather than the
+        // `{title, output, metadata}` envelope; take the inner value when
+        // there is one, whatever its type.
+        const response = output && output.output !== undefined ? output.output : output;
+        const said = await hook(
+          "mark",
+          { cwd: directory, session_id: input.sessionID, tool_response: response },
+          INJECT_TIMEOUT_MS,
+        );
+        const effect = said && typeof said.effect === "string" ? said.effect : "nothing";
+        if (effect === "bound" || effect === "disabled") forget();
+        if (effect === "dismissed_session") {
+          quiet.add(input.sessionID);
+          bounded(quiet);
+        }
+        if (said && typeof said.system === "string" && said.system) {
+          void say(input.sessionID, said.system, effect === "failed" ? "error" : "info");
+        }
+      } catch {}
+    },
+
+    // Evidence. opencode has no session-end event either; `session.idle`
+    // is every lull, which is fine — sync is incremental by watermark, so
+    // syncing often costs nothing and loses less than syncing once would.
+    // One sync per session at a time, a few at once overall, none for
+    // subagents, none when the session has not grown, and a burst of
+    // idles collapses into one run.
+    event: async ({ event }) => {
+      try {
+        if (!event) return;
+        const info = event.properties && event.properties.info;
+        if ((event.type === "session.created" || event.type === "session.updated") && info && info.id) {
+          kinds.set(info.id, info.parentID ? "child" : "root");
+          bounded(kinds);
+          return;
+        }
+        if (event.type === "session.compacted" && event.properties && event.properties.sessionID) {
+          compacting.delete(event.properties.sessionID);
+          return;
+        }
+        if (event.type === "session.deleted") {
+          const id = info && info.id;
+          if (id) {
+            for (const c of [conversations, quiet, compacting, kinds, turns, latched, toasted, sheetTurns, synced, syncSaid]) {
+              c.delete(id);
+            }
+          }
+          return;
+        }
+        if (event.type !== "session.idle") return;
+        const session = event.properties && event.properties.sessionID;
+        if (!session || syncing.has(session) || syncsInFlight >= SYNC_MAX_INFLIGHT) return;
+        const last = synced.get(session) || { at: 0, updated: null };
+        if (Date.now() - last.at < SYNC_DEBOUNCE_MS) return;
+        // Claimed before the first await, or two idles both get through;
+        // released by a watchdog as well, so a call that never settles
+        // cannot hold a slot for good.
+        syncing.add(session);
+        syncsInFlight += 1;
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          syncing.delete(session);
+          syncsInFlight -= 1;
+        };
+        const watchdog = setTimeout(release, SYNC_TIMEOUT_MS + API_WAIT_MS * 2);
+        try {
+          if ((await classify(session)) !== "root") return;
+          // Skip the export when the session has not changed since the
+          // last sync — by its own updated time, which a revert moves
+          // too, where a message count would not.
+          let updated = null;
+          try {
+            const answer =
+              client && client.session && client.session.get
+                ? await bounded_wait(client.session.get({ path: { id: session } }), API_WAIT_MS, null)
+                : null;
+            const info = answer && (answer.data || answer);
+            const t = info && info.time && info.time.updated;
+            if (typeof t === "number" || typeof t === "string") updated = t;
+          } catch {}
+          if (updated !== null && updated === last.updated) {
+            synced.set(session, { at: Date.now(), updated });
+            return;
+          }
+          const said = await hook("sync", { cwd: directory, session_id: session }, SYNC_TIMEOUT_MS);
+          synced.set(session, { at: Date.now(), updated: updated !== null ? updated : last.updated });
+          bounded(synced);
+          if (said && typeof said.system === "string" && said.system) {
+            // Routine incremental pushes are not news; the first one and
+            // anything that went wrong are — each once, until it changes.
+            const trouble = /skipped|could not|failed/i.test(said.system);
+            const key = trouble ? said.system : "first";
+            if (syncSaid.get(session) !== key) {
+              syncSaid.set(session, key);
+              bounded(syncSaid);
+              void say(session, said.system, trouble ? "warning" : "info");
+            }
+          }
+        } finally {
+          clearTimeout(watchdog);
+          release();
+        }
+      } catch {}
+    },
+  };
+};

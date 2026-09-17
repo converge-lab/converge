@@ -732,7 +732,9 @@ dependencies = [
 name = "converge-e2e"
 version = "0.1.24"
 dependencies = [
+ "anstream",
  "anyhow",
+ "reqwest 0.12.28",
  "serde_json",
  "testcontainers-modules",
  "tokio",

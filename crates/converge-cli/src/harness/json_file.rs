@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::ser::PrettyFormatter;
 
-/// Read a JSON file, keeping the raw text so [`write`] can match it. A
+/// Read a JSON file, keeping the raw text so [`write()`] can match it. A
 /// missing file reads as `default` with empty text.
 pub fn read(path: &Path, default: Value) -> Result<(Value, String)> {
     match std::fs::read_to_string(path) {

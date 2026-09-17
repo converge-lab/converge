@@ -48,11 +48,17 @@ async fn decision_crud() {
     )
     .await;
     let (status, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    // …except authorship: a body naming nobody was written by the caller.
+    let (_, me) = send(&app, "GET", "/api/v1/users/me", None).await;
+    assert_eq!(
+        decision["authors"],
+        json!([{ "user": me["id"] }]),
+        "{decision}"
+    );
     assert_eq!(status, StatusCode::OK);
     assert_eq!(decision["title"], "ADR-1");
     assert_eq!(decision["status"], "proposed");
     assert_eq!(decision["alternatives"], json!([]));
-    assert_eq!(decision["authors"], json!([]));
     assert!(decision["captured_at"].as_str().unwrap().contains('T'));
 
     // Authors and alternatives pass through. Users/agents have no REST

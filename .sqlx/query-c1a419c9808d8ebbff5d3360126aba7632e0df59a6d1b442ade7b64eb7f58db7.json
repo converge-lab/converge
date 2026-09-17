@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into signal_sessions (user_id, session, harness)\n           values ($1, $2, $3)\n           on conflict (user_id, session) do update\n               set seen_at = now(),\n                   harness = coalesce(excluded.harness, signal_sessions.harness)\n           returning started_at, (xmax = 0) as \"created!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "created!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "c1a419c9808d8ebbff5d3360126aba7632e0df59a6d1b442ade7b64eb7f58db7"
+}

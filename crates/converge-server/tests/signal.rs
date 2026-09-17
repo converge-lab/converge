@@ -101,6 +101,40 @@ async fn signal_round_trip() {
     let (_, none) = send(&app, "GET", "/api/v1/signals?tier=watch", None).await;
     assert_eq!(none["items"].as_array().unwrap().len(), 0);
 
+    // `since` pages forward, oldest first, through the shared filter —
+    // no route code knows about it. Both ways at once is a 400.
+    let (_, second) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": c, "targets": [a], "kind": "duplication", "tier": "watch",
+            "title": "c repeats a", "text": "same call, other project",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": user },
+        })),
+    )
+    .await;
+    let second = second["id"].as_str().unwrap().to_string();
+    // ULID strings order like the ids they spell.
+    let (lo, hi) = if id < second {
+        (&id, &second)
+    } else {
+        (&second, &id)
+    };
+    let (status, page) = send(&app, "GET", &format!("/api/v1/signals?since={lo}"), None).await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["id"], json!(hi));
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/signals?since={lo}&cursor={hi}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 400);
+
     // The decision projection: bound by the path, parent must exist.
     let (status, page) = send(&app, "GET", &format!("/api/v1/decisions/{b}/signals"), None).await;
     assert_eq!(status, 200);

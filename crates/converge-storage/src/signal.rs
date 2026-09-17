@@ -108,6 +108,16 @@ pub struct SignalFilter {
     pub decision: Option<DecisionId>,
     pub status: Option<SignalStatus>,
     pub tier: Option<Tier>,
+    /// Only signals newer than this id — and the list turns **oldest
+    /// first** when set: a reader polling forward from the last id it
+    /// saw wants a burst bigger than the limit to truncate the newest,
+    /// never to skip the oldest. Exclusive with `Pagination::cursor`,
+    /// which pages the other way (`Invalid` when both are given).
+    pub since: Option<SignalId>,
+    /// Only signals the scope's user holds no receipt for, in any
+    /// session: "new for you". Ignored under `Scope::System`.
+    #[serde(default)]
+    pub unseen: bool,
 }
 
 /// Storage operations on signals.
@@ -136,6 +146,38 @@ pub trait Signals {
         scope: Scope,
         filter: SignalFilter,
         page: Pagination<SignalId>,
+    ) -> impl Future<Output = Result<Vec<Signal>, StoreError>> + Send;
+
+    /// Note that `session` of the scope's user was shown `ids` — through
+    /// `harness` when a harness session, or by the person on the web
+    /// (`session = ""`). A harness session's row is created on first
+    /// sight, which is how a session-start hook draws the line before
+    /// which nothing is handed to it: call this with what it listed, or
+    /// with nothing. Ids the user cannot see are ignored. `Scope::System`
+    /// has no receipts — `Invalid`.
+    fn signal_receive(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[SignalId],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// What `session` has not been shown: `Proposed` signals visible to
+    /// the scope's user, recorded after the session began, with no
+    /// receipt for this session — oldest first, at most `limit`, each
+    /// receipted in the same transaction, so two claims never hand out
+    /// the same signal. A session unknown so far is created now and gets
+    /// nothing: what came before is the session-start listing's job.
+    /// Callers narrow tier on what comes back; a signal they drop is not
+    /// offered to that session again, and stays `Proposed` for every
+    /// other reader. `Scope::System` has no sessions — `Invalid`.
+    fn signal_claim(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        limit: u32,
     ) -> impl Future<Output = Result<Vec<Signal>, StoreError>> + Send;
 
     /// Resolve a signal: `Confirmed` or `Dismissed` (`Proposed` is not a

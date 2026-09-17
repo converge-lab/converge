@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with gone as (\n                   delete from signal_sessions\n                   where seen_at < now() - interval '30 days'\n                   returning user_id, session)\n               delete from signal_receipts r using gone\n               where r.user_id = gone.user_id and r.session = gone.session",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d5f90132fe283c872398ca5f18a41b2faa9b661863c2300622684d6c5d20b08f"
+}

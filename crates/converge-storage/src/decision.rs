@@ -71,7 +71,10 @@ pub struct Decision {
 }
 
 /// The fields required to create a decision. The collections default to
-/// empty on deserialization — wire callers omit what they don't have.
+/// empty on deserialization — wire callers omit what they don't have —
+/// except that `authors` must name someone by the time it reaches
+/// storage: a decision has an author. The doors fill in the caller when
+/// a body names nobody.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewDecision {
     pub project_id: ProjectId,

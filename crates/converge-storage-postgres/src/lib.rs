@@ -45,6 +45,32 @@ fn viewer(scope: Scope) -> Option<Uuid> {
     scope.user().map(|u| Uuid::from(u.ulid()))
 }
 
+/// A harness session's row, created on first sight and touched after:
+/// `(started_at, created)`. The harness is recorded once and kept; a
+/// later call that names none does not blank it.
+async fn session_row(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: Uuid,
+    session: &str,
+    harness: Option<&str>,
+) -> Result<(time::OffsetDateTime, bool), StoreError> {
+    let row = sqlx::query!(
+        r#"insert into signal_sessions (user_id, session, harness)
+           values ($1, $2, $3)
+           on conflict (user_id, session) do update
+               set seen_at = now(),
+                   harness = coalesce(excluded.harness, signal_sessions.harness)
+           returning started_at, (xmax = 0) as "created!""#,
+        user,
+        session,
+        harness,
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    Ok((row.started_at, row.created))
+}
+
 /// The embedded schema migrations (`./migrations`).
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
@@ -959,6 +985,13 @@ impl Decisions for PgStorage {
         if new.status == DecisionStatus::Superseded {
             return Err(StoreError::Invalid(SUPERSEDED_IS_DERIVED.into()));
         }
+        // A decision has an author. The doors fill in the caller when a
+        // body names nobody, so this is the invariant, not the UX.
+        if new.authors.is_empty() {
+            return Err(StoreError::Invalid(
+                "at least one author is required".into(),
+            ));
+        }
         let alternatives = serde_json::to_value(&new.alternatives)
             .map_err(|e| StoreError::Invalid(format!("alternatives: {e}")))?;
         // The project must be visible to the writer, and every reference
@@ -1661,11 +1694,19 @@ impl Signals for PgStorage {
         filter: SignalFilter,
         page: Pagination<SignalId>,
     ) -> Result<Vec<Signal>, StoreError> {
+        if filter.since.is_some() && page.cursor.is_some() {
+            return Err(StoreError::Invalid(
+                "since and cursor page in opposite directions; give one".into(),
+            ));
+        }
         let status = filter.status.map(PgSignalStatus::from);
         let tier = filter.tier.map(PgTier::from);
         // Project and decision filters match either end: the source
         // decision's project, or any target's. Visibility needs only the
-        // source's group — targets are same-group by construction.
+        // source's group — targets are same-group by construction. The
+        // order flips with `since`: newest first is a listing, oldest
+        // first is a reader catching up — the `case` keys the sort on the
+        // id only when there is no `since`, so the tie-break `asc` rules.
         let mut signals = sqlx::query_as!(
             wire::SignalRow,
             r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
@@ -1686,11 +1727,15 @@ impl Signals for PgStorage {
                  and ($3::signal_status is null or s.status = $3)
                  and ($4::signal_tier is null or s.tier = $4)
                  and ($6::uuid is null or s.id < $6)
+                 and ($8::uuid is null or s.id > $8)
+                 and ($9::uuid is null
+                      or not exists (select 1 from signal_receipts r
+                                     where r.signal_id = s.id and r.user_id = $9))
                  and ($7::uuid is null
                       or group_visible((select p.group_id from decisions d
                                         join projects p on p.id = d.project_id
                                         where d.id = s.source), $7))
-               order by s.id desc
+               order by case when $8::uuid is null then s.id end desc, s.id asc
                limit $5"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
             filter.decision.map(|d| Uuid::from(d.ulid())),
@@ -1699,6 +1744,8 @@ impl Signals for PgStorage {
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
             viewer(scope),
+            filter.since.map(|s| Uuid::from(s.ulid())),
+            if filter.unseen { viewer(scope) } else { None },
         )
         .fetch_all(&self.pool)
         .await
@@ -1707,6 +1754,138 @@ impl Signals for PgStorage {
         .map(Signal::try_from)
         .collect::<Result<Vec<_>, _>>()?;
         let ids: Vec<Uuid> = signals.iter().map(|s| Uuid::from(s.id.ulid())).collect();
+        let mut targets = self.targets(&ids).await?;
+        for signal in &mut signals {
+            signal.targets = targets
+                .remove(&Uuid::from(signal.id.ulid()))
+                .unwrap_or_default();
+        }
+        Ok(signals)
+    }
+
+    async fn signal_receive(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[SignalId],
+    ) -> Result<(), StoreError> {
+        let Some(user) = viewer(scope) else {
+            return Err(StoreError::Invalid(
+                "a receipt is per user; System has none".into(),
+            ));
+        };
+        let session = session.trim();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        if !session.is_empty() {
+            session_row(&mut tx, user, session, harness).await?;
+        }
+        if !ids.is_empty() {
+            let ids: Vec<Uuid> = ids.iter().map(|id| Uuid::from(id.ulid())).collect();
+            // Only what the user can see: a receipt for an invisible
+            // signal would be a claim about something they never saw.
+            sqlx::query!(
+                r#"insert into signal_receipts (signal_id, user_id, session)
+                   select s.id, $2, $3 from signals s
+                   where s.id = any($1)
+                     and group_visible((select p.group_id from decisions d
+                                        join projects p on p.id = d.project_id
+                                        where d.id = s.source), $2)
+                   on conflict do nothing"#,
+                &ids[..],
+                user,
+                session,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+
+    async fn signal_claim(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Signal>, StoreError> {
+        let Some(user) = viewer(scope) else {
+            return Err(StoreError::Invalid(
+                "a claim is per (user, session); System has neither".into(),
+            ));
+        };
+        let session = session.trim();
+        if session.is_empty() {
+            return Err(StoreError::Invalid("session must not be empty".into()));
+        }
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // Idle sessions leave on the way in, receipts and all: an index
+        // range that is empty on almost every claim, and no background
+        // task to own.
+        sqlx::query!(
+            r#"with gone as (
+                   delete from signal_sessions
+                   where seen_at < now() - interval '30 days'
+                   returning user_id, session)
+               delete from signal_receipts r using gone
+               where r.user_id = gone.user_id and r.session = gone.session"#
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        let (started_at, created) = session_row(&mut tx, user, session, harness).await?;
+        if created {
+            // First sight: the line is drawn now, and nothing before it
+            // is a backlog to replay.
+            tx.commit().await.map_err(db_err)?;
+            return Ok(Vec::new());
+        }
+        // Same visibility predicate as every other signal read: the
+        // source decision's group, seen by this user.
+        let mut signals = sqlx::query_as!(
+            wire::SignalRow,
+            r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
+                      s.title, s.text, s.consequence, s.recommendation,
+                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,
+                      s.captured_at
+               from signals s
+               where s.status = 'proposed'
+                 and s.captured_at > $1
+                 and not exists (select 1 from signal_receipts r
+                                 where r.signal_id = s.id
+                                   and r.user_id = $2 and r.session = $3)
+                 and group_visible((select p.group_id from decisions d
+                                    join projects p on p.id = d.project_id
+                                    where d.id = s.source), $2)
+               order by s.id asc
+               limit $4"#,
+            started_at,
+            user,
+            session,
+            i64::from(limit),
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(Signal::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+        let ids: Vec<Uuid> = signals.iter().map(|s| Uuid::from(s.id.ulid())).collect();
+        if !ids.is_empty() {
+            sqlx::query!(
+                r#"insert into signal_receipts (signal_id, user_id, session)
+                   select id, $2, $3 from unnest($1::uuid[]) as id
+                   on conflict do nothing"#,
+                &ids[..],
+                user,
+                session,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)?;
         let mut targets = self.targets(&ids).await?;
         for signal in &mut signals {
             signal.targets = targets

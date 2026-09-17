@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into signal_receipts (signal_id, user_id, session)\n                   select s.id, $2, $3 from signals s\n                   where s.id = any($1)\n                     and group_visible((select p.group_id from decisions d\n                                        join projects p on p.id = d.project_id\n                                        where d.id = s.source), $2)\n                   on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee60757538c4a5a1c57823da8f70fe9a8d4a70f85e7edcf1adb4b8f2c1c4094c"
+}

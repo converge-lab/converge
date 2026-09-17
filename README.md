@@ -66,7 +66,8 @@ your terminal (never to logs, where collectors would keep it). Then:
   manual fallback for binding from the terminal.
 
 - **REST**: `GET`/`POST` `/api/v1/{groups,projects,decisions,users,agents}`
-  with cursor pagination (`?limit=&cursor=` → `{items, next_cursor}`),
+  with cursor pagination (`?limit=&cursor=` → `{items, next_cursor}`;
+  signals also page forward, oldest first, with `?since=`),
   atomic edit batches via `PATCH`, graph reads at `/decisions/{id}/edges`,
   and read-only relation projections (`/groups/{id}/decisions` is the
   group-wide feed).

@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, GroupId, NewDecision, Page,
+    Author, Decision, DecisionEdit, DecisionFilter, DecisionId, Edges, GroupId, NewDecision, Page,
     Pagination, ProjectId, Scope, Storage, StoreError,
 };
 use serde_json::{Value, json};
@@ -30,8 +30,13 @@ pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
 async fn add<S: Storage + 'static>(
     State((store, expert)): State<(S, Expert<S>)>,
     Extension(caller): Extension<Caller>,
-    Json(new): Json<NewDecision>,
+    Json(mut new): Json<NewDecision>,
 ) -> Result<(StatusCode, Json<Value>)> {
+    // A decision has an author. A body that names nobody was written
+    // by whoever is calling; one that names others is recording theirs.
+    if new.authors.is_empty() {
+        new.authors.push(Author::User(caller.user));
+    }
     let id = store.decision_add(Scope::User(caller.user), new).await?;
     crate::metrics::decision_recorded("rest");
     expert.detect(id);

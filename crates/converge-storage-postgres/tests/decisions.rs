@@ -13,7 +13,7 @@ use converge_storage_postgres::PgStorage;
 
 /// A group + project to hang decisions on (owned by a bootstrap user;
 /// `user_login` is idempotent, so repeated seeding reuses the same owner).
-async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId) {
+async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId, UserId) {
     let owner = store
         .user_login(Identity {
             provider: "local".into(),
@@ -45,10 +45,10 @@ async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId) {
         )
         .await
         .unwrap();
-    (group, project)
+    (group, project, owner)
 }
 
-fn decision(project: ProjectId, title: &str) -> NewDecision {
+fn decision(project: ProjectId, by: UserId, title: &str) -> NewDecision {
     NewDecision {
         project_id: project,
         status: DecisionStatus::Accepted,
@@ -60,19 +60,31 @@ fn decision(project: ProjectId, title: &str) -> NewDecision {
             option: "the other way".into(),
             why_rejected: "slower".into(),
         }],
-        authors: Vec::new(),
+        authors: vec![Author::User(by)],
         supersedes: Vec::new(),
         evidence: Vec::new(),
     }
 }
 
 #[tokio::test]
+async fn an_author_is_required() {
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    let mut new = decision(project, me, "nobody's");
+    new.authors.clear();
+    match store.decision_add(Scope::System, new).await {
+        Err(StoreError::Invalid(m)) => assert!(m.contains("author"), "{m}"),
+        other => panic!("expected Invalid(author), got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn round_trip() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
 
     let id = store
-        .decision_add(Scope::System, decision(project, "adopt X"))
+        .decision_add(Scope::System, decision(project, me, "adopt X"))
         .await
         .unwrap();
     let got = store
@@ -89,7 +101,7 @@ async fn round_trip() {
     assert_eq!(got.consequences, None);
     assert_eq!(got.alternatives.len(), 1);
     assert_eq!(got.alternatives[0].option, "the other way");
-    assert!(got.authors.is_empty());
+    assert_eq!(got.authors, vec![Author::User(me)]);
 
     assert!(
         store
@@ -103,14 +115,14 @@ async fn round_trip() {
 #[tokio::test]
 async fn add_with_proposed_status() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
 
     let id = store
         .decision_add(
             Scope::System,
             NewDecision {
                 status: DecisionStatus::Proposed,
-                ..decision(project, "try Z")
+                ..decision(project, me, "try Z")
             },
         )
         .await
@@ -127,14 +139,14 @@ async fn add_with_proposed_status() {
 #[tokio::test]
 async fn add_with_rejected_status() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
 
     let id = store
         .decision_add(
             Scope::System,
             NewDecision {
                 status: DecisionStatus::Rejected,
-                ..decision(project, "skip W")
+                ..decision(project, me, "skip W")
             },
         )
         .await
@@ -151,11 +163,11 @@ async fn add_with_rejected_status() {
 #[tokio::test]
 async fn list_filters() {
     let (_pg, store) = store().await;
-    let (_, a) = seed_project(&store).await;
-    let (group_b, b) = seed_project(&store).await;
+    let (_, a, _me) = seed_project(&store).await;
+    let (group_b, b, me) = seed_project(&store).await;
 
     let d1 = store
-        .decision_add(Scope::System, decision(a, "one"))
+        .decision_add(Scope::System, decision(a, me, "one"))
         .await
         .unwrap();
     let d2 = store
@@ -163,13 +175,13 @@ async fn list_filters() {
             Scope::System,
             NewDecision {
                 status: DecisionStatus::Proposed,
-                ..decision(a, "two")
+                ..decision(a, me, "two")
             },
         )
         .await
         .unwrap();
     let d3 = store
-        .decision_add(Scope::System, decision(b, "three"))
+        .decision_add(Scope::System, decision(b, me, "three"))
         .await
         .unwrap();
     // Ordered expectations are computed (`common::newest_first`): the
@@ -266,9 +278,9 @@ async fn list_filters() {
 #[tokio::test]
 async fn edit_batch() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
     let id = store
-        .decision_add(Scope::System, decision(project, "draft Y"))
+        .decision_add(Scope::System, decision(project, me, "draft Y"))
         .await
         .unwrap();
 
@@ -312,10 +324,10 @@ async fn edit_batch() {
 #[tokio::test]
 async fn supersession_derives_status() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
 
     let old = store
-        .decision_add(Scope::System, decision(project, "v1"))
+        .decision_add(Scope::System, decision(project, me, "v1"))
         .await
         .unwrap();
     let new = store
@@ -323,7 +335,7 @@ async fn supersession_derives_status() {
             Scope::System,
             NewDecision {
                 supersedes: vec![old],
-                ..decision(project, "v2")
+                ..decision(project, me, "v2")
             },
         )
         .await
@@ -404,13 +416,13 @@ async fn supersession_derives_status() {
 #[tokio::test]
 async fn related_upsert() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
     let a = store
-        .decision_add(Scope::System, decision(project, "a"))
+        .decision_add(Scope::System, decision(project, me, "a"))
         .await
         .unwrap();
     let b = store
-        .decision_add(Scope::System, decision(project, "b"))
+        .decision_add(Scope::System, decision(project, me, "b"))
         .await
         .unwrap();
 
@@ -488,9 +500,9 @@ async fn related_upsert() {
 #[tokio::test]
 async fn graph_guards() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
     let a = store
-        .decision_add(Scope::System, decision(project, "a"))
+        .decision_add(Scope::System, decision(project, me, "a"))
         .await
         .unwrap();
 
@@ -529,7 +541,7 @@ async fn graph_guards() {
                 Scope::System,
                 NewDecision {
                     status: DecisionStatus::Superseded,
-                    ..decision(project, "born superseded")
+                    ..decision(project, me, "born superseded")
                 }
             )
             .await,
@@ -539,7 +551,7 @@ async fn graph_guards() {
     // A creation-time edge to a missing decision fails whole (FK, atomic).
     let orphan_edge = NewDecision {
         supersedes: vec![DecisionId::new()],
-        ..decision(project, "dangling")
+        ..decision(project, me, "dangling")
     };
     assert!(matches!(
         store.decision_add(Scope::System, orphan_edge).await,
@@ -562,9 +574,9 @@ async fn graph_guards() {
 #[tokio::test]
 async fn edit_batch_is_atomic() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
     let id = store
-        .decision_add(Scope::System, decision(project, "stable"))
+        .decision_add(Scope::System, decision(project, me, "stable"))
         .await
         .unwrap();
 
@@ -594,10 +606,10 @@ async fn edit_batch_is_atomic() {
 #[tokio::test]
 async fn add_guards() {
     let (_pg, store) = store().await;
-    let (_, project) = seed_project(&store).await;
+    let (_, project, me) = seed_project(&store).await;
 
     // Authorship isn't wired yet — must fail loud, not drop silently.
-    let mut authored = decision(project, "authored");
+    let mut authored = decision(project, me, "authored");
     authored.authors.push(Author::User(UserId::new()));
     assert!(matches!(
         store.decision_add(Scope::System, authored).await,
@@ -605,7 +617,7 @@ async fn add_guards() {
     ));
 
     // Unknown project: FK violation surfaces as Invalid.
-    let orphan = decision(ProjectId::new(), "orphan");
+    let orphan = decision(ProjectId::new(), me, "orphan");
     assert!(matches!(
         store.decision_add(Scope::System, orphan).await,
         Err(StoreError::Invalid(_))

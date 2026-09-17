@@ -174,7 +174,14 @@ pub struct SignalList {
     /// watch | coordinate | conflict.
     #[serde(default)]
     pub tier: Option<String>,
-    /// Newest first; omit for everything.
+    /// Only signals newer than this signal id, oldest first — to poll
+    /// forward from the last one you saw.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// Only signals you have not been shown yet, in any session.
+    #[serde(default)]
+    pub unseen: bool,
+    /// Newest first (oldest first with `since`); omit for everything.
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -834,6 +841,12 @@ impl<S: Storage + 'static> Memory<S> {
                 .transpose()?,
             status: req.status.as_deref().map(parse_signal_status).transpose()?,
             tier: req.tier.as_deref().map(parse_tier).transpose()?,
+            since: req
+                .since
+                .as_deref()
+                .map(|s| parse_id::<SignalId>(s, "since"))
+                .transpose()?,
+            unseen: req.unseen,
         };
         let signals = self
             .store

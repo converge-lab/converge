@@ -5,12 +5,27 @@ mod common;
 
 use common::store;
 use converge_storage::{
-    DecisionEdit, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity, MessageId,
-    Messages, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination, ProjectId,
-    Projects, Scope, SessionFilter, SessionId, SessionKind, Sessions, StoreError, Users,
+    Author, DecisionEdit, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity,
+    MessageId, Messages, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination,
+    ProjectId, Projects, Scope, SessionFilter, SessionId, SessionKind, Sessions, StoreError, Users,
 };
 use converge_storage_postgres::PgStorage;
 use time::OffsetDateTime;
+
+/// Whoever signs the decisions here; `user_login` is idempotent.
+async fn author(store: &PgStorage) -> Author {
+    Author::User(
+        store
+            .user_login(Identity {
+                provider: "local".into(),
+                subject: "author".into(),
+                handle: "author".into(),
+                name: "Author".into(),
+            })
+            .await
+            .unwrap(),
+    )
+}
 
 async fn project(store: &PgStorage) -> ProjectId {
     // A bootstrap user to own the group (pre-ACL tests run as `Scope::System`).
@@ -248,7 +263,7 @@ async fn evidence_anchors_decisions_to_messages() {
                 context: None,
                 consequences: None,
                 alternatives: Vec::new(),
-                authors: Vec::new(),
+                authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: vec![messages[1], messages[1]],
             },
@@ -310,7 +325,7 @@ async fn evidence_anchors_decisions_to_messages() {
                         context: None,
                         consequences: None,
                         alternatives: Vec::new(),
-                        authors: Vec::new(),
+                        authors: vec![author(&store).await],
                         supersedes: Vec::new(),
                         evidence: Vec::new(),
                     }
@@ -364,7 +379,7 @@ async fn sources_derive_windows_around_anchors() {
                 context: None,
                 consequences: None,
                 alternatives: Vec::new(),
-                authors: Vec::new(),
+                authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: vec![m1[1], m1[6], m2[0]],
             },
@@ -404,7 +419,7 @@ async fn sources_derive_windows_around_anchors() {
                 context: None,
                 consequences: None,
                 alternatives: Vec::new(),
-                authors: Vec::new(),
+                authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: Vec::new(),
             },

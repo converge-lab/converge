@@ -4,7 +4,7 @@ mod common;
 
 use common::store;
 use converge_storage::{
-    DecisionFilter, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity,
+    Author, DecisionFilter, DecisionId, DecisionStatus, Decisions, GroupKind, Groups, Identity,
     NewDecision, NewGroup, NewProject, ProjectId, Projects, Scope, StoreError, Users,
 };
 use converge_storage_postgres::PgStorage;
@@ -51,6 +51,15 @@ async fn decision(
     summary: &str,
     context: Option<&str>,
 ) -> DecisionId {
+    let by = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "author".into(),
+            handle: "author".into(),
+            name: "Author".into(),
+        })
+        .await
+        .unwrap();
     store
         .decision_add(
             Scope::System,
@@ -62,7 +71,7 @@ async fn decision(
                 context: context.map(Into::into),
                 consequences: None,
                 alternatives: vec![],
-                authors: vec![],
+                authors: vec![Author::User(by)],
                 supersedes: vec![],
                 evidence: vec![],
             },

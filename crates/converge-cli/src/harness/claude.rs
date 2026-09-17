@@ -45,6 +45,15 @@ impl Harness for ClaudeCode {
             .unwrap_or_default()
     }
 
+    fn artifacts(&self) -> Vec<PathBuf> {
+        settings_path().into_iter().collect()
+    }
+
+    fn integrated(&self, exe: &str) -> bool {
+        let wanted = hooks_file::wanted(exe, "");
+        self.missing(exe).len() < wanted.len()
+    }
+
     fn ask_tool(&self) -> Option<&'static str> {
         Some("AskUserQuestion")
     }

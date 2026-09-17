@@ -66,6 +66,19 @@ impl Harness for CodexCli {
             .unwrap_or_default()
     }
 
+    fn artifacts(&self) -> Vec<PathBuf> {
+        hooks_path().into_iter().chain(config_path()).collect()
+    }
+
+    fn integrated(&self, exe: &str) -> bool {
+        let wanted = hooks_file::wanted(exe, " --harness codex");
+        self.missing(exe).len() < wanted.len()
+    }
+
+    fn after_refresh(&self) -> Option<&'static str> {
+        Some("trust the new entries in `/hooks`")
+    }
+
     fn notes(&self, _config: &Config) -> Vec<String> {
         vec![
             "one more step for Codex: it skips hooks nobody has vouched \

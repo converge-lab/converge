@@ -238,6 +238,25 @@ pub trait Harness: Sync {
         Vec::new()
     }
 
+    /// The files `install` and `mcp_register` may write, whether or not
+    /// they exist yet: what a snapshot keeps before either runs.
+    fn artifacts(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Has this tool been wired here — do its files carry our entries?
+    /// Decides which tools an update refreshes: one the user never chose
+    /// is never touched.
+    fn integrated(&self, _exe: &str) -> bool {
+        false
+    }
+
+    /// What a human still has to do after `install` changed something on
+    /// an update — the one-line version of `notes`, without a config.
+    fn after_refresh(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The tool this harness gives the model for asking the user to pick
     /// from options, if it has one. The mapping instructions name it;
     /// naming another harness's tool sends the model after something it

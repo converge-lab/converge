@@ -73,6 +73,18 @@ impl Harness for OpenCode {
         })
     }
 
+    fn artifacts(&self) -> Vec<PathBuf> {
+        plugin_path().into_iter().chain(config_path()).collect()
+    }
+
+    fn integrated(&self, _exe: &str) -> bool {
+        plugin_path().is_some_and(|path| path.exists())
+    }
+
+    fn after_refresh(&self) -> Option<&'static str> {
+        Some("restart opencode to load it")
+    }
+
     fn ask_tool(&self) -> Option<&'static str> {
         // Registered as `question`; not every agent is allowed it, which
         // is why the wording treats it as a preference.

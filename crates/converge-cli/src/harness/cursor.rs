@@ -52,6 +52,16 @@ impl Harness for Cursor {
         })
     }
 
+    fn artifacts(&self) -> Vec<PathBuf> {
+        hooks_path().into_iter().chain(mcp_path()).collect()
+    }
+
+    fn integrated(&self, _exe: &str) -> bool {
+        hooks_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .is_some_and(|text| text.contains(" hook inject --harness cursor"))
+    }
+
     fn notes(&self, _config: &Config) -> Vec<String> {
         vec![
             "note for Cursor: its hooks run for every tool call, because \

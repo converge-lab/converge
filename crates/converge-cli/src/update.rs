@@ -32,6 +32,7 @@ pub async fn run(
     from: Option<PathBuf>,
     rollback: bool,
     force: bool,
+    repair_from: Option<String>,
 ) -> Result<()> {
     let exe = std::env::current_exe().context("resolve own path")?;
     let bin_dir = exe
@@ -39,6 +40,18 @@ pub async fn run(
         .context("the binary has no parent directory")?
         .to_path_buf();
 
+    if let Some(from) = repair_from {
+        // This is the new binary, spawned by the one it replaced.
+        let report = crate::setup::repair(&exe.to_string_lossy(), &from)?;
+        match report.line() {
+            Some(line) => println!("{line}"),
+            None => println!("integrations checked — nothing to refresh"),
+        }
+        if let Some(dir) = &report.backup {
+            println!("backup of the files touched: {}", dir.display());
+        }
+        return Ok(());
+    }
     if rollback {
         return swap_back(&bin_dir);
     }
@@ -109,11 +122,27 @@ pub async fn run(
         String::from_utf8_lossy(&sane.stdout).trim(),
         previous.display()
     );
+
+    // The integrations follow the binary: the new one re-runs its own
+    // installs for every tool already wired here, keeping a snapshot
+    // first. It prints here and leaves a report for the next session
+    // start, which is where an automatic update gets to say anything.
+    let repaired = Command::new(&exe)
+        .args(["update", "--repair-from", crate::skew::CLI])
+        .status();
+    if !repaired.is_ok_and(|s| s.success()) {
+        println!(
+            "could not refresh the integrations with the new binary — \
+             run `converge init` to bring the hooks up to date"
+        );
+    }
     Ok(())
 }
 
 /// `--rollback`: swap `converge` and `converge-previous`, whichever of
-/// them is running.
+/// them is running, and put the integration files back the way the
+/// newest update found them — after keeping the current ones, so a
+/// rollback can itself be undone by hand.
 fn swap_back(bin_dir: &Path) -> Result<()> {
     let current = bin_dir.join("converge");
     let previous = bin_dir.join("converge-previous");
@@ -125,6 +154,36 @@ fn swap_back(bin_dir: &Path) -> Result<()> {
     std::fs::rename(&previous, &current)?;
     std::fs::rename(&parked, &previous)?;
     println!("rolled back — the replaced binary is now converge-previous");
+
+    let Some(snapshot) = crate::backup::latest("update-") else {
+        println!("no update snapshot to restore integration files from");
+        return Ok(());
+    };
+    let mut kept = crate::backup::Snapshot::begin("rollback");
+    if let Some(kept) = kept.as_mut() {
+        for tool in crate::harness::all() {
+            for path in tool.artifacts() {
+                kept.keep(&path)?;
+            }
+        }
+    }
+    let restored = crate::backup::restore(&snapshot)?;
+    for path in &restored {
+        println!("put back {}", path.display());
+    }
+    if let Some(dir) = kept
+        .map(crate::backup::Snapshot::finish)
+        .transpose()?
+        .flatten()
+    {
+        println!(
+            "the files as they were before this rollback: {}",
+            dir.display()
+        );
+    }
+    // A report the rolled-back update left behind would describe
+    // changes that are no longer there.
+    let _ = crate::setup::Report::take();
     Ok(())
 }
 

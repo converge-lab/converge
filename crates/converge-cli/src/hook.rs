@@ -374,15 +374,23 @@ fn maybe_self_update(auto: bool) {
 
 /// One-time notice after a version change (auto or manual update): the
 /// previous inject's binary version is stamped; a mismatch means the
-/// binary changed underneath the user since last session start.
+/// binary changed underneath the user since last session start. The
+/// update's report of what it refreshed rides the same line, once — an
+/// automatic update has no other way to say what it did.
 fn version_notice() -> Option<String> {
     let current = env!("CARGO_PKG_VERSION");
     let stamp = cache_file("last-version")?;
     let previous = std::fs::read_to_string(&stamp).unwrap_or_default();
     let _ = stamp.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(&stamp, current);
-    (!previous.is_empty() && previous != current)
-        .then(|| format!("self-updated v{previous} → v{current}"))
+    let changed = (!previous.is_empty() && previous != current)
+        .then(|| format!("self-updated v{previous} → v{current}"));
+    let refreshed = crate::setup::Report::take().and_then(|r| r.line());
+    match (changed, refreshed) {
+        (Some(changed), Some(refreshed)) => Some(format!("{changed}; {refreshed}")),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    }
 }
 
 fn cache_file(name: &str) -> Option<PathBuf> {

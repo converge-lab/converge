@@ -16,6 +16,7 @@
 //! preferably `token_cmd`), overridable with `CONVERGE_SERVER` /
 //! `CONVERGE_TOKEN`.
 
+mod backup;
 mod config;
 mod device;
 mod harness;
@@ -70,6 +71,10 @@ enum Cmd {
         /// Reinstall even when already at the target version.
         #[arg(long)]
         force: bool,
+        /// Internal: the binary that just replaced `<version>` refreshes
+        /// the integrations. `converge update` runs this itself.
+        #[arg(long, hide = true, value_name = "version")]
+        repair_from: Option<String>,
     },
     /// Per-repository binding (the manual path; sessions normally bind
     /// through the agent).
@@ -129,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
             from,
             rollback,
             force,
-        } => update::run(version, from, rollback, force).await,
+            repair_from,
+        } => update::run(version, from, rollback, force, repair_from).await,
         Cmd::Project(ProjectCmd::Init { rebind, off }) => project::run(rebind, off).await,
         Cmd::Hook(HookCmd::Inject(c)) => hook::inject(c.kind).await,
         Cmd::Hook(HookCmd::Ctx(c)) => hook::ctx(c.kind),

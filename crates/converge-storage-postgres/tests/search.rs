@@ -38,6 +38,7 @@ async fn project(store: &PgStorage) -> ProjectId {
                 group_id: group,
                 name: "p".into(),
                 description: None,
+                repository: None,
             },
         )
         .await

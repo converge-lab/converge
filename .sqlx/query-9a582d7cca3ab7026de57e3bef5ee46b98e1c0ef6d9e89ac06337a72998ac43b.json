@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, group_id, name, description, created_at\n               from projects\n               where id = $1\n                 and ($2::uuid is null or group_visible(group_id, $2))",
+  "query": "select id, group_id, name, description, repository, created_at\n               from projects\n               where ($1::uuid is null or group_id = $1)\n                 and ($3::uuid is null or id < $3)\n                 and ($4::uuid is null or group_visible(group_id, $4))\n               order by id desc\n               limit $2",
   "describe": {
     "columns": [
       {
@@ -25,12 +25,19 @@
       },
       {
         "ordinal": 4,
+        "name": "repository",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
+        "Int8",
         "Uuid",
         "Uuid"
       ]
@@ -40,8 +47,9 @@
       false,
       false,
       true,
+      true,
       false
     ]
   },
-  "hash": "f029c1bfc25ec591a9f4fa22cf3f3ee00f6aa644ce947b7b3a61dec0d00062bc"
+  "hash": "9a582d7cca3ab7026de57e3bef5ee46b98e1c0ef6d9e89ac06337a72998ac43b"
 }

@@ -134,6 +134,8 @@ pub struct ProjectInfo {
     #[allow(dead_code)] // display name == id today; screens render the id
     pub name: String,
     pub description: Option<String>,
+    /// Canonical repository name, when a bind has recorded one.
+    pub repository: Option<String>,
 }
 
 /// The signed-in account.
@@ -407,6 +409,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                 group_id: p.group_id.clone(),
                 name: p.name.clone(),
                 description: p.description.clone(),
+                repository: p.repository.clone(),
             })
             .collect(),
         decisions,
@@ -588,6 +591,7 @@ pub fn add_project_local(
         group_id: group_id.to_string(),
         name,
         description,
+        repository: None,
     });
     if let Some(g) = ds.groups.iter_mut().find(|g| g.id == group_id) {
         g.project_ids.push(id);
@@ -685,6 +689,14 @@ pub fn proj_name(pid: &str) -> String {
         .find(|p| p.id == pid)
         .map(|p| p.name.clone())
         .unwrap_or_else(|| pid.to_string())
+}
+
+/// The project's canonical repository name, when a bind has recorded one.
+pub fn proj_repository(pid: &str) -> Option<String> {
+    ds().projects
+        .iter()
+        .find(|p| p.id == pid)
+        .and_then(|p| p.repository.clone())
 }
 
 pub fn proj_desc(pid: &str) -> String {

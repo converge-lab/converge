@@ -27,8 +27,8 @@ use axum::http::request::Parts;
 use converge_storage::{
     AgentKind, Author, CodeAnchor, DecisionFilter, DecisionId, DecisionStatus, GroupId, GroupKind,
     MessageId, NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination,
-    ProjectId, Scope, SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage,
-    StoreError, Tier, UserId,
+    ProjectEdit, ProjectId, Repository, Scope, SessionId, SessionKind, SignalFilter, SignalId,
+    SignalStatus, Storage, StoreError, Tier, UserId,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -286,6 +286,10 @@ pub struct ProjectBind {
     /// deployment has more than one group.
     #[serde(default)]
     pub group_id: Option<String>,
+    /// Git remote URL of the working tree (hook-injected; never send).
+    /// Becomes the project's repository when it has none yet.
+    #[serde(default)]
+    pub remote: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -386,9 +390,14 @@ impl<S: Storage + 'static> Memory<S> {
         {
             hints.push(repo.to_lowercase());
         }
-        let score = |name: &str| -> u8 {
+        // An exact repository match outranks every name hint: the remote
+        // names the repository, the project records it.
+        let remote = req.remote.as_deref().and_then(Repository::from_remote);
+        let score = |name: &str, repository: Option<&Repository>| -> u8 {
             let name = name.to_lowercase();
-            if hints.contains(&name) {
+            if remote.is_some() && repository == remote.as_ref() {
+                3
+            } else if hints.contains(&name) {
                 2
             } else if hints
                 .iter()
@@ -408,11 +417,12 @@ impl<S: Storage + 'static> Memory<S> {
                     .map(|g| g.name.clone())
                     .unwrap_or_default();
                 (
-                    score(&p.name),
+                    score(&p.name, p.repository.as_ref()),
                     serde_json::json!({
                         "project_id": p.id,
                         "name": p.name,
                         "description": p.description,
+                        "repository": p.repository.as_ref().map(Repository::canonical),
                         "group": group,
                     }),
                 )
@@ -492,6 +502,7 @@ impl<S: Storage + 'static> Memory<S> {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let scope = self.scope(&context)?;
+        let remote = req.remote.as_deref().and_then(Repository::from_remote);
         let (id, name) = match (req.project_id.as_deref(), req.name) {
             (Some(id), None) => {
                 let id: ProjectId = parse_id(id, "project_id")?;
@@ -501,6 +512,20 @@ impl<S: Storage + 'static> Memory<S> {
                     .await
                     .map_err(map_err)?
                     .ok_or_else(|| McpError::invalid_params("unknown project_id", None))?;
+                // First bind from a working tree records where the code
+                // lives; a later bind never overwrites what is set.
+                if project.repository.is_none()
+                    && let Some(repository) = remote.clone()
+                {
+                    self.store
+                        .project_edit(
+                            scope,
+                            id,
+                            vec![ProjectEdit::SetRepository(Some(repository))],
+                        )
+                        .await
+                        .map_err(map_err)?;
+                }
                 (id, project.name)
             }
             (None, Some(name)) => {
@@ -542,6 +567,7 @@ impl<S: Storage + 'static> Memory<S> {
                             group_id: group,
                             name: name.clone(),
                             description: None,
+                            repository: remote.clone(),
                         },
                     )
                     .await

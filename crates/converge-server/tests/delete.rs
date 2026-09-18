@@ -35,6 +35,7 @@ async fn seed<S: Storage>(
                 group_id: group,
                 name: name.into(),
                 description: None,
+                repository: None,
             },
         )
         .await
@@ -166,6 +167,7 @@ async fn evidence_elsewhere_pins_the_project() {
                 group_id: group,
                 name: "donor".into(),
                 description: None,
+                repository: None,
             },
         )
         .await

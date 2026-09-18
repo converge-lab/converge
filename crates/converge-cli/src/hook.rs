@@ -858,7 +858,7 @@ pub fn ctx(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-fn remote(cwd: &Path) -> Option<String> {
+pub(crate) fn remote(cwd: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(cwd)

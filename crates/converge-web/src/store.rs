@@ -431,6 +431,7 @@ mod api {
             group_id: p.group_id.to_string(),
             name: p.name.clone(),
             description: p.description.clone(),
+            repository: p.repository.as_ref().map(|r| r.canonical()),
             created_at: rfc3339(p.created_at),
         }
     }

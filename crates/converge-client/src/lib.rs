@@ -16,9 +16,9 @@ pub use converge_storage::{
     DecisionFilter, DecisionId, DecisionStatus, DeviceGrant, Edges, Group, GroupEdit, GroupId,
     GroupKind, Identity, Member, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup,
     NewMessage, NewProject, NewSession, NewSignal, NewToken, Page, Pagination, Project,
-    ProjectEdit, ProjectFilter, ProjectId, Related, Session, SessionFilter, SessionId, SessionKind,
-    Signal, SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token, TokenId, User,
-    UserId,
+    ProjectEdit, ProjectFilter, ProjectId, Related, Repository, Session, SessionFilter, SessionId,
+    SessionKind, Signal, SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token,
+    TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;

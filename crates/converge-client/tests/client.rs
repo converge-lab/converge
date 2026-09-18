@@ -135,6 +135,7 @@ async fn round_trip() {
             group_id: group,
             name: "converge".into(),
             description: None,
+            repository: None,
         })
         .await
         .unwrap();
@@ -302,6 +303,7 @@ async fn errors_map_back_to_the_domain() {
             group_id: group,
             name: "p".into(),
             description: None,
+            repository: None,
         })
         .await
         .unwrap();

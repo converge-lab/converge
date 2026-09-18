@@ -53,6 +53,7 @@ pub fn assemble(seed: &Seed) -> Assembled {
             group_id: p.group_id.clone(),
             name: p.name.clone(),
             description: p.description.clone(),
+            repository: None,
             created_at: p.created_at.clone(),
         })
         .collect();

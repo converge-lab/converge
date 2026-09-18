@@ -124,6 +124,7 @@ async fn project_round_trip() {
                 group_id: home,
                 name: "api".into(),
                 description: Some("the api".into()),
+                repository: None,
             },
         )
         .await
@@ -135,6 +136,7 @@ async fn project_round_trip() {
                 group_id: home,
                 name: "web".into(),
                 description: None,
+                repository: None,
             },
         )
         .await
@@ -146,6 +148,7 @@ async fn project_round_trip() {
                 group_id: other,
                 name: "infra".into(),
                 description: None,
+                repository: None,
             },
         )
         .await
@@ -227,6 +230,7 @@ async fn project_round_trip() {
                     group_id: GroupId::new(),
                     name: "orphan".into(),
                     description: None,
+                    repository: None,
                 }
             )
             .await,
@@ -242,4 +246,56 @@ async fn project_round_trip() {
             .await,
         Err(StoreError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn repository_is_typed_by_host_and_editable() {
+    use converge_storage::Repository;
+    let (_pg, store) = store().await;
+    let me = owner(&store).await;
+    let gid = store
+        .group_add(me, group("g", GroupKind::Shared))
+        .await
+        .unwrap();
+    let github = Repository::Github {
+        owner: "converge-lab".into(),
+        name: "converge".into(),
+    };
+    let id = store
+        .project_add(
+            Scope::System,
+            NewProject {
+                group_id: gid,
+                name: "converge".into(),
+                description: None,
+                repository: Some(github.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    let got = store.project_get(Scope::System, id).await.unwrap().unwrap();
+    assert_eq!(got.repository, Some(github));
+
+    let git = Repository::Git {
+        url: "example.com/team/repo".into(),
+    };
+    store
+        .project_edit(
+            Scope::System,
+            id,
+            vec![ProjectEdit::SetRepository(Some(git.clone()))],
+        )
+        .await
+        .unwrap();
+    let listed = store
+        .project_list(Scope::System, Default::default(), Pagination::default())
+        .await
+        .unwrap();
+    assert_eq!(listed[0].repository, Some(git));
+    store
+        .project_edit(Scope::System, id, vec![ProjectEdit::SetRepository(None)])
+        .await
+        .unwrap();
+    let got = store.project_get(Scope::System, id).await.unwrap().unwrap();
+    assert_eq!(got.repository, None);
 }

@@ -138,6 +138,10 @@ async fn create(
             group_id: group.id,
             name: name.clone(),
             description: None,
+            // The manual path records the same thing the hook does.
+            repository: crate::hook::remote(root)
+                .as_deref()
+                .and_then(converge_client::Repository::from_remote),
         })
         .await?;
     println!("created \"{name}\" in {}", group.name);

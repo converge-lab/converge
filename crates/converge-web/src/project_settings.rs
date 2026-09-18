@@ -24,6 +24,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
     // a project from a group that isn't currently selected.
     let group = data::proj_group_name(&pid);
     let title = data::proj_name(&pid);
+    let repository = data::proj_repository(&pid);
 
     let save = {
         let pid = pid.clone();
@@ -47,6 +48,10 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                     " — {decisions} {} in {group}.",
                     if decisions == 1 { "decision" } else { "decisions" },
                 )}
+                {match repository {
+                    Some(repo) => view! { " Code at " <span class="cv-mono">{repo}</span> "." }.into_any(),
+                    None => view! { " No repository recorded yet — the first bind from a working tree sets it." }.into_any(),
+                }}
             </p>
 
             <div class="cv-setform">

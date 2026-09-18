@@ -697,12 +697,20 @@ impl Projects for PgStorage {
     async fn project_add(&self, scope: Scope, new: NewProject) -> Result<ProjectId, StoreError> {
         self.visible_gate(scope, new.group_id).await?;
         let id = ProjectId::new();
+        let repository = new
+            .repository
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| StoreError::Invalid(format!("repository: {e}")))?;
         sqlx::query!(
-            "insert into projects (id, group_id, name, description) values ($1, $2, $3, $4)",
+            "insert into projects (id, group_id, name, description, repository)
+             values ($1, $2, $3, $4, $5)",
             Uuid::from(id.ulid()),
             Uuid::from(new.group_id.ulid()),
             new.name,
             new.description,
+            repository,
         )
         .execute(&self.pool)
         .await
@@ -717,7 +725,7 @@ impl Projects for PgStorage {
     ) -> Result<Option<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, created_at
+            r#"select id, group_id, name, description, repository, created_at
                from projects
                where id = $1
                  and ($2::uuid is null or group_visible(group_id, $2))"#,
@@ -738,7 +746,7 @@ impl Projects for PgStorage {
     ) -> Result<Vec<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, created_at
+            r#"select id, group_id, name, description, repository, created_at
                from projects
                where ($1::uuid is null or group_id = $1)
                  and ($3::uuid is null or id < $3)
@@ -792,6 +800,20 @@ impl Projects for PgStorage {
                         "update projects set description = $2 where id = $1",
                         uuid,
                         description,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                }
+                ProjectEdit::SetRepository(repository) => {
+                    let repository = repository
+                        .as_ref()
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .map_err(|e| StoreError::Invalid(format!("repository: {e}")))?;
+                    sqlx::query!(
+                        "update projects set repository = $2 where id = $1",
+                        uuid,
+                        repository,
                     )
                     .execute(&mut *tx)
                     .await

@@ -35,6 +35,9 @@ pub struct Project {
     pub group_id: String,
     pub name: String,
     pub description: Option<String>,
+    /// Canonical repository name (`github.com/owner/name`), when known.
+    #[serde(default)]
+    pub repository: Option<String>,
     pub created_at: String,
 }
 

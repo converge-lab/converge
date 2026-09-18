@@ -327,6 +327,34 @@ async fn mapping_round_trip() {
     .await;
     assert_eq!(bound["name"], "billing");
 
+    // A bind that brings a remote records where the code lives, once:
+    // gateway had no repository; billing's stays what it was.
+    let gateway = candidates[1]["project_id"].as_str().unwrap().to_owned();
+    call(
+        &app,
+        "project_bind",
+        json!({ "project_id": gateway, "remote": "git@github.com:corp/gateway.git" }),
+    )
+    .await;
+    let (_, project) = send(&app, "GET", &format!("/api/v1/projects/{gateway}"), None).await;
+    assert_eq!(
+        project["repository"],
+        json!({ "github": { "owner": "corp", "name": "gateway" } }),
+        "{project}"
+    );
+    // …and from then on the remote is an exact hit, ahead of any name.
+    let suggested = call(
+        &app,
+        "project_match",
+        json!({ "cwd": "/home/dev/billing", "remote": "https://github.com/corp/gateway" }),
+    )
+    .await;
+    assert_eq!(suggested["candidates"][0]["name"], "gateway", "{suggested}");
+    assert_eq!(
+        suggested["candidates"][0]["repository"],
+        "github.com/corp/gateway"
+    );
+
     // The groups ride along so the create path can offer placement
     // without another call.
     let groups = suggested["groups"].as_array().unwrap();
@@ -353,11 +381,25 @@ async fn mapping_round_trip() {
     let created = call(
         &app,
         "project_bind",
-        json!({ "name": "fresh", "group_id": group["id"] }),
+        json!({ "name": "fresh", "group_id": group["id"], "remote": "git@example.com:corp/fresh.git" }),
     )
     .await;
     assert!(created["project_id"].is_string());
     assert_eq!(created["name"], "fresh");
+    let (_, fresh) = send(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/projects/{}",
+            created["project_id"].as_str().unwrap()
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(
+        fresh["repository"],
+        json!({ "git": { "url": "example.com/corp/fresh" } })
+    );
 
     // Dismiss scopes; repo carries the disable flag for the hook.
     let dismissed = call(&app, "project_dismiss", json!({ "scope": "repo" })).await;

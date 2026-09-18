@@ -47,7 +47,7 @@ pub use ids::{
 };
 pub use membership::{Member, Memberships};
 pub use message::{Message, Messages, NewMessage};
-pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects};
+pub use project::{NewProject, Project, ProjectEdit, ProjectFilter, Projects, Repository};
 pub use session::{NewSession, Session, SessionFilter, SessionKind, Sessions};
 pub use signal::{NewSignal, Signal, SignalFilter, SignalStatus, Signals, Tier};
 pub use token::{Minted, NewToken, Token, Tokens};

@@ -91,6 +91,7 @@ pub fn create_project(name: String) {
                 group_id: gid,
                 name: name.clone(),
                 description: None,
+                repository: None,
             };
             match crate::store::client().project_add(&new).await {
                 Ok(id) => data::add_project_local(store, &group_id, id.to_string(), name, None),

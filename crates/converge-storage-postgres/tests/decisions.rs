@@ -41,6 +41,7 @@ async fn seed_project(store: &PgStorage) -> (GroupId, ProjectId, UserId) {
                 group_id: group,
                 name: "test project".into(),
                 description: None,
+                repository: None,
             },
         )
         .await

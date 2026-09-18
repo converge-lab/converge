@@ -160,8 +160,13 @@ pub enum Response {
         system: String,
         event: String,
     },
-    /// Pre-tool: the tool arguments, enriched.
-    Ctx { tool_input: Value },
+    /// Pre-tool: the tool arguments, enriched, and a visible line when
+    /// the enrichment has something to say (evidence it could not
+    /// record, a citation it dropped).
+    Ctx {
+        tool_input: Value,
+        system: Option<String>,
+    },
     /// A visible line and nothing else.
     Notice { system: String },
     /// Post-tool: what `mark` did to the marker, and the line for it. A

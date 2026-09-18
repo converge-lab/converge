@@ -35,12 +35,18 @@ pub fn emit(response: Response) -> Option<Value> {
                 "additionalContext": context,
             },
         }),
-        Response::Ctx { tool_input } => json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "updatedInput": tool_input,
-            },
-        }),
+        Response::Ctx { tool_input, system } => {
+            let mut out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "updatedInput": tool_input,
+                },
+            });
+            if let Some(system) = system {
+                out["systemMessage"] = json!(system);
+            }
+            out
+        }
         Response::Notice { system } => json!({ "systemMessage": system }),
         Response::Marked {
             system: Some(system),

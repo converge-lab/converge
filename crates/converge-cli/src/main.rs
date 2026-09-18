@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
         } => update::run(version, from, rollback, force, repair_from).await,
         Cmd::Project(ProjectCmd::Init { rebind, off }) => project::run(rebind, off).await,
         Cmd::Hook(HookCmd::Inject(c)) => hook::inject(c.kind).await,
-        Cmd::Hook(HookCmd::Ctx(c)) => hook::ctx(c.kind),
+        Cmd::Hook(HookCmd::Ctx(c)) => hook::ctx(c.kind).await,
         Cmd::Hook(HookCmd::Mark(c)) => hook::mark(c.kind),
         Cmd::Hook(HookCmd::Sync(c)) => hook::sync(c.kind).await,
         Cmd::Hook(HookCmd::Poll(c)) => hook::poll(c.kind).await,

@@ -203,6 +203,7 @@ mod tests {
         let ctx = ClaudeCode
             .emit(Response::Ctx {
                 tool_input: json!({ "cwd": "/repo" }),
+                system: None,
             })
             .unwrap();
         assert_eq!(ctx["hookSpecificOutput"]["updatedInput"]["cwd"], "/repo");

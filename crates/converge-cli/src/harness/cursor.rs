@@ -150,7 +150,13 @@ impl Harness for Cursor {
             // No hook of Cursor's injects context per prompt: signals
             // wait for the tool-result envelope.
             Response::Signals { .. } => return None,
-            Response::Ctx { tool_input } => json!({ "updated_input": tool_input }),
+            Response::Ctx { tool_input, system } => {
+                let mut out = json!({ "updated_input": tool_input });
+                if let Some(system) = system {
+                    out["user_message"] = json!(system);
+                }
+                out
+            }
             // CONFIRM ON A REAL CURSOR: `user_message` is documented for
             // preToolUse; on postToolUse and sessionEnd it is most
             // likely ignored, which is the harmless outcome.
@@ -334,6 +340,7 @@ mod tests {
         let ctx = Cursor
             .emit(Response::Ctx {
                 tool_input: json!({ "cwd": "/repo" }),
+                system: None,
             })
             .unwrap();
         assert_eq!(ctx["updated_input"]["cwd"], "/repo");

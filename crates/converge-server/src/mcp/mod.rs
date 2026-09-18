@@ -693,11 +693,12 @@ impl<S: Storage + 'static> Memory<S> {
         // web is their own source; an agent recording one out of a
         // conversation has to put the conversation on record first, or
         // "verifiable" is a word in the instructions and nothing else.
-        if evidence.is_empty() {
+        if evidence.is_empty() && req.code_evidence.is_empty() {
             return Err(McpError::invalid_params(
                 "evidence is required: `session_ensure` this conversation, \
                  `message_add` the exchanges that decided it, and pass their \
-                 message ids as `evidence`",
+                 message ids as `evidence` — or cite committed code as \
+                 `code_evidence`",
                 None,
             ));
         }
@@ -1063,10 +1064,11 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
              lands (set `supersedes` when it replaces one), and \
              `decision_list`/`decision_get` before re-deciding \
              something that may already be settled. Decisions are \
-             verifiable, so `decision_add` requires `evidence`: \
-             `session_ensure` this conversation once, `message_add` the \
-             exchanges as they happen, and cite the message ids of the \
-             exact lines that decided it."
+             verifiable, so `decision_add` requires evidence: message ids \
+             from `message_add` (`session_ensure` this conversation once, \
+             record the exchanges as they happen) or committed code as \
+             `code_evidence`. A converge hook fills both in where one is \
+             installed."
                 .into(),
         );
         info

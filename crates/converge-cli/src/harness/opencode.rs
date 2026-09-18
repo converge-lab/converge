@@ -184,7 +184,10 @@ impl Harness for OpenCode {
             Response::Signals {
                 context, system, ..
             } => json!({ "context": context, "system": system }),
-            Response::Ctx { tool_input } => json!({ "tool_input": tool_input }),
+            Response::Ctx { tool_input, system } => json!({
+                "tool_input": tool_input,
+                "system": system,
+            }),
             Response::Notice { system } => json!({ "system": system }),
             Response::Marked { effect, system } => json!({
                 "effect": effect.as_str(),
@@ -345,6 +348,7 @@ mod tests {
         let ctx = OpenCode
             .emit(Response::Ctx {
                 tool_input: json!({ "cwd": "/repo" }),
+                system: None,
             })
             .unwrap();
         assert_eq!(ctx["tool_input"]["cwd"], "/repo");

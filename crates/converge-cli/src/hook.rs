@@ -27,12 +27,13 @@ use std::process::Command;
 
 use anyhow::Result;
 use converge_client::{
-    DecisionFilter, Pagination, ProjectId, Signal, SignalFilter, SignalId, SignalStatus, Tier,
+    DecisionFilter, MessageId, Pagination, ProjectId, Signal, SignalFilter, SignalId, SignalStatus,
+    Tier,
 };
 use serde_json::{Value, json};
 
 use crate::config::Config;
-use crate::harness::{Effect, Harness, Kind, Response};
+use crate::harness::{Effect, Harness, Kind, Payload, Response};
 use crate::marker::{self, State};
 
 /// Whatever the harness put on stdin, before it means anything.
@@ -772,19 +773,40 @@ pub async fn sync(kind: Kind) -> Result<()> {
 
 async fn try_sync(harness: &dyn Harness) -> Result<()> {
     let payload = harness.parse(&raw());
-    // A harness that records nothing readable has no evidence to push.
-    let Some(transcript) = payload.transcript.as_ref() else {
-        return Ok(());
-    };
-
     // Only bound repos sync; unbound and disabled stay quiet.
     let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
+    let added = push_transcript(harness, &payload, project).await?.len();
+    if added > 0 {
+        respond(
+            harness,
+            Response::Notice {
+                system: format!("Converge: synced {added} message(s) to evidence ✓"),
+            },
+        );
+    }
+    Ok(())
+}
 
+/// Push what the transcript holds that the server does not yet, and
+/// return the ids it got. Watermarked, so calling it twice sends nothing
+/// twice: the session-end sync and a `decision_add` in mid-session share
+/// it, and what the second returns is exactly the turns since the last
+/// push — the conversation that led to the decision. Empty when the
+/// harness records nothing readable, or the content has no session id
+/// to key on.
+async fn push_transcript(
+    harness: &dyn Harness,
+    payload: &Payload,
+    project: ProjectId,
+) -> Result<Vec<MessageId>> {
+    let Some(transcript) = payload.transcript.as_ref() else {
+        return Ok(Vec::new());
+    };
     let parsed = harness.transcript(transcript)?;
     let Some(external) = parsed.session_id.clone() else {
-        return Ok(()); // no session id in the content — nothing to key on
+        return Ok(Vec::new());
     };
 
     let mut marks = crate::watermark::Watermarks::load()?;
@@ -797,7 +819,7 @@ async fn try_sync(harness: &dyn Harness) -> Result<()> {
     if fresh.is_empty() {
         marks.done(&key, &parsed.turns);
         marks.save()?;
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let config = Config::load()?;
@@ -819,23 +841,23 @@ async fn try_sync(harness: &dyn Harness) -> Result<()> {
             sent_at: t.sent_at,
         })
         .collect();
-    let added = messages.len();
-    client.message_add(session, &messages).await?;
+    let ids = client.message_add(session, &messages).await?;
 
     marks.done(&key, &parsed.turns);
     marks.save()?;
-    respond(
-        harness,
-        Response::Notice {
-            system: format!("Converge: synced {added} message(s) to evidence ✓"),
-        },
-    );
-    Ok(())
+    Ok(ids)
 }
 
 // ─── pre-tool: context collector ──────────────────────────────────────────
 
-pub fn ctx(kind: Kind) -> Result<()> {
+/// The budget for putting the conversation on record before a
+/// `decision_add`: a few turns to the server. Past it, the call goes
+/// through as the model made it and the server says what is missing.
+const CTX_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+/// How many of the turns since the last push a decision cites.
+const CITED_TURNS: usize = 10;
+
+pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
     // Someone else's tool call: say nothing rather than graft `cwd` onto
@@ -845,7 +867,7 @@ pub fn ctx(kind: Kind) -> Result<()> {
         return Ok(());
     }
 
-    let mut merged = payload.tool_input;
+    let mut merged = payload.tool_input.clone();
     if !merged.is_object() {
         merged = json!({});
     }
@@ -854,8 +876,88 @@ pub fn ctx(kind: Kind) -> Result<()> {
         merged["remote"] = json!(remote);
     }
 
-    respond(harness, Response::Ctx { tool_input: merged });
+    // A decision's evidence is filled in here, not narrated back by the
+    // model: the conversation so far goes up as messages and the turns
+    // since the last push are cited. A failure is said on the visible
+    // line and the call goes through unchanged — the server then asks
+    // for what is missing.
+    let mut notes: Vec<String> = Vec::new();
+    if payload
+        .tool_name
+        .as_deref()
+        .is_some_and(|tool| tool.ends_with("decision_add"))
+    {
+        if let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) {
+            match tokio::time::timeout(CTX_BUDGET, push_transcript(harness, &payload, project))
+                .await
+            {
+                Ok(Ok(ids)) => cite(&mut merged, &ids),
+                Ok(Err(e)) => notes.push(format!("evidence not recorded — {e}")),
+                Err(_) => notes.push(format!(
+                    "evidence not recorded — sync exceeded {CTX_BUDGET:?}"
+                )),
+            }
+        }
+        // Code citations arrive complete or not at all: this build carries
+        // no resolver for a bare `path:lines`, so those are dropped and said.
+        let dropped = drop_incomplete_code(&mut merged);
+        if dropped > 0 {
+            notes.push(format!(
+                "{dropped} code citation(s) dropped — cite committed anchors in full"
+            ));
+        }
+    }
+    let system = (!notes.is_empty()).then(|| format!("Converge: {}", notes.join("; ")));
+
+    respond(
+        harness,
+        Response::Ctx {
+            tool_input: merged,
+            system,
+        },
+    );
     Ok(())
+}
+
+/// Cite the newest of `ids` on the call, merged with what the model
+/// cited itself, without duplicates.
+fn cite(merged: &mut Value, ids: &[MessageId]) {
+    let mut evidence: Vec<String> = merged["evidence"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let newest = ids.len().saturating_sub(CITED_TURNS);
+    for id in &ids[newest..] {
+        let id = id.to_string();
+        if !evidence.contains(&id) {
+            evidence.push(id);
+        }
+    }
+    if !evidence.is_empty() {
+        merged["evidence"] = json!(evidence);
+    }
+}
+
+/// Keep only code anchors that carry every field; return how many went.
+fn drop_incomplete_code(merged: &mut Value) -> usize {
+    let Some(items) = merged["code_evidence"].as_array_mut() else {
+        return 0;
+    };
+    let before = items.len();
+    items.retain(|a| {
+        ["commit", "path", "lines", "excerpt", "digest"]
+            .iter()
+            .all(|k| !a[k].is_null())
+    });
+    let dropped = before - items.len();
+    if items.is_empty() {
+        merged.as_object_mut().map(|o| o.remove("code_evidence"));
+    }
+    dropped
 }
 
 pub(crate) fn remote(cwd: &Path) -> Option<String> {
@@ -1101,6 +1203,35 @@ mod tests {
             context.contains("\n  Recommendation: talk to billing\n"),
             "{context}"
         );
+    }
+
+    #[test]
+    fn evidence_is_cited_newest_first_and_incomplete_code_is_dropped() {
+        let ids: Vec<MessageId> = (0..12).map(|_| MessageId::new()).collect();
+        let mut call = json!({ "title": "t", "evidence": [ids[11].to_string(), "01J00000000000000000000009"] });
+        cite(&mut call, &ids);
+        let cited: Vec<&str> = call["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // The model's own citations stay first; the newest ten follow,
+        // the one already cited not twice.
+        assert_eq!(cited.len(), 2 + CITED_TURNS - 1);
+        assert_eq!(cited[0], ids[11].to_string());
+        assert!(!cited.contains(&ids[0].to_string().as_str()));
+        assert!(cited.contains(&ids[2].to_string().as_str()));
+
+        let mut call = json!({ "code_evidence": [
+            { "path": "a.rs", "lines": [1, 2] },
+            { "commit": "c", "path": "b.rs", "lines": [1, 1], "excerpt": "x", "digest": "d" },
+        ]});
+        assert_eq!(drop_incomplete_code(&mut call), 1);
+        assert_eq!(call["code_evidence"].as_array().unwrap().len(), 1);
+        let mut call = json!({ "code_evidence": [{ "path": "a.rs" }] });
+        assert_eq!(drop_incomplete_code(&mut call), 1);
+        assert!(call.get("code_evidence").is_none());
     }
 
     #[test]

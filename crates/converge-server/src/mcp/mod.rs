@@ -112,7 +112,10 @@ pub struct DecisionAdd {
     #[serde(default)]
     pub supersedes: Vec<String>,
     /// Message ids (from `message_add`) this decision is grounded in —
-    /// anchor the exact lines that decided it.
+    /// the exact lines that decided it. Required here: a decision an
+    /// agent records out of a conversation is only worth having if the
+    /// conversation is on record. `session_ensure` once, `message_add`
+    /// the exchanges, then cite their ids.
     #[serde(default)]
     pub evidence: Vec<String>,
     /// Code anchors: a line range in one file at one commit of the
@@ -686,6 +689,18 @@ impl<S: Storage + 'static> Memory<S> {
             .iter()
             .map(|m| parse_id::<MessageId>(m, "evidence"))
             .collect::<Result<Vec<_>, _>>()?;
+        // This door is the agent's. A person typing a decision into the
+        // web is their own source; an agent recording one out of a
+        // conversation has to put the conversation on record first, or
+        // "verifiable" is a word in the instructions and nothing else.
+        if evidence.is_empty() {
+            return Err(McpError::invalid_params(
+                "evidence is required: `session_ensure` this conversation, \
+                 `message_add` the exchanges that decided it, and pass their \
+                 message ids as `evidence`",
+                None,
+            ));
+        }
 
         // Authorship: the deployment user working through the calling
         // agent (see `caller`); the same user is the write's scope.
@@ -1047,11 +1062,11 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
              find project ids, `decision_add` after a design decision \
              lands (set `supersedes` when it replaces one), and \
              `decision_list`/`decision_get` before re-deciding \
-             something that may already be settled. To make decisions \
-             verifiable, `session_ensure` this conversation once, \
-             `message_add` the exchanges as they happen, and anchor \
-             `decision_add` with `evidence` message ids — the exact \
-             lines that decided it."
+             something that may already be settled. Decisions are \
+             verifiable, so `decision_add` requires `evidence`: \
+             `session_ensure` this conversation once, `message_add` the \
+             exchanges as they happen, and cite the message ids of the \
+             exact lines that decided it."
                 .into(),
         );
         info

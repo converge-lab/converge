@@ -21,6 +21,29 @@ async fn rpc(app: &Router, method: &str, params: Value) -> Value {
     body
 }
 
+/// Put one exchange on record in `project` and return its message id:
+/// what `decision_add` needs as `evidence`.
+async fn anchor(app: &Router, project: &str, body: &str) -> String {
+    let sid = call(
+        app,
+        "session_ensure",
+        json!({ "project_id": project, "external": "test-session", "title": "the conversation" }),
+    )
+    .await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    call(
+        app,
+        "message_add",
+        json!({ "session_id": sid, "messages": [{ "speaker": "maksim", "body": body }] }),
+    )
+    .await["message_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 /// Call a tool and parse the JSON payload out of its text content.
 async fn call(app: &Router, tool: &str, arguments: Value) -> Value {
     let response = rpc(
@@ -111,7 +134,28 @@ async fn tool_round_trip() {
         project
     );
 
+    // A decision with nothing on record is refused, and the refusal
+    // says what to do — this door is the agent's, and "verifiable" has
+    // to be enforced, not requested.
+    let unanchored = rpc(
+        &app,
+        "tools/call",
+        json!({ "name": "decision_add", "arguments": {
+            "project_id": project, "title": "Store sessions in redb", "summary": "no record",
+        }}),
+    )
+    .await;
+    let refusal = unanchored["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+        + unanchored["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+    assert!(refusal.contains("message_add"), "{unanchored}");
+
     // Record a decision, then supersede it with a second one.
+    let said = anchor(&app, &project, "redb fits append-only sessions").await;
     let first = call(
         &app,
         "decision_add",
@@ -119,12 +163,14 @@ async fn tool_round_trip() {
             "project_id": project,
             "title": "Store sessions in redb",
             "summary": "Sessions are append-only; redb fits.",
+            "evidence": [said],
         }),
     )
     .await["decision_id"]
         .as_str()
         .unwrap()
         .to_owned();
+    let said = anchor(&app, &project, "one backend for everything").await;
     let second = call(
         &app,
         "decision_add",
@@ -134,6 +180,7 @@ async fn tool_round_trip() {
             "summary": "One backend for everything.",
             "supersedes": [first],
             "alternatives": [{ "option": "Keep redb", "why_rejected": "Second backend to operate" }],
+            "evidence": [said],
         }),
     )
     .await["decision_id"]
@@ -528,11 +575,31 @@ async fn tools_act_as_the_authenticated_caller() {
     assert_eq!(admin_map, json!([]));
 
     // …and a decision they record is attributed to THEM.
+    let sid = call_as(
+        &app,
+        "cvg_beta",
+        "session_ensure",
+        json!({ "project_id": project_id, "external": "beta-session", "title": "beta's conversation" }),
+    )
+    .await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let said = call_as(
+        &app,
+        "cvg_beta",
+        "message_add",
+        json!({ "session_id": sid, "messages": [{ "speaker": "beta", "body": "my call" }] }),
+    )
+    .await["message_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let recorded = call_as(
         &app,
         "cvg_beta",
         "decision_add",
-        json!({ "project_id": project_id, "title": "Beta's call", "summary": "s" }),
+        json!({ "project_id": project_id, "title": "Beta's call", "summary": "s", "evidence": [said] }),
     )
     .await;
     let decision_id = recorded["decision_id"].as_str().unwrap().to_string();

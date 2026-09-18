@@ -943,6 +943,8 @@ fn cite(merged: &mut Value, ids: &[MessageId]) {
 }
 
 /// Keep only code anchors that carry every field; return how many went.
+/// The seam for the resolver that completes a bare `path:lines` from
+/// HEAD — see docs/tasks/hook-code-anchor-resolver.md.
 fn drop_incomplete_code(merged: &mut Value) -> usize {
     let Some(items) = merged["code_evidence"].as_array_mut() else {
         return 0;

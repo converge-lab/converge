@@ -41,6 +41,15 @@ pub struct Src {
     pub lines: Vec<Line>,
 }
 
+/// A code anchor a decision cites: one range in one file at one commit.
+#[derive(Clone)]
+pub struct CodeRef {
+    pub commit: String,
+    pub path: String,
+    pub lines: (u32, u32),
+    pub excerpt: String,
+}
+
 /// A rejected alternative + why it lost.
 #[derive(Clone)]
 pub struct Alt {
@@ -84,6 +93,8 @@ pub struct Dec {
     /// Session provenance (e.g. "claude-session · a3f9"); empty when absent.
     pub session: String,
     pub sources: Vec<Src>,
+    /// Code anchors, in path then line order.
+    pub code: Vec<CodeRef>,
 }
 
 /// A cross-project signal.
@@ -336,6 +347,16 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                     .map(|r| Related {
                         id: r.id.clone(),
                         why: r.why.clone(),
+                    })
+                    .collect(),
+                code: d
+                    .code_evidence
+                    .iter()
+                    .map(|c| CodeRef {
+                        commit: c.commit.clone(),
+                        path: c.path.clone(),
+                        lines: c.lines,
+                        excerpt: c.excerpt.clone(),
                     })
                     .collect(),
                 supersedes: d.supersedes.clone(),

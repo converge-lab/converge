@@ -69,6 +69,15 @@ pub struct AuthorRef {
 
 /// A related-decision reference with the reason it matters.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeAnchorRef {
+    pub commit: String,
+    pub path: String,
+    /// 1-based, inclusive.
+    pub lines: (u32, u32),
+    pub excerpt: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RelatedRef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +114,10 @@ pub struct Decision {
     /// Derived: incoming cross-refs (decisions that reference this one).
     #[serde(default)]
     pub related_by: Vec<RelatedRef>,
+    /// Code anchors: a line range in one file at one commit, with the
+    /// cited lines. Immutable; the repository is the project's.
+    #[serde(default)]
+    pub code_evidence: Vec<CodeAnchorRef>,
     pub captured_at: String,
 }
 

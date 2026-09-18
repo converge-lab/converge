@@ -59,6 +59,9 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
         .map(|(i, s)| (i, data::to_source(s)))
         .collect();
 
+    // Code anchors: path, range and commit, with the cited lines.
+    let code: Vec<data::CodeRef> = d.code.clone();
+
     // Supersession chain, newest first; the current node is highlighted.
     let chain_decs = data::chain_of(&id);
     let chain_len = chain_decs.len();
@@ -230,6 +233,34 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                                 .collect_view()}
                         </div>
                     </div>
+
+                    {(!code.is_empty())
+                        .then(|| {
+                            view! {
+                                <div class="cv-detail__section">
+                                    <div class="cv-mb-12">
+                                        <SectionLabel text="code · anchored evidence" />
+                                    </div>
+                                    <div class="cv-stack8">
+                                        {code
+                                            .into_iter()
+                                            .map(|c| {
+                                                let range = format!("{}:{}-{}", c.path, c.lines.0, c.lines.1);
+                                                let short: String = c.commit.chars().take(7).collect();
+                                                view! {
+                                                    <div>
+                                                        <div class="cv-source__title">
+                                                            <span class="cv-mono">{range}</span>" · "<span class="cv-mono">{short}</span>
+                                                        </div>
+                                                        <pre class="cv-md-pre"><code>{c.excerpt}</code></pre>
+                                                    </div>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </div>
+                                </div>
+                            }
+                        })}
 
                     {has_chain
                         .then(move || {

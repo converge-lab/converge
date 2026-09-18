@@ -512,6 +512,16 @@ mod api {
             superseded_by: e.superseded_by.iter().map(|i| i.to_string()).collect(),
             related_to: e.related_to.iter().map(related).collect(),
             related_by: e.related_by.iter().map(related).collect(),
+            code_evidence: d
+                .code_evidence
+                .iter()
+                .map(|c| wire::CodeAnchorRef {
+                    commit: c.commit.clone(),
+                    path: c.path.clone(),
+                    lines: c.lines,
+                    excerpt: c.excerpt.clone(),
+                })
+                .collect(),
             captured_at: rfc3339(d.captured_at),
         }
     }

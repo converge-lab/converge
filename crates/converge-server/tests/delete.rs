@@ -87,6 +87,7 @@ async fn record<S: Storage>(
                 authors: vec![Author::User(user)],
                 supersedes: vec![],
                 evidence: vec![message],
+                code_evidence: Vec::new(),
             },
         )
         .await
@@ -200,6 +201,7 @@ async fn evidence_elsewhere_pins_the_project() {
                 authors: vec![Author::User(admin)],
                 supersedes: vec![],
                 evidence: vec![message],
+                code_evidence: Vec::new(),
             },
         )
         .await

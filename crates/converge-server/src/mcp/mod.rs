@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use axum::http::request::Parts;
 use converge_storage::{
-    AgentKind, Author, DecisionFilter, DecisionId, DecisionStatus, GroupId, GroupKind, MessageId,
-    NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination, ProjectId,
-    Scope, SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage, StoreError, Tier,
-    UserId,
+    AgentKind, Author, CodeAnchor, DecisionFilter, DecisionId, DecisionStatus, GroupId, GroupKind,
+    MessageId, NewAgent, NewDecision, NewGroup, NewMessage, NewProject, NewSession, Pagination,
+    ProjectId, Scope, SessionId, SessionKind, SignalFilter, SignalId, SignalStatus, Storage,
+    StoreError, Tier, UserId,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -115,6 +115,26 @@ pub struct DecisionAdd {
     /// anchor the exact lines that decided it.
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// Code anchors: a line range in one file at one commit of the
+    /// project's repository, with the cited lines and their sha256.
+    /// The full form only — the hook completes a bare `path:lines`.
+    #[serde(default)]
+    pub code_evidence: Vec<CodeAnchorIn>,
+}
+
+/// A code anchor on the wire, as `converge_storage::CodeAnchor`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct CodeAnchorIn {
+    /// Full 40-hex commit sha.
+    pub commit: String,
+    /// Repository-relative path, forward slashes.
+    pub path: String,
+    /// `[start, end]`, 1-based, inclusive, at most 120 lines.
+    pub lines: (u32, u32),
+    /// The cited lines as they are at `commit`.
+    pub excerpt: String,
+    /// Hex sha256 of `excerpt`.
+    pub digest: String,
 }
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
@@ -671,6 +691,17 @@ impl<S: Storage + 'static> Memory<S> {
                     authors: vec![author],
                     supersedes,
                     evidence,
+                    code_evidence: req
+                        .code_evidence
+                        .into_iter()
+                        .map(|a| CodeAnchor {
+                            commit: a.commit,
+                            path: a.path,
+                            lines: a.lines,
+                            excerpt: a.excerpt,
+                            digest: a.digest,
+                        })
+                        .collect(),
                 },
             )
             .await

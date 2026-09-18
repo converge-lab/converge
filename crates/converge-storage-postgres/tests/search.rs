@@ -74,6 +74,7 @@ async fn decision(
                 authors: vec![Author::User(by)],
                 supersedes: vec![],
                 evidence: vec![],
+                code_evidence: Vec::new(),
             },
         )
         .await

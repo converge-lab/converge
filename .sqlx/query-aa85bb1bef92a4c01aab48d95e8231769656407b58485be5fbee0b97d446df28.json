@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select decision_id, commit, path, line_start, line_end, excerpt, digest\n             from decision_code_evidence\n             where decision_id = any($1)\n             order by path, line_start, commit",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "commit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "line_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "line_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "excerpt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "digest",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "aa85bb1bef92a4c01aab48d95e8231769656407b58485be5fbee0b97d446df28"
+}

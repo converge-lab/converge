@@ -266,6 +266,7 @@ async fn evidence_anchors_decisions_to_messages() {
                 authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: vec![messages[1], messages[1]],
+                code_evidence: Vec::new(),
             },
         )
         .await
@@ -317,6 +318,7 @@ async fn evidence_anchors_decisions_to_messages() {
                 Scope::System,
                 NewDecision {
                     evidence: vec![MessageId::new()],
+                    code_evidence: Vec::new(),
                     ..NewDecision {
                         project_id,
                         status: DecisionStatus::Accepted,
@@ -328,6 +330,7 @@ async fn evidence_anchors_decisions_to_messages() {
                         authors: vec![author(&store).await],
                         supersedes: Vec::new(),
                         evidence: Vec::new(),
+                        code_evidence: Vec::new(),
                     }
                 }
             )
@@ -382,6 +385,7 @@ async fn sources_derive_windows_around_anchors() {
                 authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: vec![m1[1], m1[6], m2[0]],
+                code_evidence: Vec::new(),
             },
         )
         .await
@@ -422,6 +426,7 @@ async fn sources_derive_windows_around_anchors() {
                 authors: vec![author(&store).await],
                 supersedes: Vec::new(),
                 evidence: Vec::new(),
+                code_evidence: Vec::new(),
             },
         )
         .await

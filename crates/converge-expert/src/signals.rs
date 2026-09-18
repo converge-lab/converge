@@ -235,6 +235,7 @@ mod tests {
                 alternatives: vec![],
                 authors: vec![],
                 evidence: vec![],
+                code_evidence: Vec::new(),
                 captured_at: OffsetDateTime::UNIX_EPOCH,
             },
             project: project.into(),

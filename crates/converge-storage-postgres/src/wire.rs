@@ -467,6 +467,7 @@ impl TryFrom<DecisionRow> for Decision {
             // evidence reads.
             authors: Vec::new(),
             evidence: Vec::new(),
+            code_evidence: Vec::new(),
             captured_at: r.captured_at,
         })
     }

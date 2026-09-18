@@ -78,6 +78,7 @@ fn decision(project_id: converge_storage::ProjectId, title: &str) -> NewDecision
         authors: Vec::new(),
         supersedes: Vec::new(),
         evidence: Vec::new(),
+        code_evidence: Vec::new(),
     }
 }
 

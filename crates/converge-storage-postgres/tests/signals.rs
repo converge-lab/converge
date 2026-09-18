@@ -76,6 +76,7 @@ async fn decision(store: &PgStorage, project_id: ProjectId, title: &str) -> Deci
                 authors: vec![Author::User(by)],
                 supersedes: vec![],
                 evidence: vec![],
+                code_evidence: Vec::new(),
             },
         )
         .await

@@ -63,6 +63,7 @@ fn decision(project: ProjectId, by: UserId, title: &str) -> NewDecision {
         authors: vec![Author::User(by)],
         supersedes: Vec::new(),
         evidence: Vec::new(),
+        code_evidence: Vec::new(),
     }
 }
 
@@ -622,4 +623,138 @@ async fn add_guards() {
         store.decision_add(Scope::System, orphan).await,
         Err(StoreError::Invalid(_))
     ));
+}
+
+#[tokio::test]
+async fn code_anchors_are_validated_stored_and_edited() {
+    use converge_storage::{CodeAnchor, EXCERPT_LINES};
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    let sha = "a".repeat(40);
+    let excerpt = "let x = 1;\nlet y = x + 1;\n".to_string();
+    let anchor = CodeAnchor {
+        commit: sha.clone(),
+        path: "crates/x/src/lib.rs".into(),
+        lines: (10, 11),
+        digest: CodeAnchor::digest_of(&excerpt),
+        excerpt,
+    };
+
+    // Invariants fail loudly, each naming what is wrong.
+    for (broken, needle) in [
+        (
+            CodeAnchor {
+                commit: "abc".into(),
+                ..anchor.clone()
+            },
+            "40-hex",
+        ),
+        (
+            CodeAnchor {
+                path: "/abs/path.rs".into(),
+                ..anchor.clone()
+            },
+            "repository-relative",
+        ),
+        (
+            CodeAnchor {
+                lines: (11, 10),
+                ..anchor.clone()
+            },
+            "start <= end",
+        ),
+        (
+            CodeAnchor {
+                lines: (1, EXCERPT_LINES as u32 + 1),
+                ..anchor.clone()
+            },
+            "at most",
+        ),
+        (
+            CodeAnchor {
+                digest: "0".repeat(64),
+                ..anchor.clone()
+            },
+            "digest",
+        ),
+    ] {
+        let mut new = decision(project, me, "broken");
+        new.code_evidence = vec![broken];
+        match store.decision_add(Scope::System, new).await {
+            Err(StoreError::Invalid(m)) => assert!(m.contains(needle), "{m} ∌ {needle}"),
+            other => panic!("expected Invalid({needle}), got {other:?}"),
+        }
+    }
+
+    // Stored with the decision, read back whole, a set.
+    let mut new = decision(project, me, "anchored");
+    new.code_evidence = vec![anchor.clone(), anchor.clone()];
+    let id = store.decision_add(Scope::System, new).await.unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.code_evidence, vec![anchor.clone()]);
+    let listed = store
+        .decision_list(
+            Scope::System,
+            DecisionFilter {
+                project: Some(project),
+                ..Default::default()
+            },
+            Pagination::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed[0].code_evidence, vec![anchor.clone()]);
+
+    // Edits add and drop by key; the excerpt is immutable — re-adding
+    // the same key with other text changes nothing.
+    let second = CodeAnchor {
+        path: "crates/x/src/other.rs".into(),
+        lines: (1, 1),
+        excerpt: "fn f() {}\n".into(),
+        digest: CodeAnchor::digest_of("fn f() {}\n"),
+        ..anchor.clone()
+    };
+    store
+        .decision_edit(
+            Scope::System,
+            id,
+            vec![
+                DecisionEdit::AddCodeEvidence(second.clone()),
+                DecisionEdit::AddCodeEvidence(CodeAnchor {
+                    excerpt: "let x = 2;\nlet y = 3;\n".into(),
+                    digest: CodeAnchor::digest_of("let x = 2;\nlet y = 3;\n"),
+                    ..anchor.clone()
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.code_evidence, vec![anchor.clone(), second.clone()]);
+    store
+        .decision_edit(
+            Scope::System,
+            id,
+            vec![DecisionEdit::RemoveCodeEvidence {
+                commit: sha.clone(),
+                path: anchor.path.clone(),
+                lines: anchor.lines,
+            }],
+        )
+        .await
+        .unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.code_evidence, vec![second]);
 }

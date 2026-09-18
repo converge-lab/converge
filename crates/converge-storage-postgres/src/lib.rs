@@ -17,7 +17,7 @@ mod wire;
 use std::collections::HashMap;
 
 use converge_storage::{
-    Agent, AgentId, Agents, Author, Decision, DecisionEdit, DecisionFilter, DecisionId,
+    Agent, AgentId, Agents, Author, CodeAnchor, Decision, DecisionEdit, DecisionFilter, DecisionId,
     DecisionStatus, Decisions, DeviceClaim, DeviceGrant, Devices, Edges, Group, GroupEdit, GroupId,
     Groups, Identity, Member, Memberships, Message, MessageId, Messages, NewAgent, NewDecision,
     NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal, Pagination, Project,
@@ -124,6 +124,41 @@ impl PgStorage {
     /// The underlying pool, for embedding and tests.
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Code anchors for a set of decisions — one query, grouped, in
+    /// path then line order.
+    async fn code_evidence(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<CodeAnchor>>, StoreError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "select decision_id, commit, path, line_start, line_end, excerpt, digest
+             from decision_code_evidence
+             where decision_id = any($1)
+             order by path, line_start, commit",
+            ids,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut anchors: HashMap<Uuid, Vec<CodeAnchor>> = HashMap::new();
+        for row in rows {
+            anchors
+                .entry(row.decision_id)
+                .or_default()
+                .push(CodeAnchor {
+                    commit: row.commit,
+                    path: row.path,
+                    lines: (row.line_start as u32, row.line_end as u32),
+                    excerpt: row.excerpt,
+                    digest: row.digest,
+                });
+        }
+        Ok(anchors)
     }
 
     /// Evidence anchors for a set of decisions — one query, grouped.
@@ -1032,6 +1067,9 @@ impl Decisions for PgStorage {
                 ));
             }
         }
+        for anchor in &new.code_evidence {
+            anchor.validate()?;
+        }
         if !new.evidence.is_empty() {
             let mut anchors: Vec<Uuid> =
                 new.evidence.iter().map(|m| Uuid::from(m.ulid())).collect();
@@ -1120,6 +1158,9 @@ impl Decisions for PgStorage {
             .await
             .map_err(db_err)?;
         }
+        for anchor in &new.code_evidence {
+            insert_code_anchor(&mut tx, Uuid::from(id.ulid()), anchor).await?;
+        }
         tx.commit().await.map_err(db_err)?;
         Ok(id)
     }
@@ -1158,6 +1199,11 @@ impl Decisions for PgStorage {
             .unwrap_or_default();
         decision.evidence = self
             .evidence(&[uuid])
+            .await?
+            .remove(&uuid)
+            .unwrap_or_default();
+        decision.code_evidence = self
+            .code_evidence(&[uuid])
             .await?
             .remove(&uuid)
             .unwrap_or_default();
@@ -1214,10 +1260,12 @@ impl Decisions for PgStorage {
         let ids: Vec<Uuid> = decisions.iter().map(|d| Uuid::from(d.id.ulid())).collect();
         let mut authors = self.authors(&ids).await?;
         let mut evidence = self.evidence(&ids).await?;
+        let mut code = self.code_evidence(&ids).await?;
         for decision in &mut decisions {
             let uuid = Uuid::from(decision.id.ulid());
             decision.authors = authors.remove(&uuid).unwrap_or_default();
             decision.evidence = evidence.remove(&uuid).unwrap_or_default();
+            decision.code_evidence = code.remove(&uuid).unwrap_or_default();
         }
         Ok(decisions)
     }
@@ -1292,10 +1340,12 @@ impl Decisions for PgStorage {
         let ids: Vec<Uuid> = decisions.iter().map(|d| Uuid::from(d.id.ulid())).collect();
         let mut authors = self.authors(&ids).await?;
         let mut evidence = self.evidence(&ids).await?;
+        let mut code = self.code_evidence(&ids).await?;
         for decision in &mut decisions {
             let uuid = Uuid::from(decision.id.ulid());
             decision.authors = authors.remove(&uuid).unwrap_or_default();
             decision.evidence = evidence.remove(&uuid).unwrap_or_default();
+            decision.code_evidence = code.remove(&uuid).unwrap_or_default();
         }
         Ok(decisions)
     }
@@ -2227,6 +2277,28 @@ async fn apply(
             .execute(&mut **tx)
             .await
         }
+        DecisionEdit::AddCodeEvidence(anchor) => {
+            anchor.validate()?;
+            return insert_code_anchor(tx, id, &anchor).await;
+        }
+        DecisionEdit::RemoveCodeEvidence {
+            commit,
+            path,
+            lines,
+        } => {
+            sqlx::query!(
+                "delete from decision_code_evidence
+                 where decision_id = $1 and commit = $2 and path = $3
+                   and line_start = $4 and line_end = $5",
+                id,
+                commit,
+                path,
+                lines.0 as i32,
+                lines.1 as i32,
+            )
+            .execute(&mut **tx)
+            .await
+        }
     }
     .map_err(db_err)?;
     Ok(())
@@ -2260,6 +2332,32 @@ fn db_err(e: sqlx::Error) -> StoreError {
         }
         _ => StoreError::Backend(e.to_string()),
     }
+}
+
+/// One code anchor, set semantics: the same range at the same commit is
+/// one anchor however often it is cited.
+async fn insert_code_anchor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    decision: Uuid,
+    anchor: &CodeAnchor,
+) -> Result<(), StoreError> {
+    sqlx::query!(
+        r#"insert into decision_code_evidence
+               (decision_id, commit, path, line_start, line_end, excerpt, digest)
+           values ($1, $2, $3, $4, $5, $6, $7)
+           on conflict do nothing"#,
+        decision,
+        anchor.commit,
+        anchor.path,
+        anchor.lines.0 as i32,
+        anchor.lines.1 as i32,
+        anchor.excerpt,
+        anchor.digest,
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    Ok(())
 }
 
 /// [`db_err`] for deletes: the FK violation on the evidence→message

@@ -397,3 +397,57 @@ async fn search_rides_the_list() {
     let (status, _) = send(&app, "GET", "/api/v1/decisions?q=-", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn code_evidence_over_rest() {
+    use converge_storage::CodeAnchor;
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let excerpt = "fn main() {}\n";
+    let anchor = json!({
+        "commit": "b".repeat(40), "path": "src/main.rs", "lines": [1, 1],
+        "excerpt": excerpt, "digest": CodeAnchor::digest_of(excerpt),
+    });
+
+    // A bad digest is refused with the reason.
+    let mut forged = anchor.clone();
+    forged["digest"] = json!("0".repeat(64));
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/decisions",
+        Some(json!({
+            "project_id": project, "status": "accepted", "title": "t", "summary": "s",
+            "code_evidence": [forged],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Stored, read back with the decision, dropped by key.
+    let id = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted", "title": "t", "summary": "s",
+            "code_evidence": [anchor],
+        }),
+    )
+    .await;
+    let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(
+        decision["code_evidence"][0]["path"], "src/main.rs",
+        "{decision}"
+    );
+    assert_eq!(decision["code_evidence"][0]["lines"], json!([1, 1]));
+    assert_eq!(decision["code_evidence"][0]["excerpt"], excerpt);
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/decisions/{id}"),
+        Some(json!([{ "remove_code_evidence": { "commit": "b".repeat(40), "path": "src/main.rs", "lines": [1, 1] } }])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(decision["code_evidence"], json!([]));
+}

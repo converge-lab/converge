@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from decision_code_evidence\n                 where decision_id = $1 and commit = $2 and path = $3\n                   and line_start = $4 and line_end = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "490bfbfcfcd809e218ec0ae35e5383561159a9bbc525e51c2d0d947771b2d902"
+}

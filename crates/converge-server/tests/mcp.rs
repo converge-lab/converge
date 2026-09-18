@@ -521,3 +521,44 @@ async fn tools_act_as_the_authenticated_caller() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(denied["error"]["message"], "decision not found", "{denied}");
 }
+
+#[tokio::test]
+async fn code_evidence_rides_the_mcp_door() {
+    use converge_storage::CodeAnchor;
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let (_, project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group["id"], "name": "p", "description": null })),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap().to_owned();
+    let excerpt = "pub fn f() {}\n";
+    let recorded = call(
+        &app,
+        "decision_add",
+        json!({
+            "project_id": project, "title": "Mined from code", "summary": "s",
+            "code_evidence": [{
+                "commit": "c".repeat(40), "path": "src/lib.rs", "lines": [3, 3],
+                "excerpt": excerpt, "digest": CodeAnchor::digest_of(excerpt),
+            }],
+        }),
+    )
+    .await;
+    let id = recorded["decision_id"].as_str().unwrap();
+    let got = call(&app, "decision_get", json!({ "decision_id": id })).await;
+    assert_eq!(
+        got["decision"]["code_evidence"][0]["path"], "src/lib.rs",
+        "{got}"
+    );
+    assert_eq!(got["decision"]["evidence"], json!([]));
+}

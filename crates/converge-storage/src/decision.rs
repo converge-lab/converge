@@ -47,6 +47,63 @@ pub struct Alternative {
     pub why_rejected: String,
 }
 
+/// The most lines one code anchor may cite; a longer citation is two.
+pub const EXCERPT_LINES: usize = 120;
+
+/// A line range in one file at one commit of the project's repository,
+/// with the cited lines as they were and their hash. Written once and
+/// never rewritten: the commit makes the location constant when lines
+/// drift, the excerpt keeps it readable without the repository, and the
+/// digest lets anyone with a clone check the excerpt without trusting
+/// the record. The repository itself is the project's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeAnchor {
+    /// Full 40-hex commit sha — the same in every clone.
+    pub commit: String,
+    /// Repository-relative, forward slashes.
+    pub path: String,
+    /// 1-based, inclusive.
+    pub lines: (u32, u32),
+    /// The cited lines as they were at `commit`, at most [`EXCERPT_LINES`].
+    pub excerpt: String,
+    /// Hex sha256 of the excerpt bytes.
+    pub digest: String,
+}
+
+impl CodeAnchor {
+    /// The digest an excerpt must carry.
+    pub fn digest_of(excerpt: &str) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(excerpt.as_bytes()))
+    }
+
+    /// The invariants storage enforces before an anchor is written.
+    pub fn validate(&self) -> Result<(), StoreError> {
+        let invalid = |m: &str| Err(StoreError::Invalid(format!("code evidence: {m}")));
+        if self.commit.len() != 40 || !self.commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return invalid("commit must be a full 40-hex sha");
+        }
+        if self.path.is_empty() || self.path.starts_with('/') || self.path.contains('\\') {
+            return invalid("path must be repository-relative with forward slashes");
+        }
+        let (start, end) = self.lines;
+        if start == 0 || end < start {
+            return invalid("lines are 1-based and inclusive, start <= end");
+        }
+        let cited = (end - start + 1) as usize;
+        if cited > EXCERPT_LINES {
+            return invalid(&format!("at most {EXCERPT_LINES} lines per anchor"));
+        }
+        if self.excerpt.is_empty() {
+            return invalid("excerpt must not be empty");
+        }
+        if self.digest != Self::digest_of(&self.excerpt) {
+            return invalid("digest does not match the excerpt");
+        }
+        Ok(())
+    }
+}
+
 /// A decision record — core fields plus its authors. Graph edges (chain,
 /// cross-refs, signals) and evidence are separate reads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -66,6 +123,9 @@ pub struct Decision {
     /// like authorship). The excerpt a UI renders around them is a read
     /// projection, not stored state.
     pub evidence: Vec<MessageId>,
+    /// Code evidence anchors — the other kind (a set, like `evidence`).
+    #[serde(default)]
+    pub code_evidence: Vec<CodeAnchor>,
     #[serde(with = "time::serde::rfc3339")]
     pub captured_at: OffsetDateTime,
 }
@@ -93,6 +153,10 @@ pub struct NewDecision {
     /// Evidence anchors known at capture time (messages must exist).
     #[serde(default)]
     pub evidence: Vec<MessageId>,
+    /// Code anchors known at capture time, each valid per
+    /// [`CodeAnchor::validate`].
+    #[serde(default)]
+    pub code_evidence: Vec<CodeAnchor>,
 }
 
 /// A single edit operation. Applied as a batch (`Vec<DecisionEdit>`)
@@ -122,6 +186,14 @@ pub enum DecisionEdit {
     AddEvidence(MessageId),
     /// Drop an evidence anchor (no-op when absent).
     RemoveEvidence(MessageId),
+    /// Anchor a code range as evidence (set semantics; validated).
+    AddCodeEvidence(CodeAnchor),
+    /// Drop a code anchor by its key (no-op when absent).
+    RemoveCodeEvidence {
+        commit: String,
+        path: String,
+        lines: (u32, u32),
+    },
 }
 
 /// One end of a cross-reference edge.

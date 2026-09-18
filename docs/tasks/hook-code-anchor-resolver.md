@@ -90,5 +90,8 @@ full anchor produces an input with two anchors and no note.
 
 `converge hook ctx --harness claude` with a `decision_add` input citing
 `{"path": "...", "lines": [a, b]}` for committed lines yields
-`updatedInput.code_evidence[0]` that the server accepts, and the smoke script
-`scratchpad/smoke/ctx.sh` step 3 reports the anchor kept rather than dropped.
+`updatedInput.code_evidence[0]` that the server accepts, and step 3 of
+`scripts/smoke-ctx.sh` (run against `cargo xtask dev`) reports one code anchor
+kept and no note. Note that the script's citation names `src/lib.rs` in a
+repository it creates without that file; make the bound repository a real
+one with a committed file for the positive case.

@@ -449,6 +449,7 @@ mod api {
             name: p.name.clone(),
             description: p.description.clone(),
             repository: p.repository.as_ref().map(|r| r.canonical()),
+            archive_transcripts: p.archive_transcripts,
             created_at: rfc3339(p.created_at),
         }
     }

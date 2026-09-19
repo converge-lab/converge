@@ -2,9 +2,9 @@
 //! structure is learned once: form on top, destructive actions fenced at the
 //! bottom.
 //!
-//! Name and description are real edits (`PATCH /projects/{id}`). Group (moving
-//! a project) and archive/delete are drawn but inert — `ProjectEdit` carries
-//! only name and description, and nothing behind the other two exists yet.
+//! Name, description and whether whole conversations are kept are real edits
+//! (`PATCH /projects/{id}`). Group (moving a project) and retiring a project
+//! are drawn but inert — nothing behind either exists yet.
 
 use converge_ui::atoms::{Button, ButtonVariant};
 use converge_ui::domain::Tone;
@@ -17,6 +17,7 @@ use crate::{data, mutate};
 pub fn ProjectSettings(pid: String) -> impl IntoView {
     let (name, set_name) = signal(data::proj_name(&pid));
     let (desc, set_desc) = signal(data::proj_desc(&pid));
+    let (archives, set_archives) = signal(data::proj_archives(&pid));
     let (flash, set_flash) = signal(None::<String>);
 
     let decisions = data::project_decisions(&pid).len();
@@ -91,6 +92,34 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                             }
                         />
                     </div>
+                </div>
+
+                <div class="cv-col cv-gap-6">
+                    <span class="cv-modal__label">"Conversations"</span>
+                    // A project-wide call, not a per-machine setting: the
+                    // conversations belong to everyone working here. Saved on
+                    // change — a policy that needs a second click to take is
+                    // a policy someone will leave half-set.
+                    <select
+                        class="cv-select cv-w-full"
+                        prop:value=move || if archives.get() { "all" } else { "cited" }
+                        on:change={
+                            let pid = pid.clone();
+                            move |ev| {
+                                let keep = event_target_value(&ev) == "all";
+                                set_archives.set(keep);
+                                mutate::set_project_archives(pid.clone(), keep);
+                            }
+                        }
+                    >
+                        <option value="all">"Keep the whole conversation"</option>
+                        <option value="cited">"Keep only the lines decisions cite"</option>
+                    </select>
+                    <span class="cv-setform__hint">
+                        "Whole transcripts are kept so they can be read and analysed later. \
+                         Turn that off and agents still record the exact lines a decision \
+                         cites — the evidence — and nothing else."
+                    </span>
                 </div>
 
                 <div class="cv-col cv-gap-6">

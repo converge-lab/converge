@@ -183,6 +183,41 @@ pub fn edit_project(id: String, name: String, desc: String) {
     }
 }
 
+/// Keep whole conversations for this project, or only the turns its
+/// decisions cite. A project-wide call: the conversations belong to
+/// everyone working in it, not to the machine that recorded them.
+pub fn set_project_archives(id: String, keep: bool) {
+    let store = use_store();
+    store.notice().set(None);
+    let said = |keep: bool| match keep {
+        true => "Whole conversations are kept for this project.",
+        false => "Only the lines decisions cite are kept now.",
+    };
+    #[cfg(feature = "api")]
+    {
+        use converge_client::{ProjectEdit, ProjectId};
+        let Ok(pid) = id.parse::<ProjectId>() else {
+            fail(store, format!("Couldn't change it — bad project id {id}"));
+            return;
+        };
+        let edits = vec![ProjectEdit::SetArchiveTranscripts(keep)];
+        leptos::task::spawn_local(async move {
+            match crate::store::client().project_edit(pid, &edits).await {
+                Ok(()) => {
+                    data::set_proj_archives_local(store, &id, keep);
+                    done(store, said(keep));
+                }
+                Err(e) => fail(store, format!("Couldn't change it — {e}")),
+            }
+        });
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        data::set_proj_archives_local(store, &id, keep);
+        done(store, said(keep));
+    }
+}
+
 /// Delete a project permanently — decisions, sessions, the lot. The
 /// dataset flips only on server success; the caller navigates first
 /// (the active screen may be the one being deleted).

@@ -1264,6 +1264,9 @@ impl Decisions for PgStorage {
                  and ($3::decision_status is null or d.status = $3)
                  and ($5::uuid is null or d.id < $5)
                  and ($6::uuid is null or group_visible(d.group_id, $6))
+                 and ($7::uuid is null
+                      or not exists (select 1 from decision_receipts r
+                                     where r.decision_id = d.id and r.user_id = $7))
                order by d.id desc
                limit $4"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
@@ -1272,6 +1275,7 @@ impl Decisions for PgStorage {
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
             viewer(scope),
+            if filter.unseen { viewer(scope) } else { None },
         )
         .fetch_all(&self.pool)
         .await
@@ -1399,6 +1403,45 @@ impl Decisions for PgStorage {
         };
         for edit in edits {
             apply(&mut tx, uuid, held.group_id, edit).await?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+
+    async fn decision_receive(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[DecisionId],
+    ) -> Result<(), StoreError> {
+        let Some(user) = viewer(scope) else {
+            return Err(StoreError::Invalid(
+                "a receipt is per user; System has none".into(),
+            ));
+        };
+        let session = session.trim();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        if !session.is_empty() {
+            session_row(&mut tx, user, session, harness).await?;
+        }
+        if !ids.is_empty() {
+            let ids: Vec<Uuid> = ids.iter().map(|id| Uuid::from(id.ulid())).collect();
+            // Only what the user can see, as on the signals side: a
+            // receipt for an invisible decision would be a claim about
+            // something they were never shown.
+            sqlx::query!(
+                r#"insert into decision_receipts (decision_id, user_id, session)
+                   select d.id, $2, $3 from decisions d
+                   join projects p on p.id = d.project_id
+                   where d.id = any($1) and group_visible(p.group_id, $2)
+                   on conflict do nothing"#,
+                &ids[..],
+                user,
+                session,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
     }

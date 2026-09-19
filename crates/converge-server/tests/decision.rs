@@ -451,3 +451,63 @@ async fn code_evidence_over_rest() {
     let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
     assert_eq!(decision["code_evidence"], json!([]));
 }
+
+#[tokio::test]
+async fn receipts_over_rest_cover_both_kinds() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let (_, me) = send(&app, "GET", "/api/v1/users/me", None).await;
+    let a = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "a", "summary": "s" }),
+    )
+    .await;
+    let b = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "b", "summary": "s" }),
+    )
+    .await;
+    let unseen = |app: Router| async move {
+        let (_, page) = send(&app, "GET", "/api/v1/decisions?unseen=true", None).await;
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["title"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(unseen(app.clone()).await, ["b", "a"]);
+
+    // One call carries both kinds; a signal rides along to prove it.
+    let (_, signal) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": a, "targets": [b], "kind": "dependency", "tier": "watch",
+            "title": "a bears on b", "text": "…",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": me["id"] },
+        })),
+    )
+    .await;
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/receipts",
+        Some(json!({
+            "session": "sess-1", "harness": "codex",
+            "decision_ids": [a], "signal_ids": [signal["id"]],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(unseen(app.clone()).await, ["b"]);
+    let (_, page) = send(&app, "GET", "/api/v1/signals?unseen=true", None).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 0, "{page}");
+
+    // The unfiltered listing still holds everything: receipts narrow a
+    // question, they never hide a record.
+    let (_, page) = send(&app, "GET", "/api/v1/decisions", None).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+}

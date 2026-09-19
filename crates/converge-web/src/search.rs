@@ -41,6 +41,7 @@ fn run_search(
                 "rejected" => Some(DecisionStatus::Rejected),
                 _ => None,
             },
+            unseen: false,
         };
         leptos::task::spawn_local(async move {
             let hits = crate::store::client()

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into decision_receipts (decision_id, user_id, session)\n                   select d.id, $2, $3 from decisions d\n                   join projects p on p.id = d.project_id\n                   where d.id = any($1) and group_visible(p.group_id, $2)\n                   on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "293e387b4ac285252aa8cd82ae14787950c0bad468b26da8dc42f3f4b44568a7"
+}

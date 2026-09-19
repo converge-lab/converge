@@ -162,6 +162,9 @@ pub struct DecisionList {
     /// accepted | draft | proposed | rejected | superseded (derived).
     #[serde(default)]
     pub status: Option<String>,
+    /// Only decisions you have not been shown yet, in any session.
+    #[serde(default)]
+    pub unseen: bool,
     /// Newest first; omit for everything.
     #[serde(default)]
     pub limit: Option<u32>,
@@ -816,6 +819,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .map(|s| parse_id::<GroupId>(s, "group_id"))
                 .transpose()?,
             status: req.status.as_deref().map(parse_status).transpose()?,
+            unseen: req.unseen,
         };
         let page = Pagination {
             limit: req.limit,
@@ -870,6 +874,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .map(|s| parse_id::<GroupId>(s, "group_id"))
                 .transpose()?,
             status: None,
+            unseen: false,
         };
         let decisions = self
             .store

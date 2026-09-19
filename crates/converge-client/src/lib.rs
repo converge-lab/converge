@@ -364,29 +364,33 @@ impl Client {
             .await
     }
 
-    /// Say that `session` was shown `ids` — through `harness` for an
-    /// agent tool's session, or `""` for this user reading on the web.
-    /// Creates the session's row on first sight, so a session-start hook
-    /// calls it with what it listed, or with nothing, to draw the line
-    /// before which no poll hands it anything.
-    pub async fn signal_receive(
+    /// Say that `session` was shown these decisions and signals —
+    /// through `harness` for an agent tool's session, or `""` for this
+    /// user reading on the web. One call for both kinds: a session start
+    /// lists both and has little time to say so. Creates the session's
+    /// row on first sight, so calling it with nothing still draws the
+    /// line before which no poll hands that session anything.
+    pub async fn receive(
         &self,
         session: &str,
         harness: Option<&str>,
-        ids: &[SignalId],
+        signals: &[SignalId],
+        decisions: &[DecisionId],
     ) -> Result<(), StoreError> {
         #[derive(Serialize)]
         struct Receipts<'a> {
             session: &'a str,
             harness: Option<&'a str>,
             signal_ids: &'a [SignalId],
+            decision_ids: &'a [DecisionId],
         }
         self.submit(
-            "signals/receipts",
+            "receipts",
             &Receipts {
                 session,
                 harness,
-                signal_ids: ids,
+                signal_ids: signals,
+                decision_ids: decisions,
             },
         )
         .await

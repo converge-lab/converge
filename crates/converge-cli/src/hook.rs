@@ -30,8 +30,8 @@ use std::process::Command;
 
 use anyhow::Result;
 use converge_client::{
-    DecisionFilter, MessageId, Pagination, ProjectId, Signal, SignalFilter, SignalId, SignalStatus,
-    Tier,
+    DecisionFilter, DecisionId, MessageId, Pagination, ProjectId, Signal, SignalFilter, SignalId,
+    SignalStatus, Tier,
 };
 use serde_json::{Value, json};
 
@@ -205,7 +205,17 @@ right away."
 /// What the bound block fetches: the project name, the decision index
 /// lines, and the open signals. `None` = the server answered but
 /// doesn't know the project for this account.
-type Index = Option<(String, Vec<String>, Vec<Open>)>;
+type Index = Option<(String, Vec<Recorded>, Vec<Open>)>;
+
+/// A decision as the block lists it.
+#[derive(Debug, Clone, PartialEq)]
+struct Recorded {
+    id: DecisionId,
+    title: String,
+    status: String,
+    /// Never shown to this user before, in any session on any machine.
+    new: bool,
+}
 
 /// An open signal as the block shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +229,25 @@ struct Open {
     new: bool,
 }
 
+/// The decision lines: what is new to this reader leads, newest first
+/// within each half, so a session start opens on what changed.
+fn lines_of_decisions(decisions: &[Recorded]) -> String {
+    let mut shown: Vec<&Recorded> = decisions.iter().collect();
+    shown.sort_by_key(|d| (std::cmp::Reverse(d.new), std::cmp::Reverse(d.id)));
+    shown
+        .iter()
+        .map(|d| {
+            format!(
+                "- {} [{}]{}",
+                d.title,
+                d.status,
+                if d.new { " ← NEW" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The bound block and its visible line, from what the server said.
 /// Pure, so the wording and the order are testable without a server.
 /// This listing is deliberately unfiltered by receipts: it is the one
@@ -226,11 +255,12 @@ struct Open {
 fn render(
     project: ProjectId,
     name: &str,
-    decisions: &[String],
+    decisions: &[Recorded],
     signals: &[Open],
 ) -> (String, String) {
     let is_new = |s: &Open| s.new;
     let new = signals.iter().filter(|s| is_new(s)).count();
+    let new_decisions = decisions.iter().filter(|d| d.new).count();
     let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
     // The list limits cap what we can count; say "N+" at the cap
     // instead of understating a bigger corpus as exactly N.
@@ -254,8 +284,12 @@ fn render(
         format!(" ({})", detail.join(", "))
     };
     let system = format!(
-        "Converge: \"{name}\" — {} decision(s), {} open signal(s){detail} ✓",
+        "Converge: \"{name}\" — {} decision(s){}, {} open signal(s){detail} ✓",
         counted(decisions.len(), 30),
+        match new_decisions {
+            0 => String::new(),
+            n => format!(" ({n} new)"),
+        },
         counted(signals.len(), 10),
     );
     let mut block = if decisions.is_empty() {
@@ -274,8 +308,13 @@ fn render(
              project memory is active. Decisions below are in force — \
              `decision_get` for the full record before re-deciding a \
              settled topic; `decision_add` (with `supersedes`/`evidence`) \
-             when a new decision lands.\n\nDecisions:\n{}",
-            decisions.join("\n")
+             when a new decision lands.\n\nDecisions{}:\n{}",
+            if new_decisions > 0 {
+                " (← NEW = not shown to you before, in any session)"
+            } else {
+                ""
+            },
+            lines_of_decisions(decisions),
         )
     };
     if !signals.is_empty() {
@@ -443,49 +482,55 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
             return Ok(None);
         };
         let name = found.name;
-        let decisions = client
-            .decision_list(
-                &DecisionFilter {
-                    project: Some(project),
-                    ..Default::default()
-                },
-                &Pagination {
-                    limit: Some(30),
-                    cursor: None,
-                },
-            )
-            .await?
-            .items
-            .iter()
-            .map(|d| {
-                format!(
-                    "- {} [{}]",
-                    d.title,
-                    format!("{:?}", d.status).to_lowercase()
-                )
-            })
-            .collect();
-        // The open signals, and which of them this user has never been
-        // shown: two reads of one list, the second narrowed by receipts.
+        // Both lists, and for each the half this user has never been
+        // shown: four reads in one round trip's worth of waiting, and
+        // the marks fall out of the difference rather than any local
+        // file, so they are the same on every machine.
+        let recorded = DecisionFilter {
+            project: Some(project),
+            ..Default::default()
+        };
+        let recorded_unseen = DecisionFilter {
+            unseen: true,
+            ..recorded.clone()
+        };
         let open = SignalFilter {
             project: Some(project),
             status: Some(SignalStatus::Proposed),
             ..Default::default()
         };
-        let unseen = SignalFilter {
+        let open_unseen = SignalFilter {
             unseen: true,
             ..open.clone()
         };
-        let page = Pagination {
+        let thirty = Pagination {
+            limit: Some(30),
+            cursor: None,
+        };
+        let ten = Pagination {
             limit: Some(10),
             cursor: None,
         };
-        let (listed, fresh) = tokio::try_join!(
-            client.signal_list(&open, &page),
-            client.signal_list(&unseen, &page)
+        let (all_decisions, new_decisions, listed, fresh) = tokio::try_join!(
+            client.decision_list(&recorded, &thirty),
+            client.decision_list(&recorded_unseen, &thirty),
+            client.signal_list(&open, &ten),
+            client.signal_list(&open_unseen, &ten)
         )?;
+        let new_decisions: BTreeSet<DecisionId> =
+            new_decisions.items.iter().map(|d| d.id).collect();
+        let decisions: Vec<Recorded> = all_decisions
+            .items
+            .iter()
+            .map(|d| Recorded {
+                id: d.id,
+                title: d.title.clone(),
+                status: format!("{:?}", d.status).to_lowercase(),
+                new: new_decisions.contains(&d.id),
+            })
+            .collect();
         let fresh: BTreeSet<SignalId> = fresh.items.iter().map(|s| s.id).collect();
-        let signals = listed
+        let signals: Vec<Open> = listed
             .items
             .iter()
             .map(|s| Open {
@@ -510,6 +555,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
     // this call too, and the budget already spent its patience.
     let fetch_ok = fetched.is_ok();
     let mut listed: Vec<SignalId> = Vec::new();
+    let mut listed_decisions: Vec<DecisionId> = Vec::new();
     let (block, system, degraded) = match fetched {
         Ok(None) => {
             // The server disowned the project; a lingering cached index
@@ -536,6 +582,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
         }
         Ok(Some((name, decisions, signals))) => {
             listed = signals.iter().map(|s| s.id).collect();
+            listed_decisions = decisions.iter().map(|d| d.id).collect();
             let (block, system) = render(project, &name, &decisions, &signals);
             // Last-good cache: written on success, served on failure.
             // A ghost binding (Ok(None)) clears it instead — the server
@@ -607,7 +654,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
     if let (Ok(client), Some(session), true) = (&client, session, fetch_ok) {
         let _ = tokio::time::timeout(
             RECEIPT_BUDGET,
-            client.signal_receive(session, Some(harness), &listed),
+            client.receive(session, Some(harness), &listed, &listed_decisions),
         )
         .await;
     }
@@ -1111,6 +1158,55 @@ mod tests {
         }
     }
 
+    fn recorded(id: &str, title: &str, new: bool) -> Recorded {
+        Recorded {
+            id: id.parse().unwrap(),
+            title: title.into(),
+            status: "accepted".into(),
+            new,
+        }
+    }
+
+    #[test]
+    fn render_marks_decisions_the_user_was_never_shown() {
+        let project: ProjectId = "01J00000000000000000000000".parse().unwrap();
+        let old = recorded("01J0000000000000000000000A", "settled last week", false);
+        let fresh = recorded("01J0000000000000000000000B", "settled today", true);
+        let decisions = [old, fresh];
+
+        let (block, system) = render(project, "p", &decisions, &[]);
+        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- ")).collect();
+        // What this reader has not seen leads, and says so once.
+        assert_eq!(
+            lines,
+            [
+                "- settled today [accepted] ← NEW",
+                "- settled last week [accepted]"
+            ]
+        );
+        assert!(
+            block.contains("Decisions (← NEW = not shown to you before"),
+            "{block}"
+        );
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 2 decision(s) (1 new), 0 open signal(s) ✓"
+        );
+
+        // Nothing new: no mark, no legend, no parenthetical.
+        let seen: Vec<Recorded> = decisions
+            .iter()
+            .cloned()
+            .map(|d| Recorded { new: false, ..d })
+            .collect();
+        let (block, system) = render(project, "p", &seen, &[]);
+        assert!(!block.contains("NEW"), "{block}");
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 2 decision(s), 0 open signal(s) ✓"
+        );
+    }
+
     #[test]
     fn render_marks_what_the_user_was_never_shown() {
         let project: ProjectId = "01J00000000000000000000000".parse().unwrap();
@@ -1118,7 +1214,7 @@ mod tests {
         let mid = open("01J00000000000000000000002", Tier::Watch, "mid", false);
         let hi = open("01J00000000000000000000003", Tier::Coordinate, "hi", true);
         let signals = [lo.clone(), mid.clone(), hi.clone()];
-        let decisions = ["- one [accepted]".to_string()];
+        let decisions = [recorded("01J0000000000000000000000A", "one", false)];
 
         // Only `hi` has no receipt: it is new and leads; the conflict
         // leads the rest; the visible line counts both.

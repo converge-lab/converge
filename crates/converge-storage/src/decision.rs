@@ -56,6 +56,11 @@ pub const EXCERPT_LINES: usize = 120;
 /// drift, the excerpt keeps it readable without the repository, and the
 /// digest lets anyone with a clone check the excerpt without trusting
 /// the record. The repository itself is the project's.
+///
+/// One convention a verifier has to share: the excerpt is the cited
+/// lines joined with `\n` and ends with one, whatever the file's own
+/// line endings are. Extract the same range from the blob, normalize
+/// the same way, and the digest matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeAnchor {
     /// Full 40-hex commit sha — the same in every clone.

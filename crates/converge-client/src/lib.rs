@@ -12,13 +12,13 @@
 // mention is re-exported, so consumers (the web UI, the future CLI) depend
 // on this crate alone and never name the storage crate.
 pub use converge_storage::{
-    Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, Decision, DecisionEdit,
-    DecisionFilter, DecisionId, DecisionStatus, DeviceGrant, Edges, Group, GroupEdit, GroupId,
-    GroupKind, Identity, Member, Message, MessageId, Minted, NewAgent, NewDecision, NewGroup,
-    NewMessage, NewProject, NewSession, NewSignal, NewToken, Page, Pagination, Project,
-    ProjectEdit, ProjectFilter, ProjectId, Related, Repository, Session, SessionFilter, SessionId,
-    SessionKind, Signal, SignalFilter, SignalId, SignalStatus, Source, StoreError, Tier, Token,
-    TokenId, User, UserId,
+    Agent, AgentId, AgentKind, Alternative, AuthInfo, Author, CodeAnchor, Decision, DecisionEdit,
+    DecisionFilter, DecisionId, DecisionStatus, DeviceGrant, EXCERPT_LINES, Edges, Group,
+    GroupEdit, GroupId, GroupKind, Identity, Member, Message, MessageId, Minted, NewAgent,
+    NewDecision, NewGroup, NewMessage, NewProject, NewSession, NewSignal, NewToken, Page,
+    Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Related, Repository, Session,
+    SessionFilter, SessionId, SessionKind, Signal, SignalFilter, SignalId, SignalStatus, Source,
+    StoreError, Tier, Token, TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
 use serde::Serialize;

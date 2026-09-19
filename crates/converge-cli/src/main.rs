@@ -19,6 +19,7 @@
 mod backup;
 mod config;
 mod device;
+mod evidence;
 mod harness;
 mod hook;
 mod marker;

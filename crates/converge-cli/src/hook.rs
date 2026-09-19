@@ -15,7 +15,10 @@
 //!   (stay-quiet rules), unbound (the mapping rules), or unreadable.
 //! - `ctx` (pre-tool, matched on converge tools): merge `cwd` + git
 //!   remote into the tool input, so the server ranks candidates without
-//!   the LLM gathering anything.
+//!   the LLM gathering anything. Before a `decision_add` it goes further:
+//!   the conversation goes up as evidence and the citations the model
+//!   made — message turns and bare `path:lines` code — are completed
+//!   here, where the working tree and its repository can be read.
 //! - `mark` (post-tool, matched on the binding tools): perform the
 //!   **local effect** — parse the tool response and write the marker at
 //!   the git root. The LLM only ever chose; the write is deterministic.
@@ -898,9 +901,13 @@ pub async fn ctx(kind: Kind) -> Result<()> {
                 )),
             }
         }
-        // Code citations arrive complete or not at all: this build carries
-        // no resolver for a bare `path:lines`, so those are dropped and said.
+        // Code citations are filled in here too: a bare `path:lines` is
+        // completed from the repository under the working tree — commit,
+        // excerpt, digest — and what the repository cannot vouch for is
+        // refused, and said, rather than dropped in silence.
+        let refusals = crate::evidence::complete(&mut merged, &payload.cwd);
         let dropped = drop_incomplete_code(&mut merged);
+        notes.extend(refusals);
         if dropped > 0 {
             notes.push(format!(
                 "{dropped} code citation(s) dropped — cite committed anchors in full"
@@ -943,10 +950,17 @@ fn cite(merged: &mut Value, ids: &[MessageId]) {
 }
 
 /// Keep only code anchors that carry every field; return how many went.
-/// The seam for the resolver that completes a bare `path:lines` from
-/// HEAD — see docs/tasks/hook-code-anchor-resolver.md.
+/// [`crate::evidence`] completes a bare `path:lines` from HEAD; this is
+/// the last line behind it. An item that names no path or no lines — or
+/// names a commit and nothing else — is a half anchor the server would
+/// reject whole, so it goes, and the visible line says so.
 fn drop_incomplete_code(merged: &mut Value) -> usize {
-    let Some(items) = merged["code_evidence"].as_array_mut() else {
+    // `get_mut`, not `merged[..]`: indexing a `Value` *inserts* a null,
+    // and an absent `code_evidence` must stay absent.
+    let Some(items) = merged
+        .get_mut("code_evidence")
+        .and_then(Value::as_array_mut)
+    else {
         return 0;
     };
     let before = items.len();
@@ -1234,6 +1248,38 @@ mod tests {
         let mut call = json!({ "code_evidence": [{ "path": "a.rs" }] });
         assert_eq!(drop_incomplete_code(&mut call), 1);
         assert!(call.get("code_evidence").is_none());
+        // And an absent list stays absent — not a null in its place.
+        let mut call = json!({ "title": "t" });
+        assert_eq!(drop_incomplete_code(&mut call), 0);
+        assert!(call.get("code_evidence").is_none(), "{call}");
+    }
+
+    #[test]
+    fn a_bare_citation_and_a_full_anchor_arrive_as_two_anchors() {
+        use converge_client::CodeAnchor;
+        let repo = crate::evidence::test_repo(&[("src/lib.rs", "one\ntwo\n")]);
+        let whole = json!({
+            "commit": "0".repeat(40), "path": "other.rs", "lines": [3, 4],
+            "excerpt": "x\ny\n", "digest": CodeAnchor::digest_of("x\ny\n"),
+        });
+        let mut call = json!({ "code_evidence": [
+            { "path": "src/lib.rs", "lines": [1, 2] },
+            whole,
+        ]});
+        // The bare citation is filled from HEAD; the complete one is left
+        // alone. Nothing is refused, so nothing is said on the line.
+        assert!(crate::evidence::complete(&mut call, &repo).is_empty());
+        assert_eq!(drop_incomplete_code(&mut call), 0);
+        let kept = call["code_evidence"].as_array().unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0]["path"], "src/lib.rs");
+        assert_eq!(kept[0]["lines"], json!([1, 2]));
+        assert_eq!(kept[0]["excerpt"], "one\ntwo\n");
+        assert_eq!(kept[0]["digest"], CodeAnchor::digest_of("one\ntwo\n"));
+        assert_eq!(kept[0]["commit"].as_str().unwrap().len(), 40);
+        assert_eq!(kept[1]["path"], "other.rs");
+        assert_eq!(kept[1]["commit"], "0".repeat(40));
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]

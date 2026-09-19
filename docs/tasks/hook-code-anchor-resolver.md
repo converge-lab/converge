@@ -1,7 +1,9 @@
 # Task: complete a cited `path:lines` into a code anchor in `hook ctx`
 
-Status: open. Everything around it is built and tested on
-`feat/evidence-anchors`; this is the one missing piece of the evidence slice.
+Status: done. `crates/converge-cli/src/evidence.rs` resolves a citation
+against the repository under `cwd`, `hook ctx` calls it before a
+`decision_add`, and step 3 of `scripts/smoke-ctx.sh` reports the anchor
+kept with no note. What follows is the spec it was built to.
 
 ## What exists
 

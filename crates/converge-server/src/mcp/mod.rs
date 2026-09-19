@@ -123,6 +123,29 @@ pub struct DecisionAdd {
     /// The full form only — the hook completes a bare `path:lines`.
     #[serde(default)]
     pub code_evidence: Vec<CodeAnchorIn>,
+    /// The exchange that produced this decision, recorded and cited in
+    /// this one call. Use it when nothing else is recording the
+    /// conversation for you: no `session_ensure`, no `message_add`, no
+    /// ids to carry. Turns that name an `ordinal` are written once, so
+    /// sending them here and syncing them later is not a duplicate.
+    #[serde(default)]
+    pub evidence_turns: Vec<MessageIn>,
+    /// Which conversation `evidence_turns` belong to: your own stable
+    /// id for this session, and a title for it. Required alongside
+    /// `evidence_turns` unless the conversation is already ensured.
+    #[serde(default)]
+    pub conversation: Option<ConversationIn>,
+}
+
+/// The conversation a decision's inline evidence belongs to.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ConversationIn {
+    /// Your own stable reference for this conversation — a session id,
+    /// a thread URL. Ensuring twice returns the same session.
+    pub external: String,
+    /// Human-readable, shown wherever the source is cited.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// A code anchor on the wire, as `converge_storage::CodeAnchor`.
@@ -253,6 +276,11 @@ pub struct MessageIn {
     /// Who said it, as displayed ("maksim", "claude").
     pub speaker: String,
     pub body: String,
+    /// Where this turn sits in the conversation, counting from 0. Send
+    /// it and the same turn is never recorded twice, however often it
+    /// is sent; leave it out and every send appends.
+    #[serde(default)]
+    pub ordinal: Option<i32>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -658,6 +686,7 @@ impl<S: Storage + 'static> Memory<S> {
                 // (the time-authority decision); importers with real
                 // external timestamps use the REST batch surface instead.
                 sent_at: None,
+                ordinal: m.ordinal,
             })
             .collect();
         let ids = self
@@ -687,11 +716,58 @@ impl<S: Storage + 'static> Memory<S> {
             .iter()
             .map(|s| parse_id::<DecisionId>(s, "supersedes"))
             .collect::<Result<Vec<_>, _>>()?;
-        let evidence = req
+        let mut evidence = req
             .evidence
             .iter()
             .map(|m| parse_id::<MessageId>(m, "evidence"))
             .collect::<Result<Vec<_>, _>>()?;
+        // The exchange, recorded here and cited: for a caller with
+        // nothing else putting the conversation on record. Turns that
+        // name their position are written once, so a hook or a later
+        // sync sending the same ones is not a second copy.
+        if !req.evidence_turns.is_empty() {
+            let Some(conversation) = &req.conversation else {
+                return Err(McpError::invalid_params(
+                    "evidence_turns needs `conversation` — your own stable id for this \
+                     conversation, and a title",
+                    None,
+                ));
+            };
+            let session = self
+                .store
+                .session_ensure(
+                    self.scope(&context)?,
+                    NewSession {
+                        project_id,
+                        kind: SessionKind::Transcript,
+                        external: conversation.external.clone(),
+                        title: conversation
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| conversation.external.clone()),
+                    },
+                )
+                .await
+                .map_err(map_err)?;
+            let turns: Vec<NewMessage> = req
+                .evidence_turns
+                .iter()
+                .map(|m| NewMessage {
+                    speaker: m.speaker.clone(),
+                    body: m.body.clone(),
+                    sent_at: None,
+                    ordinal: m.ordinal,
+                })
+                .collect();
+            let recorded = self
+                .store
+                .message_add(self.scope(&context)?, session, turns)
+                .await
+                .map_err(map_err)?;
+            evidence.extend(recorded);
+            evidence.sort_unstable();
+            evidence.dedup();
+        }
         // This door is the agent's. A person typing a decision into the
         // web is their own source; an agent recording one out of a
         // conversation has to put the conversation on record first, or

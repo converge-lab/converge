@@ -165,7 +165,7 @@ pub(crate) async fn pass(
     let mut landed: Vec<converge_client::MessageId> = Vec::new();
     let mut sent = 0usize;
     while sent < max {
-        let pending = marks.pending(&key, &parsed.turns);
+        let pending = marks.pending_indexed(&key, &parsed.turns);
         if pending.is_empty() {
             break;
         }
@@ -174,10 +174,13 @@ pub(crate) async fn pass(
         let batch: Vec<_> = pending.iter().take(BATCH).copied().collect();
         let messages: Vec<_> = batch
             .iter()
-            .map(|t| converge_client::NewMessage {
+            .map(|(at, t)| converge_client::NewMessage {
                 speaker: t.speaker.clone(),
                 body: t.body.clone(),
                 sent_at: t.sent_at,
+                // Where the turn sits in the transcript: the server
+                // writes it once, whoever sends it.
+                ordinal: i32::try_from(*at).ok(),
             })
             .collect();
         landed.extend(
@@ -190,7 +193,8 @@ pub(crate) async fn pass(
         // Mark exactly what is now on the server: the ids when the
         // harness gives them, otherwise the prefix that has been sent.
         if by_id {
-            let turns: Vec<crate::transcript::Turn> = batch.iter().map(|t| (*t).clone()).collect();
+            let turns: Vec<crate::transcript::Turn> =
+                batch.iter().map(|(_, t)| (*t).clone()).collect();
             marks.done(&key, &turns);
         } else {
             let done = parsed.turns.len() - pending.len() + batch.len();

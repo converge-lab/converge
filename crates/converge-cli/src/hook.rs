@@ -30,7 +30,7 @@ use std::process::Command;
 
 use anyhow::Result;
 use converge_client::{
-    DecisionFilter, DecisionId, MessageId, Pagination, ProjectId, Signal, SignalFilter, SignalId,
+    DecisionFilter, DecisionId, Pagination, ProjectId, Signal, SignalFilter, SignalId,
     SignalStatus, Tier,
 };
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 use crate::config::Config;
 use crate::harness::{Effect, Harness, Kind, Payload, Response};
 use crate::marker::{self, State};
+use crate::transcript::Turn;
 
 /// Whatever the harness put on stdin, before it means anything.
 fn raw() -> Value {
@@ -869,10 +870,18 @@ async fn try_sync(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
     // Only bound repos sync; unbound and disabled stay quiet.
-    let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
+    let State::Bound { .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
-    let (ids, behind) = record_conversation(kind, &payload, project).await?;
+    let Some(at) = payload.transcript.as_ref() else {
+        return Ok(());
+    };
+    // Whatever the per-prompt drain never reached. One writer: if a
+    // drain is mid-pass it is already doing this, so stand down.
+    let Some(lock) = crate::drain::Lock::take_within(&at.key(), LOCK_WAIT) else {
+        return Ok(());
+    };
+    let (ids, behind) = crate::drain::pass(kind, &payload.cwd, at, DRAIN_ALL, lock).await?;
     let added = ids.len();
     if added > 0 {
         respond(
@@ -891,108 +900,54 @@ async fn try_sync(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-/// Put the conversation on the server and answer with the ids a
-/// decision can cite, plus how many turns are still waiting.
+/// The exchange a decision cites, taken straight from the transcript
+/// and carried in the call itself.
 ///
-/// A citation has to name messages that exist, so this never hands back
-/// nothing while the session holds anything at all: it sends what it
-/// can and then cites, falling back to the newest turns already
-/// recorded. Sending is bounded twice over — one batch, and a slice of
-/// the hook's budget — because the per-prompt drain is what empties a
-/// backlog; this only has to cover the turns since the last prompt.
-///
-/// One writer at a time: the same lock a drain takes, waited on
-/// briefly, since a pass releases it between batches. Turns always go
-/// oldest first, so the stored conversation reads in order.
-async fn record_conversation(
-    kind: Kind,
-    payload: &Payload,
-    project: ProjectId,
-) -> Result<(Vec<MessageId>, usize)> {
-    let Some(at) = payload.transcript.as_ref() else {
-        return Ok((Vec::new(), 0));
-    };
-    if let Some(lock) = crate::drain::Lock::take_within(&at.key(), LOCK_WAIT) {
-        let sent = tokio::time::timeout(
-            PUSH_BUDGET,
-            crate::drain::pass(kind, &payload.cwd, at, PUSH_CAP, lock),
-        )
-        .await;
-        // A decision cites the exchange that produced it, which is the
-        // last few turns of the session — not only whichever of them
-        // happened to be unsent. Fresh ids are enough on their own only
-        // when there are enough of them; otherwise the read below picks
-        // up what was just sent along with what was already there.
-        if let Ok(Ok((ids, behind))) = sent
-            && ids.len() >= CITED_TURNS
-        {
-            return Ok((ids, behind));
-        }
-    }
-    cite_recorded(kind, payload, project).await
+/// Nothing is sent from here: the turns ride along with `decision_add`
+/// and the server records them, and because each one names its position
+/// the drain can send the same turns later without making a second
+/// copy. So the pre-tool hook touches no network, cannot time out, and
+/// cannot leave a decision with nothing to cite.
+struct Exchange {
+    /// The harness's own id for the conversation.
+    external: String,
+    title: String,
+    /// Each turn at its position in the conversation.
+    turns: Vec<(usize, Turn)>,
 }
 
-/// The newest turns the server already has for this session, and how
-/// many are still unsent. Used when there was nothing new to send, when
-/// sending ran long, and when a drain holds the lock.
-async fn cite_recorded(
-    kind: Kind,
-    payload: &Payload,
-    project: ProjectId,
-) -> Result<(Vec<MessageId>, usize)> {
-    let Some(at) = payload.transcript.as_ref() else {
-        return Ok((Vec::new(), 0));
-    };
-    let harness = kind.harness();
-    let parsed = harness.transcript(at)?;
-    let Some(external) = parsed.session_id.clone() else {
-        return Ok((Vec::new(), 0));
-    };
-    let client = Config::load()?.client()?;
-    let session = client
-        .session_ensure(&converge_client::NewSession {
-            project_id: project,
-            kind: converge_client::SessionKind::Transcript,
-            external,
-            title: crate::transcript::title(&parsed.turns, &format!("{} session", harness.label())),
-        })
-        .await?;
-    let recorded = client
-        .message_list(
-            session,
-            &Pagination {
-                limit: None,
-                cursor: None,
-            },
-        )
-        .await?;
-    let tail = recorded.items.len().saturating_sub(CITED_TURNS);
-    let ids: Vec<MessageId> = recorded.items[tail..].iter().map(|m| m.id).collect();
-    let behind = crate::watermark::Watermarks::load()?
-        .pending(&at.key(), &parsed.turns)
-        .len();
-    Ok((ids, behind))
+fn exchange(kind: Kind, payload: &Payload) -> Option<Exchange> {
+    let at = payload.transcript.as_ref()?;
+    let parsed = kind.harness().transcript(at).ok()?;
+    let external = parsed.session_id.clone()?;
+    let title = crate::transcript::title(
+        &parsed.turns,
+        &format!("{} session", kind.harness().label()),
+    );
+    let from = parsed.turns.len().saturating_sub(CITED_TURNS);
+    let turns: Vec<(usize, Turn)> = parsed
+        .turns
+        .into_iter()
+        .enumerate()
+        .skip(from)
+        .filter(|(_, t)| !t.body.trim().is_empty())
+        .collect();
+    (!turns.is_empty()).then_some(Exchange {
+        external,
+        title,
+        turns,
+    })
 }
 
 // ─── pre-tool: context collector ──────────────────────────────────────────
 
-/// The budget for putting the conversation on record before a
-/// `decision_add`: a few turns to the server. Past it, the call goes
-/// through as the model made it and the server says what is missing.
-const CTX_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
 /// How many of the turns since the last push a decision cites.
 const CITED_TURNS: usize = 10;
-/// How many turns one hook-driven pass carries. The per-prompt drain
-/// keeps the backlog near zero, so this is the catch-up case: send a
-/// batch, cite it, and let the drain take the rest.
-const PUSH_CAP: usize = 50;
 /// How long the hook waits for a running drain to release the lock. A
 /// drain releases between batches, so this is usually not spent.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
-/// The slice of the hook's budget sending may take. What is left over
-/// is what reads back the citation, so a slow send costs relevance,
-/// never the decision.
-const PUSH_BUDGET: std::time::Duration = std::time::Duration::from_millis(2200);
+/// Session end sends whatever the per-prompt drain never reached.
+const DRAIN_ALL: usize = 5_000;
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
@@ -1024,22 +979,11 @@ pub async fn ctx(kind: Kind) -> Result<()> {
         .as_deref()
         .is_some_and(|tool| tool.ends_with("decision_add"))
     {
-        if let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) {
-            match tokio::time::timeout(CTX_BUDGET, record_conversation(kind, &payload, project))
-                .await
-            {
-                Ok(Ok((ids, behind))) => {
-                    cite(&mut merged, &ids);
-                    if behind > 0 {
-                        notes.push(format!(
-                            "evidence lags by {behind} turn(s), still being recorded"
-                        ));
-                    }
-                }
-                Ok(Err(e)) => notes.push(format!("evidence not recorded — {e}")),
-                Err(_) => notes.push(format!(
-                    "evidence not recorded — sync exceeded {CTX_BUDGET:?}"
-                )),
+        if let Ok(State::Bound { .. }) = marker::find(&payload.cwd) {
+            match exchange(kind, &payload) {
+                Some(exchange) => cite(&mut merged, &exchange),
+                None => notes
+                    .push("no conversation to cite — this harness records none here".to_string()),
             }
         }
         // Code citations are filled in here too: a bare `path:lines` is
@@ -1067,27 +1011,25 @@ pub async fn ctx(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-/// Cite the newest of `ids` on the call, merged with what the model
-/// cited itself, without duplicates.
-fn cite(merged: &mut Value, ids: &[MessageId]) {
-    let mut evidence: Vec<String> = merged["evidence"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let newest = ids.len().saturating_sub(CITED_TURNS);
-    for id in &ids[newest..] {
-        let id = id.to_string();
-        if !evidence.contains(&id) {
-            evidence.push(id);
-        }
-    }
-    if !evidence.is_empty() {
-        merged["evidence"] = json!(evidence);
-    }
+/// Put the exchange on the call: the conversation it belongs to and
+/// the turns themselves, each with its position, so the server records
+/// them once and anchors the decision to them. What the model cited
+/// itself stays exactly as it wrote it, beside these.
+fn cite(merged: &mut Value, exchange: &Exchange) {
+    merged["conversation"] = json!({ "external": exchange.external, "title": exchange.title });
+    merged["evidence_turns"] = Value::Array(
+        exchange
+            .turns
+            .iter()
+            .map(|(at, turn)| {
+                json!({
+                    "speaker": turn.speaker,
+                    "body": turn.body,
+                    "ordinal": i32::try_from(*at).unwrap_or(i32::MAX),
+                })
+            })
+            .collect(),
+    );
 }
 
 /// Keep only code anchors that carry every field; return how many went.
@@ -1412,22 +1354,41 @@ mod tests {
     }
 
     #[test]
-    fn evidence_is_cited_newest_first_and_incomplete_code_is_dropped() {
-        let ids: Vec<MessageId> = (0..12).map(|_| MessageId::new()).collect();
-        let mut call = json!({ "title": "t", "evidence": [ids[11].to_string(), "01J00000000000000000000009"] });
-        cite(&mut call, &ids);
-        let cited: Vec<&str> = call["evidence"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
+    fn the_exchange_rides_on_the_call_and_incomplete_code_is_dropped() {
+        let turns: Vec<(usize, Turn)> = (3..6)
+            .map(|at| {
+                (
+                    at,
+                    Turn {
+                        speaker: "user".into(),
+                        body: format!("turn {at}"),
+                        sent_at: None,
+                        id: None,
+                    },
+                )
+            })
             .collect();
-        // The model's own citations stay first; the newest ten follow,
-        // the one already cited not twice.
-        assert_eq!(cited.len(), 2 + CITED_TURNS - 1);
-        assert_eq!(cited[0], ids[11].to_string());
-        assert!(!cited.contains(&ids[0].to_string().as_str()));
-        assert!(cited.contains(&ids[2].to_string().as_str()));
+        let mut call = json!({ "title": "t", "evidence": ["01J00000000000000000000009"] });
+        cite(
+            &mut call,
+            &Exchange {
+                external: "sess-1".into(),
+                title: "A session".into(),
+                turns,
+            },
+        );
+        // The conversation the turns belong to is named once…
+        assert_eq!(call["conversation"]["external"], "sess-1");
+        assert_eq!(call["conversation"]["title"], "A session");
+        // …and each turn carries its position, so the drain can send the
+        // same turn later without making a second copy of it.
+        let sent = call["evidence_turns"].as_array().unwrap();
+        assert_eq!(sent.len(), 3);
+        assert_eq!(sent[0]["ordinal"], 3);
+        assert_eq!(sent[0]["speaker"], "user");
+        assert_eq!(sent[2]["body"], "turn 5");
+        // What the model cited itself stays exactly as it wrote it.
+        assert_eq!(call["evidence"], json!(["01J00000000000000000000009"]));
 
         let mut call = json!({ "code_evidence": [
             { "path": "a.rs", "lines": [1, 2] },

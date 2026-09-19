@@ -54,6 +54,20 @@ impl Watermarks {
     /// every turn has one; by count otherwise, where a shrunk transcript
     /// (fewer turns than synced) yields nothing rather than a re-send.
     pub fn pending<'a>(&self, transcript: &str, turns: &'a [Turn]) -> Vec<&'a Turn> {
+        self.pending_indexed(transcript, turns)
+            .into_iter()
+            .map(|(_, turn)| turn)
+            .collect()
+    }
+
+    /// The same, each turn with its position in the transcript — what a
+    /// message carries so the server can tell one turn from another
+    /// however often it is sent.
+    pub fn pending_indexed<'a>(
+        &self,
+        transcript: &str,
+        turns: &'a [Turn],
+    ) -> Vec<(usize, &'a Turn)> {
         if turns.iter().all(|t| t.id.is_some()) {
             let done = match self.synced.get(transcript) {
                 Some(Mark::Ids(ids)) => Some(ids),
@@ -61,7 +75,8 @@ impl Watermarks {
             };
             turns
                 .iter()
-                .filter(|t| {
+                .enumerate()
+                .filter(|(_, t)| {
                     t.id.as_ref()
                         .is_some_and(|id| !done.is_some_and(|done| done.contains(id)))
                 })
@@ -73,7 +88,12 @@ impl Watermarks {
             };
             turns
                 .get(already..)
-                .map(|tail| tail.iter().collect())
+                .map(|tail| {
+                    tail.iter()
+                        .enumerate()
+                        .map(|(i, t)| (already + i, t))
+                        .collect()
+                })
                 .unwrap_or_default()
         }
     }

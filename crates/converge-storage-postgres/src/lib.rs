@@ -985,7 +985,9 @@ impl Messages for PgStorage {
             // A turn that names its position is written once: the same
             // position arriving again is the same turn, whoever sends
             // it. The caller still gets an id back, so it can cite what
-            // it sent even when someone else recorded it first.
+            // it sent even when someone else recorded it first — and
+            // the id it gets back always names a row saying what it
+            // sent, see the conflict arm.
             let written = sqlx::query_scalar!(
                 r#"insert into messages (id, session_id, seq, speaker, body, sent_at, ordinal)
                    values ($1, $2, $3, $4, $5, $6, $7)
@@ -1004,16 +1006,41 @@ impl Messages for PgStorage {
             .map_err(db_err)?;
             match written {
                 Some(written) => ids.push(wire::id(written)),
+                // Something already holds that position. It is the same
+                // turn only if it says the same thing: a harness that
+                // rewrites its transcript in place shifts every position
+                // after the edit, and handing back the id of a row with
+                // different words would anchor a decision to a line
+                // nobody said. Such a turn is recorded as itself, with
+                // no position, and reads in arrival order.
                 None => {
-                    let existing = sqlx::query_scalar!(
-                        "select id from messages where session_id = $1 and ordinal = $2",
+                    let held = sqlx::query!(
+                        "select id, body from messages where session_id = $1 and ordinal = $2",
                         session,
                         message.ordinal,
                     )
                     .fetch_one(&mut *tx)
                     .await
                     .map_err(db_err)?;
-                    ids.push(wire::id(existing));
+                    if held.body == message.body {
+                        ids.push(wire::id(held.id));
+                    } else {
+                        let written = sqlx::query_scalar!(
+                            r#"insert into messages (id, session_id, seq, speaker, body, sent_at)
+                               values ($1, $2, $3, $4, $5, $6)
+                               returning id"#,
+                            Uuid::from(id.ulid()),
+                            session,
+                            base + offset as i32,
+                            message.speaker,
+                            message.body,
+                            message.sent_at,
+                        )
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                        ids.push(wire::id(written));
+                    }
                 }
             }
         }

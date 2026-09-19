@@ -483,6 +483,24 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
     assert_eq!(whole[2], tail[0]);
     assert_eq!(whole[3], tail[1]);
 
+    // A harness that rewrites its transcript shifts every position
+    // after the edit. Position 3 now says something else, so it is
+    // another turn, not a second id for the one already there.
+    let shifted = store
+        .message_add(Scope::System, sid, vec![at(3, "m3 rewritten")])
+        .await
+        .unwrap();
+    assert_ne!(shifted[0], tail[1]);
+    let body = store
+        .message_list(Scope::System, sid, Pagination::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| m.id == shifted[0])
+        .unwrap()
+        .body;
+    assert_eq!(body, "m3 rewritten");
+
     // A turn with no position keeps the old behaviour: appended, and
     // ordered by its seq.
     store
@@ -496,7 +514,10 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         .await
         .unwrap();
     let bodies: Vec<&str> = stream.iter().map(|m| m.body.as_str()).collect();
-    assert_eq!(bodies, vec!["m0", "m1", "m2", "m3", "loose"]);
+    assert_eq!(
+        bodies,
+        vec!["m0", "m1", "m2", "m3", "m3 rewritten", "loose"]
+    );
 
     // And the cursor walks that same order.
     let rest = store
@@ -511,5 +532,5 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         .await
         .unwrap();
     let bodies: Vec<&str> = rest.iter().map(|m| m.body.as_str()).collect();
-    assert_eq!(bodies, vec!["m2", "m3", "loose"]);
+    assert_eq!(bodies, vec!["m2", "m3", "m3 rewritten", "loose"]);
 }

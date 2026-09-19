@@ -42,10 +42,12 @@ pub struct NewMessage {
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub sent_at: Option<OffsetDateTime>,
     /// Where this turn sits in the conversation it came from — the
-    /// index in a transcript. Two sends of the same position are one
-    /// message, and reads order by it, so a turn that arrives late
-    /// still reads in its place. Absent for writers that cannot
-    /// number their turns; those keep arrival order.
+    /// index in a transcript. Two sends of the same position and the
+    /// same body are one message, and reads order by it, so a turn
+    /// that arrives late still reads in its place. The same position
+    /// with a different body is a different turn, recorded without a
+    /// position. Absent for writers that cannot number their turns;
+    /// those keep arrival order.
     #[serde(default)]
     pub ordinal: Option<i32>,
 }

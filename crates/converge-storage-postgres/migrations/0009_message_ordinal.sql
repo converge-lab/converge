@@ -6,6 +6,11 @@
 -- arrive out of order still read in order — which is what lets the two
 -- writers work without coordinating.
 --
+-- Same position and same words is the same turn; same position, other
+-- words is another turn, recorded with no position. A harness that
+-- rewrites its transcript shifts every position after the edit, and an
+-- id handed back has to name a row that says what the sender sent.
+--
 -- Null for anything recorded before this and for writers that do not
 -- number their turns; those keep ordering by `seq`, which for the CLI's
 -- own sessions counted the same way.

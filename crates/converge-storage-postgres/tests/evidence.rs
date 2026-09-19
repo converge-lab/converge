@@ -77,6 +77,7 @@ fn message(speaker: &str, body: &str) -> NewMessage {
         speaker: speaker.into(),
         body: body.into(),
         sent_at: None,
+        ordinal: None,
     }
 }
 
@@ -447,4 +448,68 @@ async fn sources_derive_windows_around_anchors() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
+    let (_pg, store) = store().await;
+    let project_id = project(&store).await;
+    let sid = store
+        .session_ensure(Scope::System, session(project_id, "s", "s"))
+        .await
+        .unwrap();
+    let at = |ordinal: i32, body: &str| NewMessage {
+        ordinal: Some(ordinal),
+        ..message("a", body)
+    };
+
+    // The tail of a conversation arrives first — a decision citing it
+    // before anything has been synced.
+    let tail = store
+        .message_add(Scope::System, sid, vec![at(2, "m2"), at(3, "m3")])
+        .await
+        .unwrap();
+    // Then the sync sends the conversation from the beginning. The two
+    // turns already recorded are the same turns, not copies: their ids
+    // come back so the sender can cite what it sent either way.
+    let whole = store
+        .message_add(
+            Scope::System,
+            sid,
+            vec![at(0, "m0"), at(1, "m1"), at(2, "m2"), at(3, "m3")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(whole[2], tail[0]);
+    assert_eq!(whole[3], tail[1]);
+
+    // A turn with no position keeps the old behaviour: appended, and
+    // ordered by its seq.
+    store
+        .message_add(Scope::System, sid, vec![message("a", "loose")])
+        .await
+        .unwrap();
+
+    // The stream reads in conversation order, not arrival order.
+    let stream = store
+        .message_list(Scope::System, sid, Pagination::default())
+        .await
+        .unwrap();
+    let bodies: Vec<&str> = stream.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(bodies, vec!["m0", "m1", "m2", "m3", "loose"]);
+
+    // And the cursor walks that same order.
+    let rest = store
+        .message_list(
+            Scope::System,
+            sid,
+            Pagination {
+                limit: Some(10),
+                cursor: Some(stream[1].id),
+            },
+        )
+        .await
+        .unwrap();
+    let bodies: Vec<&str> = rest.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(bodies, vec!["m2", "m3", "loose"]);
 }

@@ -982,20 +982,40 @@ impl Messages for PgStorage {
         let mut ids = Vec::with_capacity(new.len());
         for (offset, message) in new.into_iter().enumerate() {
             let id = MessageId::new();
-            sqlx::query!(
-                r#"insert into messages (id, session_id, seq, speaker, body, sent_at)
-                   values ($1, $2, $3, $4, $5, $6)"#,
+            // A turn that names its position is written once: the same
+            // position arriving again is the same turn, whoever sends
+            // it. The caller still gets an id back, so it can cite what
+            // it sent even when someone else recorded it first.
+            let written = sqlx::query_scalar!(
+                r#"insert into messages (id, session_id, seq, speaker, body, sent_at, ordinal)
+                   values ($1, $2, $3, $4, $5, $6, $7)
+                   on conflict (session_id, ordinal) where ordinal is not null do nothing
+                   returning id"#,
                 Uuid::from(id.ulid()),
                 session,
                 base + offset as i32,
                 message.speaker,
                 message.body,
                 message.sent_at,
+                message.ordinal,
             )
-            .execute(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(db_err)?;
-            ids.push(id);
+            match written {
+                Some(written) => ids.push(wire::id(written)),
+                None => {
+                    let existing = sqlx::query_scalar!(
+                        "select id from messages where session_id = $1 and ordinal = $2",
+                        session,
+                        message.ordinal,
+                    )
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+                    ids.push(wire::id(existing));
+                }
+            }
         }
         tx.commit().await.map_err(db_err)?;
         Ok(ids)
@@ -1016,12 +1036,14 @@ impl Messages for PgStorage {
                from messages m
                where m.session_id = $1
                  and ($2::uuid is null
-                      or m.seq > (select seq from messages where id = $2 and session_id = $1))
+                      or coalesce(m.ordinal, m.seq)
+                         > (select coalesce(ordinal, seq) from messages
+                            where id = $2 and session_id = $1))
                  and ($4::uuid is null
                       or group_visible((select p.group_id from sessions s
                                         join projects p on p.id = s.project_id
                                         where s.id = m.session_id), $4))
-               order by m.seq
+               order by coalesce(m.ordinal, m.seq)
                limit $3"#,
             Uuid::from(session.ulid()),
             page.cursor.map(|c| Uuid::from(c.ulid())),
@@ -1481,8 +1503,10 @@ impl Decisions for PgStorage {
         }
 
         // The whole excerpt set in one pass: every message within CONTEXT
-        // of any anchor of this decision, in (session, seq) order —
-        // overlapping windows deduplicate for free.
+        // of any anchor of this decision, in conversation order —
+        // overlapping windows deduplicate for free. The position is the
+        // turn's own where it has one, so a window reads in order even
+        // when its turns reached the server out of order.
         let windows = sqlx::query_as!(
             wire::MessageRow,
             r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
@@ -1493,9 +1517,11 @@ impl Decisions for PgStorage {
                    join messages a on a.id = e.message_id
                    where e.decision_id = $1
                      and a.session_id = m.session_id
-                     and m.seq between a.seq - $2 and a.seq + $2
+                     and coalesce(m.ordinal, m.seq)
+                         between coalesce(a.ordinal, a.seq) - $2
+                             and coalesce(a.ordinal, a.seq) + $2
                )
-               order by m.session_id, m.seq"#,
+               order by m.session_id, coalesce(m.ordinal, m.seq)"#,
             uuid,
             CONTEXT,
         )

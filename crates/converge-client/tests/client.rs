@@ -196,11 +196,13 @@ async fn round_trip() {
                     speaker: "maksim".into(),
                     body: "context".into(),
                     sent_at: None,
+                    ordinal: None,
                 },
                 NewMessage {
                     speaker: "claude".into(),
                     body: "the call".into(),
                     sent_at: None,
+                    ordinal: None,
                 },
             ],
         )

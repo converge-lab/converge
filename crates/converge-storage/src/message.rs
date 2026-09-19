@@ -41,14 +41,23 @@ pub struct NewMessage {
     pub body: String,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub sent_at: Option<OffsetDateTime>,
+    /// Where this turn sits in the conversation it came from — the
+    /// index in a transcript. Two sends of the same position are one
+    /// message, and reads order by it, so a turn that arrives late
+    /// still reads in its place. Absent for writers that cannot
+    /// number their turns; those keep arrival order.
+    #[serde(default)]
+    pub ordinal: Option<i32>,
 }
 
 /// Storage operations on messages.
 pub trait Messages {
-    /// Append a batch to a session, in order, atomically; returns the new
-    /// ids. Appends to one session are serialized (concurrent batches
-    /// can't interleave or collide on `seq`). An unknown session is
-    /// `NotFound`.
+    /// Append a batch to a session, in order, atomically; returns their
+    /// ids — including for turns already recorded at the same
+    /// `ordinal`, which are not written twice, so a caller can cite
+    /// what it sent whether or not it got there first. Appends to one
+    /// session are serialized (concurrent batches can't interleave or
+    /// collide on `seq`). An unknown session is `NotFound`.
     fn message_add(
         &self,
         scope: Scope,

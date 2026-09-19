@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where exists (\n                   select 1\n                   from evidence e\n                   join messages a on a.id = e.message_id\n                   where e.decision_id = $1\n                     and a.session_id = m.session_id\n                     and m.seq between a.seq - $2 and a.seq + $2\n               )\n               order by m.session_id, m.seq",
+  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where exists (\n                   select 1\n                   from evidence e\n                   join messages a on a.id = e.message_id\n                   where e.decision_id = $1\n                     and a.session_id = m.session_id\n                     and coalesce(m.ordinal, m.seq)\n                         between coalesce(a.ordinal, a.seq) - $2\n                             and coalesce(a.ordinal, a.seq) + $2\n               )\n               order by m.session_id, coalesce(m.ordinal, m.seq)",
   "describe": {
     "columns": [
       {
@@ -55,5 +55,5 @@
       false
     ]
   },
-  "hash": "63b00411d2212b2365c5e9fabf77e39983efef061cc949310c38ed429166a150"
+  "hash": "d9201d8ad66f895e5df56b460104807fb1308083a7d3e7a4f9add16654128515"
 }

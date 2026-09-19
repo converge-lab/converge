@@ -12,6 +12,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cargo build -q -p converge-cli --manifest-path "$ROOT/Cargo.toml"
 CONVERGE="$ROOT/target/debug/converge"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
+RUN="$(date +%s)-$$"   # sessions are keyed by external id, globally
 
 id() { python3 -c "import json,sys; print(json.load(sys.stdin)['id'])"; }
 api() { m=$1; p=$2; b=${3:-}; if [ -n "$b" ]; then curl -s -X "$m" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$b" "$BASE/api/v1$p"; else curl -s -X "$m" -H "Authorization: Bearer $TOKEN" "$BASE/api/v1$p"; fi; }
@@ -44,18 +45,21 @@ echo "== 4. the drain empties a backlog in order, off the prompt"
 # A transcript the server has never seen: the poll spawns a drain, which
 # sends it oldest first in batches and stops when there is nothing left.
 T="$S/repo/transcript.jsonl"
+SID="drain-$RUN"
 i=1; while [ "$i" -le 120 ]; do
-  printf '{"type":"user","sessionId":"drain-1","cwd":"/repo","timestamp":"2026-09-19T10:00:00Z","message":{"content":"turn %s"}}\n' "$i" >> "$T"
+  cat >> "$T" <<EOF
+{"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-19T10:00:00Z","message":{"content":"turn $i"}}
+EOF
   i=$((i + 1))
 done
-poll() { printf '{"cwd":"%s","session_id":"drain-1","hook_event_name":"UserPromptSubmit","transcript_path":"%s"}' "$S/repo" "$T" | "$CONVERGE" hook poll --harness claude >/dev/null; }
+poll() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"UserPromptSubmit","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$CONVERGE" hook poll --harness claude >/dev/null; }
 recorded() { api GET "/sessions?project=$PID" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
-s=[x for x in items if x['external']=='drain-1']
+s=[x for x in items if x['external']=='$SID']
 print(len(s) and s[0]['id'] or '')"; }
 lift() { python3 -c "
-import json; p='$XDG_STATE_HOME/converge/poll.json'; d=json.load(open(p)); d['drain-1']['at']=0; json.dump(d,open(p,'w'))" 2>/dev/null || true; }
+import json; p='$XDG_STATE_HOME/converge/poll.json'; d=json.load(open(p)); d['$SID']['at']=0; json.dump(d,open(p,'w'))" 2>/dev/null || true; }
 for pass in 1 2 3; do
   poll; sleep 3; lift
   sid=$(recorded)

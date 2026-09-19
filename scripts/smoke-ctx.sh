@@ -16,6 +16,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cargo build -q -p converge-cli --manifest-path "$ROOT/Cargo.toml"
 CONVERGE="$ROOT/target/debug/converge"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
+RUN="$(date +%s)-$$"   # sessions are keyed by external id, globally
 
 id() { python3 -c "import json,sys; print(json.load(sys.stdin)['id'])"; }
 api() { m=$1; p=$2; b=${3:-}; if [ -n "$b" ]; then curl -s -X "$m" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$b" "$BASE/api/v1$p"; else curl -s -X "$m" -H "Authorization: Bearer $TOKEN" "$BASE/api/v1$p"; fi; }
@@ -32,21 +33,25 @@ git -C "$S/repo" init -q
 git -C "$S/repo" add src/lib.rs
 git -C "$S/repo" -c user.email=smoke@converge -c user.name=Smoke -c commit.gpgsign=false commit -qm 'ctx smoke fixture'
 T="$S/repo/transcript.jsonl"
-printf '%s\n' \
- '{"type":"user","sessionId":"ctx-1","cwd":"/repo","timestamp":"2026-09-18T10:00:00Z","message":{"content":"should sessions live in redb?"}}' \
- '{"type":"assistant","sessionId":"ctx-1","timestamp":"2026-09-18T10:00:05Z","message":{"content":[{"type":"text","text":"Postgres — one backend for everything."}]}}' \
- '{"type":"user","sessionId":"ctx-1","timestamp":"2026-09-18T10:00:09Z","message":{"content":"agreed, record it"}}' > "$T"
+SID="ctx-$RUN"
+cat > "$T" <<EOF
+{"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-18T10:00:00Z","message":{"content":"should sessions live in redb?"}}
+{"type":"assistant","sessionId":"$SID","timestamp":"2026-09-18T10:00:05Z","message":{"content":[{"type":"text","text":"Postgres, one backend for everything."}]}}
+{"type":"user","sessionId":"$SID","timestamp":"2026-09-18T10:00:09Z","message":{"content":"agreed, record it"}}
+EOF
 export HOME="$S/home" XDG_CONFIG_HOME="$S/home/.config" XDG_STATE_HOME="$S/state"
 
-ctx() { printf '{"cwd":"%s","session_id":"ctx-1","hook_event_name":"PreToolUse","tool_name":"mcp__converge__decision_add","transcript_path":"%s","tool_input":%s}' "$S/repo" "$T" "$1" | "$CONVERGE" hook ctx --harness claude; }
+ctx() { printf '{"cwd":"%s","session_id":"$SID","hook_event_name":"PreToolUse","tool_name":"mcp__converge__decision_add","transcript_path":"%s","tool_input":%s}' "$S/repo" "$T" "$1" | "$CONVERGE" hook ctx --harness claude; }
 show() { python3 -c "import json,sys; d=json.load(sys.stdin); u=d['hookSpecificOutput']['updatedInput']; print('evidence ids:', len(u.get('evidence',[])), '| code anchors:', len(u.get('code_evidence',[])), '| system:', d.get('systemMessage'))"; }
 
 echo "== 1. first decision_add: the three turns go up and are cited"
 ctx "{\"project_id\":\"$PID\",\"title\":\"Store sessions in Postgres\",\"summary\":\"one backend\"}" | show
-echo "== 2. same transcript again: nothing new to cite"
+echo "== 2. same transcript again: nothing new to send, so the tail is cited"
 ctx "{\"project_id\":\"$PID\",\"title\":\"again\",\"summary\":\"s\"}" | show
 echo "== 3. one more turn, one bare code citation — completed from HEAD, one anchor kept, no note"
-printf '%s\n' '{"type":"assistant","sessionId":"ctx-1","timestamp":"2026-09-18T10:01:00Z","message":{"content":[{"type":"text","text":"Recording it now."}]}}' >> "$T"
+cat >> "$T" <<EOF
+{"type":"assistant","sessionId":"$SID","timestamp":"2026-09-18T10:01:00Z","message":{"content":[{"type":"text","text":"Recording it now."}]}}
+EOF
 ctx "{\"project_id\":\"$PID\",\"title\":\"t\",\"summary\":\"s\",\"code_evidence\":[{\"path\":\"src/lib.rs\",\"lines\":[1,2]}]}" | show
 echo "== 4. the server holds the session"
 api GET "/sessions?project=$PID" | python3 -c "import json,sys; d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d; print('sessions:', len(items), '| title:', items[0]['title'] if items else None)"

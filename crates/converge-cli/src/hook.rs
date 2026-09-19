@@ -894,11 +894,15 @@ async fn try_sync(kind: Kind) -> Result<()> {
 /// Put the conversation on the server and answer with the ids a
 /// decision can cite, plus how many turns are still waiting.
 ///
-/// One writer at a time: the same lock a background drain takes, waited
-/// on briefly, because a pass that is already running will release it
-/// between batches. When the wait runs out, nothing is sent and the
-/// newest turns already recorded are cited instead, so a decision is
-/// never made to cite something that does not exist. Turns always go
+/// A citation has to name messages that exist, so this never hands back
+/// nothing while the session holds anything at all: it sends what it
+/// can and then cites, falling back to the newest turns already
+/// recorded. Sending is bounded twice over — one batch, and a slice of
+/// the hook's budget — because the per-prompt drain is what empties a
+/// backlog; this only has to cover the turns since the last prompt.
+///
+/// One writer at a time: the same lock a drain takes, waited on
+/// briefly, since a pass releases it between batches. Turns always go
 /// oldest first, so the stored conversation reads in order.
 async fn record_conversation(
     kind: Kind,
@@ -909,9 +913,36 @@ async fn record_conversation(
         return Ok((Vec::new(), 0));
     };
     if let Some(lock) = crate::drain::Lock::take_within(&at.key(), LOCK_WAIT) {
-        return crate::drain::pass(kind, &payload.cwd, at, PUSH_CAP, lock).await;
+        let sent = tokio::time::timeout(
+            PUSH_BUDGET,
+            crate::drain::pass(kind, &payload.cwd, at, PUSH_CAP, lock),
+        )
+        .await;
+        // A decision cites the exchange that produced it, which is the
+        // last few turns of the session — not only whichever of them
+        // happened to be unsent. Fresh ids are enough on their own only
+        // when there are enough of them; otherwise the read below picks
+        // up what was just sent along with what was already there.
+        if let Ok(Ok((ids, behind))) = sent
+            && ids.len() >= CITED_TURNS
+        {
+            return Ok((ids, behind));
+        }
     }
-    // A drain holds it: cite what is already there rather than nothing.
+    cite_recorded(kind, payload, project).await
+}
+
+/// The newest turns the server already has for this session, and how
+/// many are still unsent. Used when there was nothing new to send, when
+/// sending ran long, and when a drain holds the lock.
+async fn cite_recorded(
+    kind: Kind,
+    payload: &Payload,
+    project: ProjectId,
+) -> Result<(Vec<MessageId>, usize)> {
+    let Some(at) = payload.transcript.as_ref() else {
+        return Ok((Vec::new(), 0));
+    };
     let harness = kind.harness();
     let parsed = harness.transcript(at)?;
     let Some(external) = parsed.session_id.clone() else {
@@ -958,6 +989,10 @@ const PUSH_CAP: usize = 50;
 /// How long the hook waits for a running drain to release the lock. A
 /// drain releases between batches, so this is usually not spent.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
+/// The slice of the hook's budget sending may take. What is left over
+/// is what reads back the citation, so a slow send costs relevance,
+/// never the decision.
+const PUSH_BUDGET: std::time::Duration = std::time::Duration::from_millis(2200);
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();

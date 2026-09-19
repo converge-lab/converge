@@ -19,6 +19,7 @@
 mod backup;
 mod config;
 mod device;
+mod drain;
 mod evidence;
 mod harness;
 mod hook;
@@ -98,6 +99,19 @@ enum HookCmd {
     Sync(Caller),
     /// Per prompt: hand the session the signals raised since its last one.
     Poll(Caller),
+    /// Internal: send what the server does not have of a transcript,
+    /// oldest first. The poll hook spawns this; it is not run by hand.
+    #[command(hide = true)]
+    Drain {
+        #[command(flatten)]
+        caller: Caller,
+        /// The working tree whose marker names the project.
+        #[arg(long)]
+        cwd: std::path::PathBuf,
+        /// The transcript: a path, or opencode's session id.
+        #[arg(long)]
+        transcript: String,
+    },
 }
 
 /// Which agent tool is calling — it decides how the payload is read and
@@ -143,5 +157,10 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Hook(HookCmd::Mark(c)) => hook::mark(c.kind),
         Cmd::Hook(HookCmd::Sync(c)) => hook::sync(c.kind).await,
         Cmd::Hook(HookCmd::Poll(c)) => hook::poll(c.kind).await,
+        Cmd::Hook(HookCmd::Drain {
+            caller,
+            cwd,
+            transcript,
+        }) => drain::run(caller.kind, &cwd, &transcript).await,
     }
 }

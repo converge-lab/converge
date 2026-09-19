@@ -23,6 +23,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 /// One conversation turn, ready to become a `NewMessage`.
+#[derive(Clone)]
 pub struct Turn {
     pub speaker: String,
     pub body: String,

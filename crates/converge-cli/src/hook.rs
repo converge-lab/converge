@@ -690,7 +690,7 @@ pub async fn poll(kind: Kind) -> Result<()> {
     };
     // The ledger is keyed by session: a harness that sends none cannot
     // be polled for without repeating itself.
-    let Some(session) = payload.session.filter(|s| !s.trim().is_empty()) else {
+    let Some(session) = payload.session.clone().filter(|s| !s.trim().is_empty()) else {
         return Ok(());
     };
     let now = crate::poll::now();
@@ -732,6 +732,11 @@ pub async fn poll(kind: Kind) -> Result<()> {
     };
     stamps.record(&session, now, failed, shown.len());
     let _ = stamps.save();
+    // The same gate that paces the poll paces the evidence backlog: a
+    // bounded, oldest-first pass in a process of its own, so a decision
+    // recorded later in this session finds its conversation already on
+    // the server and has almost nothing left to send.
+    spawn_drain(kind, &payload);
     if shown.is_empty() {
         return Ok(());
     }
@@ -747,6 +752,45 @@ pub async fn poll(kind: Kind) -> Result<()> {
         },
     );
     Ok(())
+}
+
+/// Start a drain for this session's transcript and return at once: the
+/// prompt waits for nothing, and a drain already running keeps its
+/// lock. Nothing here is reported — a backlog that cannot be sent is
+/// the session-start block's problem, not this turn's.
+fn spawn_drain(kind: Kind, payload: &Payload) {
+    let Some(transcript) = payload.transcript.as_ref() else {
+        return;
+    };
+    if crate::drain::locked(&transcript.key()) {
+        return;
+    }
+    let named = match transcript {
+        crate::harness::Transcript::File(path) => path.to_string_lossy().into_owned(),
+        crate::harness::Transcript::Session(id) => id.clone(),
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    use std::process::Stdio;
+    let mut drain = Command::new(exe);
+    drain
+        .args(["hook", "drain", "--harness", kind.flag()])
+        .arg("--cwd")
+        .arg(&payload.cwd)
+        .arg("--transcript")
+        .arg(named)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Its own process group: the drain outlives the prompt that
+        // started it, the way the self-update does.
+        drain.process_group(0);
+    }
+    let _ = drain.spawn();
 }
 
 /// The per-prompt block: what arrived, framed so the model reads it as
@@ -810,7 +854,7 @@ pub async fn sync(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     // Best effort throughout: a sync problem must never surface as a
     // session failure. The quiet paths just return.
-    if let Err(e) = try_sync(harness).await {
+    if let Err(e) = try_sync(kind).await {
         respond(
             harness,
             Response::Notice {
@@ -821,23 +865,24 @@ pub async fn sync(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-async fn try_sync(harness: &dyn Harness) -> Result<()> {
+async fn try_sync(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
     let payload = harness.parse(&raw());
     // Only bound repos sync; unbound and disabled stay quiet.
     let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
-    let (ids, skipped) = push_transcript(harness, &payload, project).await?;
+    let (ids, behind) = record_conversation(kind, &payload, project).await?;
     let added = ids.len();
     if added > 0 {
         respond(
             harness,
             Response::Notice {
-                system: match skipped {
+                system: match behind {
                     0 => format!("Converge: synced {added} message(s) to evidence ✓"),
                     n => format!(
                         "Converge: synced {added} message(s) to evidence ✓ \
-                         ({n} older turn(s) passed over)"
+                         ({n} still to send)"
                     ),
                 },
             },
@@ -846,49 +891,33 @@ async fn try_sync(harness: &dyn Harness) -> Result<()> {
     Ok(())
 }
 
-/// Push what the transcript holds that the server does not yet — at
-/// most [`PUSH_CAP`] turns, newest — and return their ids with how many
-/// older ones were passed over. Watermarked, so calling it twice sends nothing
-/// twice: the session-end sync and a `decision_add` in mid-session share
-/// it, and what the second returns is exactly the turns since the last
-/// push — the conversation that led to the decision. Empty when the
-/// harness records nothing readable, or the content has no session id
-/// to key on.
-async fn push_transcript(
-    harness: &dyn Harness,
+/// Put the conversation on the server and answer with the ids a
+/// decision can cite, plus how many turns are still waiting.
+///
+/// One writer at a time: the same lock a background drain takes, waited
+/// on briefly, because a pass that is already running will release it
+/// between batches. When the wait runs out, nothing is sent and the
+/// newest turns already recorded are cited instead, so a decision is
+/// never made to cite something that does not exist. Turns always go
+/// oldest first, so the stored conversation reads in order.
+async fn record_conversation(
+    kind: Kind,
     payload: &Payload,
     project: ProjectId,
 ) -> Result<(Vec<MessageId>, usize)> {
-    let Some(transcript) = payload.transcript.as_ref() else {
+    let Some(at) = payload.transcript.as_ref() else {
         return Ok((Vec::new(), 0));
     };
-    let parsed = harness.transcript(transcript)?;
+    if let Some(lock) = crate::drain::Lock::take_within(&at.key(), LOCK_WAIT) {
+        return crate::drain::pass(kind, &payload.cwd, at, PUSH_CAP, lock).await;
+    }
+    // A drain holds it: cite what is already there rather than nothing.
+    let harness = kind.harness();
+    let parsed = harness.transcript(at)?;
     let Some(external) = parsed.session_id.clone() else {
         return Ok((Vec::new(), 0));
     };
-
-    let mut marks = crate::watermark::Watermarks::load()?;
-    let key = transcript.key();
-    // What has not been pushed yet — by message id where the harness has
-    // them (a transcript edited in place still syncs right), by count
-    // otherwise, where a shrunk transcript sends nothing rather than
-    // duplicates.
-    let fresh = marks.pending(&key, &parsed.turns);
-    if fresh.is_empty() {
-        marks.done(&key, &parsed.turns);
-        marks.save()?;
-        return Ok((Vec::new(), 0));
-    }
-    // A backlog is bounded here rather than at the budget: the whole of
-    // it would not arrive in time, and a half-sent push is worse than a
-    // short one. The watermark still moves past what was passed over,
-    // so the next decision is not made to pay for it again.
-    let skipped = fresh.len().saturating_sub(PUSH_CAP);
-    let fresh = &fresh[skipped..];
-
-    let config = Config::load()?;
-    let client = config.client()?;
-
+    let client = Config::load()?.client()?;
     let session = client
         .session_ensure(&converge_client::NewSession {
             project_id: project,
@@ -897,19 +926,21 @@ async fn push_transcript(
             title: crate::transcript::title(&parsed.turns, &format!("{} session", harness.label())),
         })
         .await?;
-    let messages: Vec<_> = fresh
-        .iter()
-        .map(|t| converge_client::NewMessage {
-            speaker: t.speaker.clone(),
-            body: t.body.clone(),
-            sent_at: t.sent_at,
-        })
-        .collect();
-    let ids = client.message_add(session, &messages).await?;
-
-    marks.done(&key, &parsed.turns);
-    marks.save()?;
-    Ok((ids, skipped))
+    let recorded = client
+        .message_list(
+            session,
+            &Pagination {
+                limit: None,
+                cursor: None,
+            },
+        )
+        .await?;
+    let tail = recorded.items.len().saturating_sub(CITED_TURNS);
+    let ids: Vec<MessageId> = recorded.items[tail..].iter().map(|m| m.id).collect();
+    let behind = crate::watermark::Watermarks::load()?
+        .pending(&at.key(), &parsed.turns)
+        .len();
+    Ok((ids, behind))
 }
 
 // ─── pre-tool: context collector ──────────────────────────────────────────
@@ -920,12 +951,13 @@ async fn push_transcript(
 const CTX_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
 /// How many of the turns since the last push a decision cites.
 const CITED_TURNS: usize = 10;
-/// How many turns one push carries. A session that has recorded
-/// nothing for hours has a backlog, and sending all of it inside a
-/// hook's budget fails — which used to mean a decision arrived with no
-/// evidence at all. The newest turns are the ones a decision is about,
-/// so those go and the rest is passed over, out loud.
+/// How many turns one hook-driven pass carries. The per-prompt drain
+/// keeps the backlog near zero, so this is the catch-up case: send a
+/// batch, cite it, and let the drain take the rest.
 const PUSH_CAP: usize = 50;
+/// How long the hook waits for a running drain to release the lock. A
+/// drain releases between batches, so this is usually not spent.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
@@ -958,13 +990,15 @@ pub async fn ctx(kind: Kind) -> Result<()> {
         .is_some_and(|tool| tool.ends_with("decision_add"))
     {
         if let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) {
-            match tokio::time::timeout(CTX_BUDGET, push_transcript(harness, &payload, project))
+            match tokio::time::timeout(CTX_BUDGET, record_conversation(kind, &payload, project))
                 .await
             {
-                Ok(Ok((ids, skipped))) => {
+                Ok(Ok((ids, behind))) => {
                     cite(&mut merged, &ids);
-                    if skipped > 0 {
-                        notes.push(format!("{skipped} older turn(s) not recorded"));
+                    if behind > 0 {
+                        notes.push(format!(
+                            "evidence lags by {behind} turn(s), still being recorded"
+                        ));
                     }
                 }
                 Ok(Err(e)) => notes.push(format!("evidence not recorded — {e}")),

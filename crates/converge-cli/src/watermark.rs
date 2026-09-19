@@ -114,6 +114,12 @@ fn path() -> Option<PathBuf> {
     Some(state_dir()?.join("sync.json"))
 }
 
+/// Tests that point the state directory at a temporary one mutate a
+/// process-wide environment variable, so they take turns rather than
+/// reading each other's half-set world.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Where this machine keeps what it has done and seen:
 /// `$XDG_STATE_HOME/converge` (default `~/.local/state/converge`).
 /// State, not cache — nothing here is safe to delete without a

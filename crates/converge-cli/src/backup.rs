@@ -152,7 +152,7 @@ pub fn restore(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn root() -> Option<PathBuf> {
-    Some(crate::watermark::state_dir()?.join("backups"))
+    Some(crate::state::dir()?.join("backups"))
 }
 
 /// Keep the newest `keep` occasions; the directory names sort by time.

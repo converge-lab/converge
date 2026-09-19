@@ -121,18 +121,6 @@ pub enum Transcript {
     Session(String),
 }
 
-impl Transcript {
-    /// The sync watermark key. Stable across runs — it is what decides
-    /// which turns were already sent. Prefixed per variant so a session
-    /// id can never collide with a path.
-    pub fn key(&self) -> String {
-        match self {
-            Transcript::File(path) => path.to_string_lossy().into_owned(),
-            Transcript::Session(id) => format!("session:{id}"),
-        }
-    }
-}
-
 /// What an entrypoint decided to say back, before any harness dialect.
 pub enum Response {
     /// Session start: the context block, plus the one line a human sees.

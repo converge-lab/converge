@@ -105,7 +105,7 @@ impl Stamps {
 }
 
 fn path() -> Option<PathBuf> {
-    Some(crate::watermark::state_dir()?.join("poll.json"))
+    Some(crate::state::dir()?.join("poll.json"))
 }
 
 pub fn now() -> u64 {

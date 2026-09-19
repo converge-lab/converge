@@ -737,7 +737,6 @@ pub async fn poll(kind: Kind) -> Result<()> {
     // bounded, oldest-first pass in a process of its own, so a decision
     // recorded later in this session finds its conversation already on
     // the server and has almost nothing left to send.
-    spawn_drain(kind, &payload);
     if shown.is_empty() {
         return Ok(());
     }
@@ -753,45 +752,6 @@ pub async fn poll(kind: Kind) -> Result<()> {
         },
     );
     Ok(())
-}
-
-/// Start a drain for this session's transcript and return at once: the
-/// prompt waits for nothing, and a drain already running keeps its
-/// lock. Nothing here is reported — a backlog that cannot be sent is
-/// the session-start block's problem, not this turn's.
-fn spawn_drain(kind: Kind, payload: &Payload) {
-    let Some(transcript) = payload.transcript.as_ref() else {
-        return;
-    };
-    if crate::drain::locked(&transcript.key()) {
-        return;
-    }
-    let named = match transcript {
-        crate::harness::Transcript::File(path) => path.to_string_lossy().into_owned(),
-        crate::harness::Transcript::Session(id) => id.clone(),
-    };
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    use std::process::Stdio;
-    let mut drain = Command::new(exe);
-    drain
-        .args(["hook", "drain", "--harness", kind.flag()])
-        .arg("--cwd")
-        .arg(&payload.cwd)
-        .arg("--transcript")
-        .arg(named)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // Its own process group: the drain outlives the prompt that
-        // started it, the way the self-update does.
-        drain.process_group(0);
-    }
-    let _ = drain.spawn();
 }
 
 /// The per-prompt block: what arrived, framed so the model reads it as
@@ -876,23 +836,18 @@ async fn try_sync(kind: Kind) -> Result<()> {
     let Some(at) = payload.transcript.as_ref() else {
         return Ok(());
     };
-    // Whatever the per-prompt drain never reached. One writer: if a
-    // drain is mid-pass it is already doing this, so stand down.
-    let Some(lock) = crate::drain::Lock::take_within(&at.key(), LOCK_WAIT) else {
-        return Ok(());
-    };
-    let (ids, behind) = crate::drain::pass(kind, &payload.cwd, at, DRAIN_ALL, lock).await?;
-    let added = ids.len();
+    // The whole conversation, once, at the end: nothing during the
+    // session waits on it, and a project that keeps no archive answers
+    // for itself.
+    let crate::archive::Sent { sent: added, left } =
+        crate::archive::pass(kind, &payload.cwd, at, ARCHIVE_CAP).await?;
     if added > 0 {
         respond(
             harness,
             Response::Notice {
-                system: match behind {
-                    0 => format!("Converge: synced {added} message(s) to evidence ✓"),
-                    n => format!(
-                        "Converge: synced {added} message(s) to evidence ✓ \
-                         ({n} still to send)"
-                    ),
+                system: match left {
+                    0 => format!("Converge: recorded {added} message(s) ✓"),
+                    n => format!("Converge: recorded {added} message(s) ✓ ({n} still to send)"),
                 },
             },
         );
@@ -943,11 +898,10 @@ fn exchange(kind: Kind, payload: &Payload) -> Option<Exchange> {
 
 /// How many of the turns since the last push a decision cites.
 const CITED_TURNS: usize = 10;
-/// How long the hook waits for a running drain to release the lock. A
-/// drain releases between batches, so this is usually not spent.
-const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(900);
-/// Session end sends whatever the per-prompt drain never reached.
-const DRAIN_ALL: usize = 5_000;
+/// Turns one session end will record. A conversation longer than this
+/// keeps the rest for the next end — the archive is nobody's critical
+/// path.
+const ARCHIVE_CAP: usize = 5_000;
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
@@ -1363,7 +1317,6 @@ mod tests {
                         speaker: "user".into(),
                         body: format!("turn {at}"),
                         sent_at: None,
-                        id: None,
                     },
                 )
             })

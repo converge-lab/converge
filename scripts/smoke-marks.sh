@@ -41,39 +41,43 @@ start s-2 | show
 echo "== 3. one more decision, then a third session: only that one is new"
 decision "third decision"
 start s-3 | show
-echo "== 4. the drain empties a backlog in order, off the prompt"
-# A transcript the server has never seen: the poll spawns a drain, which
-# sends it oldest first in batches and stops when there is nothing left.
+echo "== 4. session end records the conversation, in order"
+# A transcript the server has never seen: the session-end sync sends it
+# oldest first and the server keeps one row per position.
 T="$S/repo/transcript.jsonl"
-SID="drain-$RUN"
+SID="archive-$RUN"
 i=1; while [ "$i" -le 120 ]; do
   cat >> "$T" <<EOF
-{"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-19T10:00:00Z","message":{"content":"turn $i"}}
+{"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-20T10:00:00Z","message":{"content":"turn $i"}}
 EOF
   i=$((i + 1))
 done
-poll() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"UserPromptSubmit","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$CONVERGE" hook poll --harness claude >/dev/null; }
+sync_now() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$CONVERGE" hook sync --harness claude; }
 recorded() { api GET "/sessions?project=$PID" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
 s=[x for x in items if x['external']=='$SID']
 print(len(s) and s[0]['id'] or '')"; }
-lift() { python3 -c "
-import json; p='$XDG_STATE_HOME/converge/poll.json'; d=json.load(open(p)); d['$SID']['at']=0; json.dump(d,open(p,'w'))" 2>/dev/null || true; }
-for pass in 1 2 3; do
-  poll; sleep 3; lift
-  sid=$(recorded)
-  if [ -n "$sid" ]; then
-    n=$(api GET "/sessions/$sid/messages?limit=500" | python3 -c "
+count() { sid=$(recorded); [ -z "$sid" ] && { echo "  session not opened"; return; }
+  api GET "/sessions/$sid/messages?limit=500" | python3 -c "
 import json,sys; d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
-print(len(items), '|', (items[0]['body'][:8] if items else ''), '→', (items[-1]['body'][:8] if items else ''))")
-    echo "  after pass $pass: $n"
-  else
-    echo "  after pass $pass: session not opened yet"
-  fi
-done
+print(' ', len(items), 'turn(s) |', (items[0]['body'] if items else ''), '→', (items[-1]['body'] if items else ''))"; }
+sync_now > /dev/null; count
+echo "== 5. the same transcript again: nothing is recorded twice"
+sync_now > /dev/null; count
 
-echo "== 5. the unseen filter agrees with the block (after three reads, nothing)"
+echo "== 6. archiving off: the project keeps only what a decision cites"
+api PATCH "/projects/$PID" '[{"set_archive_transcripts":false}]' > /dev/null
+cat >> "$T" <<EOF
+{"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-20T10:05:00Z","message":{"content":"turn 121"}}
+EOF
+sync_now | python3 -c "
+import json,sys
+raw=sys.stdin.read().strip()
+print('  the hook says:', (json.loads(raw).get('systemMessage') if raw else None) or 'nothing')"
+count
+
+echo "== 7. the unseen filter agrees with the block (after three reads, nothing)"
 api GET "/decisions?unseen=true" | python3 -c "
 import json,sys; d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
 print('  unseen over REST:', [i['title'] for i in items])"

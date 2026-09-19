@@ -760,6 +760,21 @@ pub fn project_decisions(pid: &str) -> Vec<Rc<Dec>> {
         .collect()
 }
 
+/// Drop a decision's unread mark here, now that the server holds its
+/// receipt: the badge should fall the moment it is opened, not at the
+/// next boot.
+pub fn mark_read_local(store: AppStore, id: &str) {
+    let Some(cur) = store.dataset().get_untracked() else {
+        return;
+    };
+    if !cur.unread.iter().any(|x| x == id) {
+        return;
+    }
+    let mut ds = (*cur).clone();
+    ds.unread.retain(|x| x != id);
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
 pub fn is_unread(id: &str) -> bool {
     ds().unread.iter().any(|x| x == id)
 }

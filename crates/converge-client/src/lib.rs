@@ -51,6 +51,18 @@ struct Created<Id> {
     id: Id,
 }
 
+/// What `session_ensure` answers: the session, where a sender resumes,
+/// and whether this project keeps whole conversations.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Opened {
+    pub id: SessionId,
+    /// The first position the server holds no turn for. Send from here
+    /// and nothing is sent twice, whatever else has been recording.
+    pub next_ordinal: i32,
+    /// False when the project records only the turns a decision cites.
+    pub archive_transcripts: bool,
+}
+
 #[derive(Serialize)]
 struct Login<'a> {
     token: &'a str,
@@ -281,8 +293,20 @@ impl Client {
     // Sessions + message streams (evidence)
 
     /// Create-or-refresh by the `(kind, external)` natural key.
-    pub async fn session_ensure(&self, new: &NewSession) -> Result<SessionId, StoreError> {
-        self.create("sessions", new).await
+    /// Create-or-refresh by `(kind, external)`, and answer with what a
+    /// sender needs to carry on: the id, where to resume, and whether
+    /// the project keeps whole conversations at all.
+    pub async fn session_ensure(&self, new: &NewSession) -> Result<Opened, StoreError> {
+        let response = self
+            .authed(self.http.post(self.url("sessions")))
+            .json(new)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::CREATED => response.json::<Opened>().await.map_err(transport),
+            _ => Err(fail(response).await),
+        }
     }
 
     pub async fn session_get(&self, id: SessionId) -> Result<Option<Session>, StoreError> {

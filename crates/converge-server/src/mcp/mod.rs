@@ -663,7 +663,18 @@ impl<S: Storage + 'static> Memory<S> {
             )
             .await
             .map_err(map_err)?;
-        json_result(&serde_json::json!({ "session_id": id }))
+        let scope = self.scope(&context)?;
+        let next = self
+            .store
+            .message_next_ordinal(scope, id)
+            .await
+            .map_err(map_err)?;
+        let archive = archives(&self.store, scope, project_id).await?;
+        json_result(&serde_json::json!({
+            "session_id": id,
+            "next_ordinal": next,
+            "archive_transcripts": archive,
+        }))
     }
 
     #[tool(description = "Append messages to a session's stream, in order — \
@@ -689,9 +700,24 @@ impl<S: Storage + 'static> Memory<S> {
                 ordinal: m.ordinal,
             })
             .collect();
+        let scope = self.scope(&context)?;
+        let project = self
+            .store
+            .session_get(scope, session)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| McpError::invalid_params("unknown session_id", None))?
+            .project_id;
+        if !archives(&self.store, scope, project).await? {
+            return Err(McpError::invalid_params(
+                "this project records only the turns a decision cites, not whole \
+                 conversations — send them as `evidence_turns` on `decision_add`",
+                None,
+            ));
+        }
         let ids = self
             .store
-            .message_add(self.scope(&context)?, session, messages)
+            .message_add(scope, session, messages)
             .await
             .map_err(map_err)?;
         crate::metrics::evidence_messages("mcp", ids.len());
@@ -1176,6 +1202,21 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
 }
 
 // ---- shared plumbing -------------------------------------------------------
+
+/// Does this project keep whole conversations, or only the turns a
+/// decision cites? A project that has gone missing under the caller
+/// keeps nothing.
+async fn archives<S: Storage>(
+    store: &S,
+    scope: Scope,
+    project: ProjectId,
+) -> Result<bool, McpError> {
+    Ok(store
+        .project_get(scope, project)
+        .await
+        .map_err(map_err)?
+        .is_some_and(|p| p.archive_transcripts))
+}
 
 fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let text = serde_json::to_string_pretty(value)

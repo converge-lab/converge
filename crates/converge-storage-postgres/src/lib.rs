@@ -725,7 +725,7 @@ impl Projects for PgStorage {
     ) -> Result<Option<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, repository, created_at
+            r#"select id, group_id, name, description, repository, archive_transcripts, created_at
                from projects
                where id = $1
                  and ($2::uuid is null or group_visible(group_id, $2))"#,
@@ -746,7 +746,7 @@ impl Projects for PgStorage {
     ) -> Result<Vec<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, repository, created_at
+            r#"select id, group_id, name, description, repository, archive_transcripts, created_at
                from projects
                where ($1::uuid is null or group_id = $1)
                  and ($3::uuid is null or id < $3)
@@ -800,6 +800,15 @@ impl Projects for PgStorage {
                         "update projects set description = $2 where id = $1",
                         uuid,
                         description,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                }
+                ProjectEdit::SetArchiveTranscripts(keep) => {
+                    sqlx::query!(
+                        "update projects set archive_transcripts = $2 where id = $1",
+                        uuid,
+                        keep,
                     )
                     .execute(&mut *tx)
                     .await
@@ -1046,6 +1055,29 @@ impl Messages for PgStorage {
         }
         tx.commit().await.map_err(db_err)?;
         Ok(ids)
+    }
+
+    async fn message_next_ordinal(
+        &self,
+        scope: Scope,
+        session: SessionId,
+    ) -> Result<i32, StoreError> {
+        let session = Uuid::from(session.ulid());
+        let found = sqlx::query_scalar!(
+            r#"select coalesce(max(m.ordinal) + 1, count(m.*))::int as "next!"
+               from sessions s
+               join projects p on p.id = s.project_id
+               left join messages m on m.session_id = s.id
+               where s.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))
+               group by s.id"#,
+            session,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        found.ok_or(StoreError::NotFound)
     }
 
     async fn message_list(

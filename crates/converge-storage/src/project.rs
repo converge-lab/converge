@@ -90,6 +90,12 @@ pub struct Project {
     /// the remote the hook sends, and editable afterwards.
     #[serde(default)]
     pub repository: Option<Repository>,
+    /// May whole conversations be recorded here, or only the turns a
+    /// decision cites? Evidence is never optional; the rest of the
+    /// transcript is, and it is a project-wide call because the
+    /// conversations are the team's, not one developer's.
+    #[serde(default = "yes")]
+    pub archive_transcripts: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -111,6 +117,13 @@ pub enum ProjectEdit {
     SetName(String),
     SetDescription(Option<String>),
     SetRepository(Option<Repository>),
+    /// Turn whole-transcript archiving on or off for this project.
+    SetArchiveTranscripts(bool),
+}
+
+/// A project archives unless it is told not to.
+fn yes() -> bool {
+    true
 }
 
 #[cfg(test)]

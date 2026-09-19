@@ -168,7 +168,7 @@ async fn round_trip() {
     // Evidence: ensure a session (twice — the natural key converges),
     // stream messages, anchor a decision, read the derived excerpt back.
     use converge_client::{NewMessage, NewSession, SessionFilter, SessionKind};
-    let sid = api
+    let opened = api
         .session_ensure(&NewSession {
             project_id: project,
             kind: SessionKind::Transcript,
@@ -177,17 +177,21 @@ async fn round_trip() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        api.session_ensure(&NewSession {
+    let sid = opened.id;
+    // A fresh session has nothing, so a sender resumes at the first
+    // turn; the project archives until someone says otherwise.
+    assert_eq!(opened.next_ordinal, 0);
+    assert!(opened.archive_transcripts);
+    let again = api
+        .session_ensure(&NewSession {
             project_id: project,
             kind: SessionKind::Transcript,
             external: "sess-1".into(),
             title: "design chat, day 2".into(),
         })
         .await
-        .unwrap(),
-        sid
-    );
+        .unwrap();
+    assert_eq!(again.id, sid);
     let messages = api
         .message_add(
             sid,

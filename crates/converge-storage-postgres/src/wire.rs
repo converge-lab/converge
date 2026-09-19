@@ -312,6 +312,7 @@ pub(crate) struct ProjectRow {
     pub name: String,
     pub description: Option<String>,
     pub repository: Option<serde_json::Value>,
+    pub archive_transcripts: bool,
     pub created_at: OffsetDateTime,
 }
 
@@ -325,6 +326,7 @@ impl From<ProjectRow> for Project {
             // Written by this crate from the enum, so it always parses;
             // an unreadable value reads as unset rather than failing.
             repository: r.repository.and_then(|v| serde_json::from_value(v).ok()),
+            archive_transcripts: r.archive_transcripts,
             created_at: r.created_at,
         }
     }

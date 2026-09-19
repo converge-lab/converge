@@ -138,3 +138,104 @@ async fn evidence_over_rest() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
     }
 }
+
+/// A project that keeps only what its decisions cite: the archive door
+/// is shut, the evidence door is not.
+#[tokio::test]
+async fn archive_off_keeps_only_the_turns_a_decision_cites() {
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let (_, project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group["id"], "name": "p", "description": null })),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap().to_owned();
+
+    // A project archives until its owner says otherwise.
+    let (_, fresh) = send(&app, "GET", &format!("/api/v1/projects/{project}"), None).await;
+    assert_eq!(fresh["archive_transcripts"], true, "{fresh}");
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/projects/{project}"),
+        Some(json!([{ "set_archive_transcripts": false }])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // The answer to `ensure` carries the policy, so a client learns it
+    // in the call it was making anyway.
+    let (_, opened) = send(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        Some(json!({
+            "project_id": project, "kind": "transcript",
+            "external": "quiet-1", "title": "quiet",
+        })),
+    )
+    .await;
+    assert_eq!(opened["archive_transcripts"], false, "{opened}");
+    assert_eq!(opened["next_ordinal"], 0);
+    let session = opened["id"].as_str().unwrap().to_owned();
+
+    // A plain append is refused, and the refusal says what to do.
+    let (status, refused) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/sessions/{session}/messages"),
+        Some(json!([{ "speaker": "maksim", "body": "a whole conversation" }])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    // The turns a decision cites still land, and a decision still has
+    // its evidence.
+    let (status, decision) = send(
+        &app,
+        "POST",
+        "/mcp",
+        Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "decision_add", "arguments": {
+                "project_id": project, "title": "t", "summary": "s",
+                "conversation": { "external": "quiet-1", "title": "quiet" },
+                "evidence_turns": [{ "speaker": "maksim", "body": "this line decided it", "ordinal": 7 }],
+            }
+        }})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decision}");
+    let recorded: serde_json::Value =
+        serde_json::from_str(decision["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(recorded["decision_id"].is_string(), "{decision}");
+    let (_, stream) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/sessions/{session}/messages"),
+        None,
+    )
+    .await;
+    assert_eq!(stream["items"].as_array().unwrap().len(), 1, "{stream}");
+
+    // And the resume point moves with what was cited.
+    let (_, opened) = send(
+        &app,
+        "POST",
+        "/api/v1/sessions",
+        Some(json!({
+            "project_id": project, "kind": "transcript",
+            "external": "quiet-1", "title": "quiet",
+        })),
+    )
+    .await;
+    assert_eq!(opened["next_ordinal"], 8);
+}

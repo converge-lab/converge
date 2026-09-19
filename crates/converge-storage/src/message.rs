@@ -67,6 +67,18 @@ pub trait Messages {
         new: Vec<NewMessage>,
     ) -> impl Future<Output = Result<Vec<MessageId>, StoreError>> + Send;
 
+    /// Where a sender resumes: the first position this session holds no
+    /// turn for. The highest `ordinal` plus one, or — for a session
+    /// recorded before turns carried a position — how many turns it
+    /// holds, which for a CLI-written session counted the same way. So
+    /// a client needs no durable record of what it has sent. An unknown
+    /// session is `NotFound`.
+    fn message_next_ordinal(
+        &self,
+        scope: Scope,
+        session: SessionId,
+    ) -> impl Future<Output = Result<i32, StoreError>> + Send;
+
     /// A session's stream in conversation order — **oldest first**, the
     /// one list in the system that reads forward. The cursor returns
     /// messages strictly *after* it.

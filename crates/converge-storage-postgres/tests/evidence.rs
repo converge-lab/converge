@@ -519,6 +519,45 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         vec!["m0", "m1", "m2", "m3", "m3 rewritten", "loose"]
     );
 
+    // Where a sender resumes: the highest position plus one, so no
+    // client has to remember what it sent.
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, sid)
+            .await
+            .unwrap(),
+        4
+    );
+
+    // A session recorded before turns carried positions answers with
+    // how many it holds, which for a CLI-written session counted the
+    // same way.
+    let legacy = store
+        .session_ensure(Scope::System, session(project_id, "legacy", "legacy"))
+        .await
+        .unwrap();
+    store
+        .message_add(
+            Scope::System,
+            legacy,
+            vec![message("a", "one"), message("a", "two")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, legacy)
+            .await
+            .unwrap(),
+        2
+    );
+    assert!(matches!(
+        store
+            .message_next_ordinal(Scope::System, SessionId::new())
+            .await,
+        Err(StoreError::NotFound)
+    ));
+
     // And the cursor walks that same order.
     let rest = store
         .message_list(

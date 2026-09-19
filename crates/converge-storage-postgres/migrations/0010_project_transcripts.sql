@@ -1,0 +1,13 @@
+-- May whole conversations be recorded here, or only the turns a
+-- decision cites?
+--
+-- Evidence is never optional: the exchange a decision quotes is part of
+-- the decision. The archive is — it is the rest of the transcript, kept
+-- for analysis nobody is doing yet, and on a shared project whether it
+-- is kept is the team's call, not each developer's. Off, the server
+-- refuses a plain append and the CLI stops sending; the turns that come
+-- with a decision are still recorded.
+--
+-- On by default: the projects that exist today are already archiving,
+-- and stopping quietly would lose conversations their owners expect.
+alter table projects add column archive_transcripts boolean not null default true;

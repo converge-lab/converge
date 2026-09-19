@@ -2008,6 +2008,7 @@ impl Signals for PgStorage {
         scope: Scope,
         session: &str,
         harness: Option<&str>,
+        project: Option<ProjectId>,
         limit: u32,
     ) -> Result<Vec<Signal>, StoreError> {
         let Some(user) = viewer(scope) else {
@@ -2042,7 +2043,10 @@ impl Signals for PgStorage {
             return Ok(Vec::new());
         }
         // Same visibility predicate as every other signal read: the
-        // source decision's group, seen by this user.
+        // source decision's group, seen by this user — and, when the
+        // caller says which project it is working in, the same either-end
+        // reach `signal_list` has, so a session is never handed (and so
+        // never consumes) a signal about a project it is not in.
         let mut signals = sqlx::query_as!(
             wire::SignalRow,
             r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
@@ -2055,6 +2059,12 @@ impl Signals for PgStorage {
                  and not exists (select 1 from signal_receipts r
                                  where r.signal_id = s.id
                                    and r.user_id = $2 and r.session = $3)
+                 and ($5::uuid is null
+                      or exists (select 1 from decisions d
+                                 where d.id = s.source and d.project_id = $5)
+                      or exists (select 1 from signal_targets t
+                                 join decisions d on d.id = t.target
+                                 where t.signal_id = s.id and d.project_id = $5))
                  and group_visible((select p.group_id from decisions d
                                     join projects p on p.id = d.project_id
                                     where d.id = s.source), $2)
@@ -2064,6 +2074,7 @@ impl Signals for PgStorage {
             user,
             session,
             i64::from(limit),
+            project.map(|p| Uuid::from(p.ulid())),
         )
         .fetch_all(&mut *tx)
         .await

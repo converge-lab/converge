@@ -476,7 +476,7 @@ async fn claim_hands_out_what_arrived_after_the_session_began_once() {
         let store = store.clone();
         async move {
             store
-                .signal_claim(Scope::User(me), session, Some("codex"), limit)
+                .signal_claim(Scope::User(me), session, Some("codex"), None, limit)
                 .await
                 .unwrap()
                 .into_iter()
@@ -546,11 +546,13 @@ async fn claim_hands_out_what_arrived_after_the_session_began_once() {
 
     // System has no sessions; a blank session is no session.
     assert!(matches!(
-        store.signal_claim(Scope::System, "s1", None, 1).await,
+        store.signal_claim(Scope::System, "s1", None, None, 1).await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        store.signal_claim(Scope::User(me), "  ", None, 1).await,
+        store
+            .signal_claim(Scope::User(me), "  ", None, None, 1)
+            .await,
         Err(StoreError::Invalid(_))
     ));
 }
@@ -663,16 +665,76 @@ async fn claim_never_crosses_groups() {
     };
     assert_eq!(
         ids(store
-            .signal_claim(Scope::User(alice), "a1", None, 10)
+            .signal_claim(Scope::User(alice), "a1", None, None, 10)
             .await
             .unwrap()),
         vec![]
     );
     assert_eq!(
         ids(store
-            .signal_claim(Scope::User(bob), "b1", None, 10)
+            .signal_claim(Scope::User(bob), "b1", None, None, 10)
             .await
             .unwrap()),
         vec![conflict]
     );
+}
+
+/// A claim is for the project the session is working in. Anything else
+/// would not just be noise: a claim consumes, so a signal handed to the
+/// wrong session is one the right session is never offered.
+#[tokio::test]
+async fn a_claim_only_reaches_the_project_the_session_is_in() {
+    let (_pg, store) = store().await;
+    let me = user(&store).await;
+    // Two projects in one group, so both are visible to the same user —
+    // visibility is not what separates them here.
+    let g = group(&store, me).await;
+    let here = project_in(&store, g).await;
+    let there = project_in(&store, g).await;
+    let mine = decision(&store, here, "mine").await;
+    let theirs = decision(&store, there, "theirs").await;
+    let other = decision(&store, there, "also theirs").await;
+
+    let claim = |session: &'static str, project: Option<ProjectId>| {
+        let store = store.clone();
+        async move {
+            store
+                .signal_claim(Scope::User(me), session, Some("claude"), project, 10)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    // First sight opens the session and draws the line.
+    assert!(claim("s-here", Some(here)).await.is_empty());
+    assert!(claim("s-wide", None).await.is_empty());
+
+    // One signal wholly inside the other project, one reaching into
+    // this one from over there.
+    let elsewhere = store
+        .signal_add(
+            Scope::System,
+            signal(theirs, vec![other], "duplication", Tier::Coordinate, me),
+        )
+        .await
+        .unwrap();
+    let reaching = store
+        .signal_add(
+            Scope::System,
+            signal(theirs, vec![mine], "divergence", Tier::Conflict, me),
+        )
+        .await
+        .unwrap();
+
+    // The session here hears only the one that touches its project —
+    // source or target, the same reach the listing has.
+    assert_eq!(claim("s-here", Some(here)).await, vec![reaching]);
+
+    // And the one it did not hear was not consumed: a claim that names
+    // no project — a client released before this — still gets both.
+    let wide = claim("s-wide", None).await;
+    assert!(wide.contains(&elsewhere), "{wide:?}");
+    assert!(wide.contains(&reaching), "{wide:?}");
 }

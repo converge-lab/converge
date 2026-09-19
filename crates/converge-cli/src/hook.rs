@@ -685,8 +685,10 @@ const POLL_CLAIM: u32 = 3;
 pub async fn poll(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
-    // Only a bound project has signals to hear about.
-    let Ok(State::Bound { .. }) = marker::find(&payload.cwd) else {
+    // Only a bound project has signals to hear about — and only this
+    // project's: a claim consumes, so a signal handed to a session
+    // working somewhere else is one this session never hears.
+    let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) else {
         return Ok(());
     };
     // The ledger is keyed by session: a harness that sends none cannot
@@ -707,7 +709,12 @@ pub async fn poll(kind: Kind) -> Result<()> {
         Ok(client) => {
             match tokio::time::timeout(
                 POLL_BUDGET,
-                client.signal_claim(&session, Some(kind.flag()), POLL_CLAIM),
+                client.signal_claim(
+                    &session,
+                    Some(kind.flag()),
+                    Some(ProjectId::from(project.ulid())),
+                    POLL_CLAIM,
+                ),
             )
             .await
             {

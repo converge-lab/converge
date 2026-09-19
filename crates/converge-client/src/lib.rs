@@ -428,12 +428,14 @@ impl Client {
         &self,
         session: &str,
         harness: Option<&str>,
+        project: Option<ProjectId>,
         limit: u32,
     ) -> Result<Vec<Signal>, StoreError> {
         #[derive(Serialize)]
         struct Claim<'a> {
             session: &'a str,
             harness: Option<&'a str>,
+            project: Option<ProjectId>,
             limit: u32,
         }
         self.post(
@@ -441,6 +443,7 @@ impl Client {
             &Claim {
                 session,
                 harness,
+                project,
                 limit,
             },
         )

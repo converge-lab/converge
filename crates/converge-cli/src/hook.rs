@@ -827,20 +827,28 @@ async fn try_sync(harness: &dyn Harness) -> Result<()> {
     let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
-    let added = push_transcript(harness, &payload, project).await?.len();
+    let (ids, skipped) = push_transcript(harness, &payload, project).await?;
+    let added = ids.len();
     if added > 0 {
         respond(
             harness,
             Response::Notice {
-                system: format!("Converge: synced {added} message(s) to evidence ✓"),
+                system: match skipped {
+                    0 => format!("Converge: synced {added} message(s) to evidence ✓"),
+                    n => format!(
+                        "Converge: synced {added} message(s) to evidence ✓ \
+                         ({n} older turn(s) passed over)"
+                    ),
+                },
             },
         );
     }
     Ok(())
 }
 
-/// Push what the transcript holds that the server does not yet, and
-/// return the ids it got. Watermarked, so calling it twice sends nothing
+/// Push what the transcript holds that the server does not yet — at
+/// most [`PUSH_CAP`] turns, newest — and return their ids with how many
+/// older ones were passed over. Watermarked, so calling it twice sends nothing
 /// twice: the session-end sync and a `decision_add` in mid-session share
 /// it, and what the second returns is exactly the turns since the last
 /// push — the conversation that led to the decision. Empty when the
@@ -850,13 +858,13 @@ async fn push_transcript(
     harness: &dyn Harness,
     payload: &Payload,
     project: ProjectId,
-) -> Result<Vec<MessageId>> {
+) -> Result<(Vec<MessageId>, usize)> {
     let Some(transcript) = payload.transcript.as_ref() else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
     let parsed = harness.transcript(transcript)?;
     let Some(external) = parsed.session_id.clone() else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
 
     let mut marks = crate::watermark::Watermarks::load()?;
@@ -869,8 +877,14 @@ async fn push_transcript(
     if fresh.is_empty() {
         marks.done(&key, &parsed.turns);
         marks.save()?;
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
+    // A backlog is bounded here rather than at the budget: the whole of
+    // it would not arrive in time, and a half-sent push is worse than a
+    // short one. The watermark still moves past what was passed over,
+    // so the next decision is not made to pay for it again.
+    let skipped = fresh.len().saturating_sub(PUSH_CAP);
+    let fresh = &fresh[skipped..];
 
     let config = Config::load()?;
     let client = config.client()?;
@@ -895,7 +909,7 @@ async fn push_transcript(
 
     marks.done(&key, &parsed.turns);
     marks.save()?;
-    Ok(ids)
+    Ok((ids, skipped))
 }
 
 // ─── pre-tool: context collector ──────────────────────────────────────────
@@ -906,6 +920,12 @@ async fn push_transcript(
 const CTX_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
 /// How many of the turns since the last push a decision cites.
 const CITED_TURNS: usize = 10;
+/// How many turns one push carries. A session that has recorded
+/// nothing for hours has a backlog, and sending all of it inside a
+/// hook's budget fails — which used to mean a decision arrived with no
+/// evidence at all. The newest turns are the ones a decision is about,
+/// so those go and the rest is passed over, out loud.
+const PUSH_CAP: usize = 50;
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
@@ -941,7 +961,12 @@ pub async fn ctx(kind: Kind) -> Result<()> {
             match tokio::time::timeout(CTX_BUDGET, push_transcript(harness, &payload, project))
                 .await
             {
-                Ok(Ok(ids)) => cite(&mut merged, &ids),
+                Ok(Ok((ids, skipped))) => {
+                    cite(&mut merged, &ids);
+                    if skipped > 0 {
+                        notes.push(format!("{skipped} older turn(s) not recorded"));
+                    }
+                }
                 Ok(Err(e)) => notes.push(format!("evidence not recorded — {e}")),
                 Err(_) => notes.push(format!(
                     "evidence not recorded — sync exceeded {CTX_BUDGET:?}"

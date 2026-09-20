@@ -32,12 +32,10 @@ pub struct AppState {
     pub error: Option<LoadError>,
     /// Index of the active group within `dataset.groups`.
     pub group: usize,
-    /// The outcome of the last write, shown as a toast by the shell
-    /// (`main.rs`). It lives here rather than in the screen that triggered it
-    /// because a dataset write re-creates the active screen — any state the
-    /// screen set would die on the same tick. Cleared on dismiss, on the next
-    /// attempt, and (for successes) by a timer.
-    pub notice: Option<Notice>,
+    /// Outcomes survive navigation and independent operations. Only an
+    /// explicit dismissal removes a failure; successes expire individually.
+    pub notices: Vec<(u64, Notice)>,
+    pub next_notice_id: u64,
 }
 
 /// What a finished write has to say. Failures wait to be dismissed; successes
@@ -64,6 +62,18 @@ impl Notice {
 /// WASM thread via `LocalStorage` — exactly right for a client-side app, and it
 /// spares us needless `Send + Sync` bounds.
 pub type AppStore = Store<AppState, LocalStorage>;
+
+pub fn push_notice(store: AppStore, notice: Notice) {
+    let id = store.next_notice_id().get_untracked();
+    store.next_notice_id().set(id + 1);
+    store.notices().update(|notices| notices.push((id, notice)));
+}
+
+pub fn dismiss_notice(store: AppStore, id: u64) {
+    store
+        .notices()
+        .update(|notices| notices.retain(|(key, _)| *key != id));
+}
 
 /// Why a load failed. The embedded source never fails; an HTTP `ApiSource`
 /// distinguishes "you need to log in" from everything else.
@@ -174,25 +184,50 @@ mod api {
     /// sources) and patch them into the store. Called by the detail
     /// screen on open — so boot never pays per-decision round trips, and
     /// the detail view is as fresh as its last open, not as stale as
-    /// boot. Fail-open: any fetch error leaves the dataset untouched.
+    /// boot. A fetch error leaves the dataset untouched and explains the
+    /// missing detail beside the sources, with a shell fallback after navigation.
     /// `data::hydrate_local` returns `None` on no-change, which breaks
     /// the write→screen-recreate→hydrate cycle.
-    pub fn hydrate_decision(store: super::AppStore, id: String) {
+    pub fn hydrate_decision(
+        store: super::AppStore,
+        id: String,
+        action: crate::feedback::ActionState,
+    ) {
         use converge_client::DecisionId;
         use leptos::prelude::{GetUntracked, Set};
 
         use super::AppStateStoreFields;
+        if !action.begin() {
+            return;
+        }
         let Ok(did) = id.parse::<DecisionId>() else {
+            action.fail(
+                "Couldn't load decision details",
+                &StoreError::Backend("invalid decision id".into()),
+            );
             return;
         };
         leptos::task::spawn_local(async move {
             let client = client();
             let (edges, cited) =
                 futures::join!(client.decision_edges(did), client.decision_sources(did));
-            let (Ok(Some(edges)), Ok(cited)) = (edges, cited) else {
-                return;
+            let edges = match edges {
+                Ok(Some(edges)) => edges,
+                result => {
+                    let error = result.err().unwrap_or(StoreError::NotFound);
+                    action.fail("Couldn't load decision details", &error);
+                    return;
+                }
             };
-            let cited = cited.unwrap_or_default();
+            let cited = match cited {
+                Ok(Some(cited)) => cited,
+                result => {
+                    let error = result.err().unwrap_or(StoreError::NotFound);
+                    action.fail("Couldn't load decision sources", &error);
+                    return;
+                }
+            };
+            action.finish();
             let related = |r: &converge_client::Related| crate::data::Related {
                 id: r.id.to_string(),
                 why: r.why.clone(),
@@ -223,10 +258,10 @@ mod api {
         Client::new(base)
     }
 
-    fn oops(what: &str) -> impl Fn(StoreError) -> LoadError + '_ {
+    fn oops(what: &'static str) -> impl Fn(StoreError) -> LoadError {
         move |e| match e {
             StoreError::Unauthorized => LoadError::Unauthorized,
-            e => LoadError::Failed(format!("{what}: {e}")),
+            e => LoadError::Failed(crate::feedback::message(what, &e)),
         }
     }
 
@@ -253,13 +288,13 @@ mod api {
                     client.decision_list(&no_decisions, &d_page),
                     client.signal_list(&no_signals, &s_page),
                 );
-                let me = me.map_err(oops("load identity"))?;
-                let groups = groups.map_err(oops("load groups"))?;
-                let projects = projects.map_err(oops("load projects"))?;
-                let users = users.map_err(oops("load users"))?;
-                let agents = agents.map_err(oops("load agents"))?;
-                let decisions = decisions.map_err(oops("load decisions"))?;
-                let signals = signals.map_err(oops("load signals"))?;
+                let me = me.map_err(oops("Couldn't load identity"))?;
+                let groups = groups.map_err(oops("Couldn't load groups"))?;
+                let projects = projects.map_err(oops("Couldn't load projects"))?;
+                let users = users.map_err(oops("Couldn't load users"))?;
+                let agents = agents.map_err(oops("Couldn't load agents"))?;
+                let decisions = decisions.map_err(oops("Couldn't load decisions"))?;
+                let signals = signals.map_err(oops("Couldn't load signals"))?;
 
                 // Remaining residue from the fixture seed (unread, extras,
                 // expert context — the acks slice's territory). Its ids

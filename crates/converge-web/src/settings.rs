@@ -12,6 +12,7 @@ use converge_ui::domain::Tone;
 use leptos::prelude::*;
 
 use crate::command_snippet::CopyButton;
+use crate::feedback::{ActionState, ActionStatus};
 
 /// A token row, decoupled from the client types so the module compiles in
 /// the embedded (no-API) build too.
@@ -38,16 +39,22 @@ fn token_display(id: &str) -> String {
 
 #[component]
 pub fn Settings() -> impl IntoView {
-    let (rows, set_rows) = signal(Vec::<Row>::new());
+    let (rows, set_rows) = signal(None::<Vec<Row>>);
     let (label, set_label) = signal(String::new());
-    // The shown-once secret of the most recent mint.
+    // The secret is held only by this screen, never by global notifications.
     let (minted, set_minted) = signal(None::<String>);
-    let (notice, set_notice) = signal(None::<String>);
-    // Which row is asking "really revoke?" — inline, one at a time.
     let (confirming, set_confirming) = signal(None::<String>);
+    let loading = ActionState::new();
+    let creating = ActionState::new();
+    let revoking = ActionState::new();
+    #[cfg(feature = "api")]
+    let store = crate::store::use_store();
 
     #[cfg(feature = "api")]
     let refresh = move || {
+        if !loading.begin() {
+            return;
+        }
         leptos::task::spawn_local(async move {
             use converge_client::Pagination;
             use time::format_description::well_known::Rfc3339;
@@ -55,27 +62,30 @@ pub fn Settings() -> impl IntoView {
                 .token_list(&Pagination::default())
                 .await
             {
-                Ok(page) => set_rows.set(
-                    page.items
-                        .into_iter()
-                        .map(|t| Row {
-                            id: t.id.to_string(),
-                            label: t.label,
-                            created: t
-                                .created_at
-                                .format(&Rfc3339)
-                                .map(|iso| crate::when::when(&iso))
-                                .unwrap_or_default(),
-                        })
-                        .collect(),
-                ),
-                Err(e) => set_notice.set(Some(format!("load tokens: {e}"))),
+                Ok(page) => {
+                    loading.finish();
+                    set_rows.try_set(Some(
+                        page.items
+                            .into_iter()
+                            .map(|t| Row {
+                                id: t.id.to_string(),
+                                label: t.label,
+                                created: t
+                                    .created_at
+                                    .format(&Rfc3339)
+                                    .map(|iso| crate::when::when(&iso))
+                                    .unwrap_or_default(),
+                            })
+                            .collect(),
+                    ));
+                }
+                Err(e) => loading.fail("Couldn't load tokens", &e),
             }
         });
     };
     #[cfg(not(feature = "api"))]
     let refresh = move || {
-        set_notice.set(Some("This build has no API to manage tokens on.".into()));
+        loading.fail_message("This build has no API to manage tokens on.".into());
         let _ = set_rows;
     };
     refresh();
@@ -83,7 +93,7 @@ pub fn Settings() -> impl IntoView {
     #[cfg(feature = "api")]
     let mint = move || {
         let name = label.get_untracked().trim().to_string();
-        if name.is_empty() {
+        if name.is_empty() || loading.pending.get_untracked() || !creating.begin() {
             return;
         }
         leptos::task::spawn_local(async move {
@@ -93,39 +103,60 @@ pub fn Settings() -> impl IntoView {
                 .await
             {
                 Ok(minted) => {
-                    set_minted.set(Some(minted.token));
-                    set_label.set(String::new());
-                    set_notice.set(None);
-                    refresh();
+                    if creating.finish() {
+                        set_minted.try_set(Some(minted.token));
+                        set_label.try_set(String::new());
+                        refresh();
+                    } else {
+                        crate::store::push_notice(store, crate::store::Notice::Failed(
+                            "A token was created, but you left before its secret could be shown. Revoke it in Settings and create a replacement.".into()
+                        ));
+                    }
                 }
-                Err(e) => set_notice.set(Some(format!("create token: {e}"))),
+                Err(e) => creating.fail("Couldn't create token", &e),
             }
         });
     };
     #[cfg(not(feature = "api"))]
     let mint = move || {
-        let _ = label.get_untracked();
-        set_minted.set(None);
-        refresh();
+        creating.fail_message("This build has no API to create tokens on.".into());
+        let _ = set_minted;
     };
 
     #[cfg(feature = "api")]
     let revoke = move |id: String| {
-        set_confirming.set(None);
+        if loading.pending.get_untracked() || !revoking.begin() {
+            return;
+        }
+        let Ok(token_id) = id.parse::<converge_client::TokenId>() else {
+            revoking.fail(
+                "Couldn't revoke token",
+                &converge_client::StoreError::Backend("invalid token id".into()),
+            );
+            return;
+        };
         leptos::task::spawn_local(async move {
-            let Ok(id) = id.parse::<converge_client::TokenId>() else {
-                return;
-            };
-            match crate::store::client().token_revoke(id).await {
-                Ok(()) => refresh(),
-                Err(e) => set_notice.set(Some(format!("revoke token: {e}"))),
+            match crate::store::client().token_revoke(token_id).await {
+                Ok(()) => {
+                    revoking.finish();
+                    set_confirming.try_set(None);
+                    set_rows.try_update(|rows| {
+                        if let Some(rows) = rows {
+                            rows.retain(|row| row.id != id);
+                        }
+                    });
+                    crate::store::push_notice(
+                        store,
+                        crate::store::Notice::Ok("Token revoked.".into()),
+                    );
+                }
+                Err(e) => revoking.fail("Couldn't revoke token", &e),
             }
         });
     };
     #[cfg(not(feature = "api"))]
     let revoke = move |_id: String| {
-        set_confirming.set(None);
-        refresh();
+        revoking.fail_message("This build has no API to revoke tokens on.".into());
     };
 
     view! {
@@ -147,6 +178,7 @@ pub fn Settings() -> impl IntoView {
                     <Input
                         placeholder="What's this token for? (laptop, ci, …)"
                         value=label
+                        disabled=creating.pending
                         on_input=Callback::new(move |v: String| set_label.set(v))
                         on_keydown=Callback::new(move |ev: leptos::ev::KeyboardEvent| {
                             if ev.key() == "Enter" {
@@ -157,7 +189,7 @@ pub fn Settings() -> impl IntoView {
                     <Button
                         label="Create token"
                         tone=Tone::Primary
-                        disabled=Signal::derive(move || label.get().trim().is_empty())
+                        disabled=Signal::derive(move || creating.pending.get() || loading.pending.get() || label.get().trim().is_empty())
                         on_click=Callback::new(move |()| mint())
                     />
                 </div>
@@ -187,21 +219,21 @@ pub fn Settings() -> impl IntoView {
                             }
                         })
                 }}
-                {move || {
-                    notice
-                        .get()
-                        .map(|msg| {
-                            view! { <div class="cv-fs-sm cv-fg-danger cv-mb-16">{msg}</div> }
-                        })
-                }}
+                <ActionStatus state=creating pending_text="Creating token…" />
 
                 <div class="cv-mb-10">
                     <SectionLabel text="active tokens" />
                 </div>
+                <ActionStatus state=loading pending_text="Loading tokens…" />
+                {move || loading.error.get().is_some().then(|| view! {
+                    <Button label="Retry" on_click=Callback::new(move |()| refresh()) />
+                })}
+                <ActionStatus state=revoking pending_text="Revoking token…" />
                 <div class="cv-tokens">
                     {move || {
-                        let items = rows.get();
+                        let Some(items) = rows.get() else { return ().into_any(); };
                         if items.is_empty() {
+                            if loading.pending.get() || loading.error.get().is_some() { return ().into_any(); }
                             return view! {
                                 <div class="cv-tokens__empty">
                                     "No active tokens. Create one above to connect an agent."
@@ -236,6 +268,7 @@ pub fn Settings() -> impl IntoView {
                                                         </span>
                                                         <Button
                                                             label="Cancel"
+                                                            disabled=revoking.pending
                                                             variant=converge_ui::atoms::ButtonVariant::Ghost
                                                             on_click=Callback::new(move |()| {
                                                                 set_confirming.set(None)
@@ -243,6 +276,7 @@ pub fn Settings() -> impl IntoView {
                                                         />
                                                         <Button
                                                             label="Revoke"
+                                                            disabled=Signal::derive(move || revoking.pending.get() || loading.pending.get())
                                                             tone=Tone::Danger
                                                             on_click=Callback::new(move |()| {
                                                                 revoke(do_id.clone())
@@ -257,6 +291,7 @@ pub fn Settings() -> impl IntoView {
                                                     <button
                                                         type="button"
                                                         class="cv-tokens__revoke"
+                                                        disabled=Signal::derive(move || revoking.pending.get() || loading.pending.get())
                                                         on:click=move |_| {
                                                             set_confirming.set(Some(ask_id.clone()))
                                                         }

@@ -69,6 +69,7 @@ pub fn SignalDetail(go: Callback<Route>, id: String) -> impl IntoView {
     let detail = data::to_signal_detail(&sig);
     let risk = detail.risk;
     let status = sig.status;
+    let action = crate::feedback::ActionState::new();
     let confirm_id = sig.id.clone();
     let dismiss_id = sig.id.clone();
     // Pair each source id with its rendered ref so the row can deep-link.
@@ -117,20 +118,22 @@ pub fn SignalDetail(go: Callback<Route>, id: String) -> impl IntoView {
             {(status == SignalStatus::Proposed)
                 .then(|| {
                     view! {
+                        <crate::feedback::ActionStatus state=action pending_text="Saving verdict…" />
                         <div class="cv-row cv-gap-10 cv-mb-28">
                             <Button
                                 label="Confirm signal"
+                                disabled=action.pending
                                 tone=Tone::Primary
                                 on_click=Callback::new(move |_| {
-                                    mutate::resolve_signal(confirm_id.clone(), true)
+                                    mutate::resolve_signal(confirm_id.clone(), true, action)
                                 })
                             />
                             <Button
                                 label="Dismiss"
+                                disabled=action.pending
                                 variant=ButtonVariant::Outline
                                 on_click=Callback::new(move |_| {
-                                    mutate::resolve_signal(dismiss_id.clone(), false);
-                                    go.run(Route::Signals);
+                                    mutate::resolve_signal(dismiss_id.clone(), false, action);
                                 })
                             />
                         </div>

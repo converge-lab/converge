@@ -15,20 +15,41 @@ use leptos::prelude::*;
 
 #[component]
 pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
-    // Edges + sources hydrate lazily on open (boot skips per-decision
-    // projections). The patch write re-creates this screen once with the
-    // full data; the no-change guard in `hydrate_local` stops it there.
-    #[cfg(feature = "api")]
-    crate::store::hydrate_decision(crate::store::use_store(), id.clone());
-
     let Some(d) = data::by_id(&id) else {
         return view! {
-            <div class="cv-back" on:click=move |_| go.run(Route::Dashboard)>
-                "← Back to dashboard"
+            <div class="cv-page">
+                <p role="alert" class="cv-fs-md cv-fg-danger cv-mb-16">
+                    "This decision couldn't be found or you no longer have access to it."
+                </p>
+                <div class="cv-back" on:click=move |_| go.run(Route::Dashboard)>
+                    "← Back to dashboard"
+                </div>
             </div>
         }
         .into_any();
     };
+
+    // Edges + sources hydrate lazily on open (boot skips per-decision
+    // projections). The patch write re-creates this screen once with the
+    // full data; the no-change guard in `hydrate_local` stops it there.
+    #[cfg(feature = "api")]
+    let detail_feedback = {
+        use crate::feedback::{ActionState, ActionStatus};
+        use converge_ui::atoms::Button;
+        let action = ActionState::new();
+        let store = crate::store::use_store();
+        let id = StoredValue::new(id.clone());
+        let refresh = move || crate::store::hydrate_decision(store, id.get_value(), action);
+        refresh();
+        view! {
+            <ActionStatus state=action pending_text="Loading sources and related decisions…" />
+            {move || action.error.get().is_some().then(|| view! {
+                <Button label="Retry" on_click=Callback::new(move |()| refresh()) />
+            })}
+        }
+    };
+    #[cfg(not(feature = "api"))]
+    let detail_feedback = ();
 
     let project = data::proj_name(&d.project_id);
     let status = d.status;
@@ -216,6 +237,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                         <div class="cv-mb-12">
                             <SectionLabel text="sources · anchored evidence" />
                         </div>
+                        {detail_feedback}
                         <div class="cv-stack8">
                             {sources
                                 .into_iter()

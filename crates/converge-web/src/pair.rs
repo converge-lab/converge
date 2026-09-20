@@ -7,6 +7,7 @@
 //! decision is terminal — the screen ends in a "return to the terminal"
 //! state, never back at the form.
 
+use crate::feedback::{ActionState, ActionStatus};
 use converge_ui::atoms::{Button, Glyph, Input, SectionLabel};
 use converge_ui::domain::Tone;
 use leptos::prelude::*;
@@ -28,30 +29,32 @@ enum Stage {
 pub fn Pair(code: Option<String>) -> impl IntoView {
     let (input, set_input) = signal(code.clone().unwrap_or_default());
     let (stage, set_stage) = signal(Stage::Ask);
-    let (notice, set_notice) = signal(None::<String>);
+    let action = ActionState::new();
+    #[cfg(feature = "api")]
+    let store = crate::store::use_store();
 
     #[cfg(feature = "api")]
     let lookup = move || {
         let code = input.get_untracked().trim().to_string();
-        if code.is_empty() {
+        if code.is_empty() || !action.begin() {
             return;
         }
         leptos::task::spawn_local(async move {
             match crate::store::client().device_get(&code).await {
                 Ok(Some(grant)) => {
-                    set_notice.set(None);
-                    set_stage.set(Stage::Found {
+                    action.finish();
+                    set_stage.try_set(Stage::Found {
                         client_name: grant.client_name,
                     });
                 }
                 Ok(None) => {
-                    set_notice.set(Some(
+                    action.fail_message(
                         "No pending request for that code — it may have expired. \
                          Re-run the command and try again."
                             .into(),
-                    ));
+                    );
                 }
-                Err(e) => set_notice.set(Some(format!("look up code: {e}"))),
+                Err(e) => action.fail("Couldn't look up pairing code", &e),
             }
         });
     };
@@ -60,7 +63,7 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
     #[cfg(not(feature = "api"))]
     let lookup = move || {
         let _ = input.get_untracked();
-        set_notice.set(None);
+        action.error.set(None);
         set_stage.set(Stage::Found {
             client_name: "converge-cli @ demo".into(),
         });
@@ -68,14 +71,34 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
 
     #[cfg(feature = "api")]
     let decide = move |approve: bool| {
+        if !action.begin() {
+            return;
+        }
         let code = input.get_untracked().trim().to_string();
         leptos::task::spawn_local(async move {
             match crate::store::client().device_decide(&code, approve).await {
-                Ok(()) => set_stage.set(match approve {
-                    true => Stage::Approved,
-                    false => Stage::Denied,
-                }),
-                Err(e) => set_notice.set(Some(format!("submit decision: {e}"))),
+                Ok(()) => {
+                    if action.finish() {
+                        set_stage.try_set(if approve {
+                            Stage::Approved
+                        } else {
+                            Stage::Denied
+                        });
+                    } else {
+                        crate::store::push_notice(
+                            store,
+                            crate::store::Notice::Ok(
+                                if approve {
+                                    "Device connected."
+                                } else {
+                                    "Device request denied."
+                                }
+                                .into(),
+                            ),
+                        );
+                    }
+                }
+                Err(e) => action.fail("Couldn't complete device pairing", &e),
             }
         });
     };
@@ -114,6 +137,7 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
                                     <Input
                                         placeholder="XXXX-XXXX"
                                         value=input
+                                        disabled=action.pending
                                         on_input=Callback::new(move |v: String| set_input.set(v))
                                         on_keydown=Callback::new(move |ev: leptos::ev::KeyboardEvent| {
                                             if ev.key() == "Enter" {
@@ -125,7 +149,7 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
                                         label="Look up"
                                         tone=Tone::Primary
                                         disabled=Signal::derive(move || {
-                                            input.get().trim().is_empty()
+                                            action.pending.get() || input.get().trim().is_empty()
                                         })
                                         on_click=Callback::new(move |()| lookup())
                                     />
@@ -149,11 +173,13 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
                                 <div class="cv-row cv-gap-10">
                                     <Button
                                         label="Deny"
+                                        disabled=action.pending
                                         variant=converge_ui::atoms::ButtonVariant::Ghost
                                         on_click=Callback::new(move |()| decide(false))
                                     />
                                     <Button
                                         label="Approve"
+                                        disabled=action.pending
                                         tone=Tone::Primary
                                         on_click=Callback::new(move |()| decide(true))
                                     />
@@ -187,13 +213,7 @@ pub fn Pair(code: Option<String>) -> impl IntoView {
                         }
                     }
                 }}
-                {move || {
-                    notice
-                        .get()
-                        .map(|msg| {
-                            view! { <div class="cv-fs-sm cv-fg-danger cv-mb-16">{msg}</div> }
-                        })
-                }}
+                <ActionStatus state=action pending_text="Contacting Converge…" />
             </div>
         </div>
     }

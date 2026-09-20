@@ -643,7 +643,12 @@ pub fn drop_project_local(store: AppStore, id: &str) {
 /// Reflect a deleted group: the group and, transitively, each of its
 /// projects. The caller re-points the active-group index first.
 pub fn drop_group_local(store: AppStore, id: &str) {
-    let projects: Vec<String> = ds()
+    // This also runs after an API response, outside a reactive owner. Read
+    // the captured store instead of looking it up through component context.
+    let projects: Vec<String> = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation")
         .projects
         .iter()
         .filter(|p| p.group_id == id)
@@ -966,6 +971,37 @@ mod tests {
         let seed = Seed::parse(EMBEDDED).expect("embedded seed parses");
         validate(&seed).expect("embedded seed validates");
         build_dataset(assemble(&seed))
+    }
+
+    #[test]
+    fn group_deletion_updates_the_captured_store_without_component_context() {
+        use crate::store::AppState;
+        use leptos::prelude::Owner;
+
+        let original = dataset();
+        let group = original.groups[0].clone();
+        let remaining_groups = original.groups.len() - 1;
+        let remaining_projects = original.projects.len() - group.project_ids.len();
+        let owner = Owner::new();
+        // Deliberately do not provide the store as context: API completions
+        // have the handle but no component owner to look it up from.
+        let store = owner.with(|| {
+            AppStore::new_local(AppState {
+                dataset: Some(Rc::new(original)),
+                ..Default::default()
+            })
+        });
+        drop_group_local(store, &group.id);
+        let updated = store.dataset().get_untracked().unwrap();
+        assert_eq!(updated.groups.len(), remaining_groups);
+        assert_eq!(updated.projects.len(), remaining_projects);
+        assert!(
+            !updated
+                .decisions
+                .iter()
+                .any(|d| group.project_ids.contains(&d.project_id))
+        );
+        owner.cleanup();
     }
 
     /// The dataset builds from the embedded seed with the expected inventory.

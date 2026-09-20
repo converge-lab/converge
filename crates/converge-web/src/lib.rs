@@ -19,6 +19,7 @@ mod feedback;
 mod group_settings;
 mod modals;
 mod mutate;
+mod notices;
 mod onboard;
 mod pair;
 mod project_log;
@@ -222,6 +223,7 @@ fn App() -> impl IntoView {
         navigate(&r);
         set_route.set(r);
     });
+    provide_context(route::Navigation(go));
     // Switching the active group resets to the dashboard, like the prototype.
     let switch_group = Callback::new(move |i: usize| {
         store.group().set(i);
@@ -338,7 +340,15 @@ fn App() -> impl IntoView {
                     // project's header). Screens with cross-write state keep
                     // it outside the component (see `expert::ExpertState`).
                     track_data(store);
-                    match route.get() {
+                    let requested = route.get();
+                    let current = requested.clone().valid_for(
+                        &store.dataset().get_untracked().expect("ready dataset"),
+                        store.group().get_untracked(),
+                    );
+                    if current != requested {
+                        go.run(current.clone());
+                    }
+                    match current {
                         // Full-screen onboarding only when there is no group
                         // at all; an *empty group* renders the dashboard,
                         // which shows the guide under its own header — the
@@ -379,46 +389,11 @@ fn App() -> impl IntoView {
             // re-creates the active screen, so a message the screen owned would
             // be destroyed before anyone read it. Failures wait to be
             // dismissed; a success is a receipt and clears itself.
-            <div class="cv-toasts">
-                <For each=move || store.notices().get() key=|(id, _)| *id children=move |(id, notice)| {
-                    let ok = notice.is_ok();
-                    if ok {
-                        clear_notice_later(store, id);
-                    }
-                    view! {
-                        <div
-                            class=if ok { "cv-toast cv-toast--ok" } else { "cv-toast" }
-                            role=if ok { "status" } else { "alert" }
-                        >
-                            <span>{notice.text().to_string()}</span>
-                            <button
-                                type="button"
-                                class="cv-toast__close"
-                                aria-label="Dismiss"
-                                on:click=move |_| store::dismiss_notice(store, id)
-                            >
-                                {Glyph::Close.glyph()}
-                            </button>
-                        </div>
-                    }
-                } />
-            </div>
+            <notices::Notices store=store />
         }
         .into_any()
     }
 }
-
-/// Retire only this success receipt; other outcomes keep their own lifetime.
-#[cfg(target_arch = "wasm32")]
-fn clear_notice_later(store: AppStore, id: u64) {
-    set_timeout(
-        move || store::dismiss_notice(store, id),
-        std::time::Duration::from_millis(2500),
-    );
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn clear_notice_later(_store: AppStore, _id: u64) {}
 
 /// The app's boot phase, derived from the store by `App`'s gate memo.
 /// `PartialEq` is what lets the memo swallow same-phase writes.
@@ -631,7 +606,7 @@ fn Sidebar(
                     Ok(()) => {
                         let _ = window().location().reload();
                     }
-                    Err(error) => feedback::notify(store, "Couldn't sign out", &error),
+                    Err(error) => feedback::notify(store, "Couldn't sign out", "session", &error),
                 }
             });
         }

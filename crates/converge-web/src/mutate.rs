@@ -210,6 +210,7 @@ pub fn edit_project(id: String, name: String, desc: String, action: ActionState)
 /// stays open, and a refusal leaves both the screen and typed name intact.
 pub fn project_delete(id: String, name: String, action: ActionState, close: Callback<()>) {
     let store = use_store();
+    let go = crate::route::navigation();
     if !action.begin() {
         return;
     }
@@ -228,7 +229,9 @@ pub fn project_delete(id: String, name: String, action: ActionState, close: Call
                 Ok(()) => {
                     if action.finish() {
                         close.run(());
-                        navigate(&Route::Dashboard);
+                    }
+                    if crate::route::current_route().project_target() == Some(id.as_str()) {
+                        go.run(Route::Dashboard);
                     }
                     data::drop_project_local(store, &id);
                     done(store, &format!("Project “{name}” deleted."));
@@ -242,16 +245,19 @@ pub fn project_delete(id: String, name: String, action: ActionState, close: Call
     {
         action.finish();
         close.run(());
-        navigate(&Route::Dashboard);
+        if crate::route::current_route().project_target() == Some(id.as_str()) {
+            go.run(Route::Dashboard);
+        }
         data::drop_project_local(store, &id);
         done(store, &format!("Project “{name}” deleted."));
     }
 }
 
-/// Delete a group and everything under it. On success the active group
-/// resets to the first remaining one.
+/// Delete a group and everything under it. Preserve a different active group;
+/// if the deleted group was selected, fall back to the first remaining one.
 pub fn group_delete(id: String, name: String, action: ActionState, close: Callback<()>) {
     let store = use_store();
+    let go = crate::route::navigation();
     if !action.begin() {
         return;
     }
@@ -270,9 +276,16 @@ pub fn group_delete(id: String, name: String, action: ActionState, close: Callba
                 Ok(()) => {
                     if action.finish() {
                         close.run(());
-                        navigate(&Route::Dashboard);
                     }
-                    store.group().set(0);
+                    if crate::route::current_route() == Route::GroupSettings
+                        && store.dataset().get_untracked().is_some_and(|data| {
+                            data.groups
+                                .get(store.group().get_untracked())
+                                .is_some_and(|group| group.id == id)
+                        })
+                    {
+                        go.run(Route::Dashboard);
+                    }
                     data::drop_group_local(store, &id);
                     done(store, &format!("Group “{name}” deleted."));
                 }
@@ -284,8 +297,9 @@ pub fn group_delete(id: String, name: String, action: ActionState, close: Callba
     {
         action.finish();
         close.run(());
-        navigate(&Route::Dashboard);
-        store.group().set(0);
+        if crate::route::current_route() == Route::GroupSettings {
+            go.run(Route::Dashboard);
+        }
         data::drop_group_local(store, &id);
         done(store, &format!("Group “{name}” deleted."));
     }

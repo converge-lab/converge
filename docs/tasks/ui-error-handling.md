@@ -14,7 +14,7 @@ Independent notifications do not replace each other. Only success receipts
 expire automatically.
 
 Error handling considers two audiences separately: users receive understandable
-domain explanations, while future diagnostics must preserve useful technical
+domain explanations, while diagnostics must preserve useful technical
 causes without confidential information. Internal failures receive a general
 user-facing message. This policy is recorded in Converge as
 `01M2Z18KZDMRZSEDX4KGPM3KXP`.
@@ -43,6 +43,37 @@ The deferred collection policy is recorded separately as
 | Authentication | Show provider discovery and sign-in failures separately; allow provider Retry. Explain sign-out failures and offer Retry after boot failure. |
 | Shell notifications | Queue independent outcomes. Dismissing or timing out one receipt cannot erase another error. |
 
+## Review follow-up
+
+The follow-up addresses roster action lifetime, deletion/navigation races,
+notification behavior, disabled inputs, safe database errors, and executable
+browser checks. Search changes remain deferred at the user's request.
+
+- Member rows are keyed by user ID. Their pending state and error survive
+  removal of another member and invitation-triggered roster refreshes; updated
+  display names are still reflected. The roster load alert stays mounted.
+- A completed deletion leaves a removed object's page even when its dialog
+  was dismissed while waiting. Navigation elsewhere is preserved, as is a
+  different selected group. Group removal publishes one coherent dataset
+  update; the router redirects missing project/group settings targets before
+  rendering editable controls or loading an invalid roster.
+- Disabled inputs have distinct text/background colors and a disabled cursor.
+- Repeated failures with the same operation/resource identity and message use
+  one receipt with an occurrence count. Equal text from different operations
+  does not merge. The latest five receipts are shown; all other unread errors
+  remain available through "Show all". Repeats return to the visible list.
+  Gaps pass pointer events through, and an explicitly expanded history is a
+  visible scrolling panel. Notifications stay below the modal interaction
+  layer so accumulated receipts cannot block another form. Success timers
+  belong to receipts and run independently of whether they are folded.
+- PostgreSQL error mapping never copies driver text into `Invalid`/`Conflict`.
+  Its server diagnostics contain a fixed category and validated SQLSTATE,
+  without raw messages, SQL, parameters, identifiers, or connection URLs.
+  The HTTP error boundary also avoids logging raw backend causes from other
+  implementations. This adds no browser diagnostic logging.
+- CI builds the API WASM bundle through Trunk/wasm-bindgen and runs Playwright,
+  covering failures that `cargo check` alone cannot detect.
+
 The membership endpoint adds an **existing** user by handle. It does not send
 email invitations. A user must sign in once before they can be added.
 
@@ -57,33 +88,54 @@ native clients retain reqwest 0.12.
   streaming behavior, and error handling are unchanged. The intended separate
   redesign has one chat window without a chat list.
 - Sentry, other browser diagnostic destinations, and request-id correlation.
+- Search refresh/debounce and validation-specific Retry behavior. The existing
+  search implementation and its baseline regression checks are unchanged.
+- The rare successful-sign-in/failed-navigation presentation and remaining
+  success-notification differences in the embedded build.
 - Preserving drafts through a complete sign-in/reload flow and auditing
   permissions of all displayed actions.
 
 ## Verification
 
-- `cargo test -p converge-web --all-features --lib`: 19 passing tests cover safe error text,
+- `cargo test -p converge-web --all-features --lib`: 21 passing tests cover safe error text,
   case-preserving handles, independent notification lifetimes, and failures
   after the form's reactive owner is disposed. A separate regression covers
-  group deletion after an API response, without component context.
+  group deletion after an API response, without component context, preserving
+  another selected group, and notification deduplication by resource identity.
+- `cargo test -p converge-storage-postgres --lib error::tests`: two passing
+  tests verify sanitized diagnostics, including real PostgreSQL foreign-key
+  and unique-constraint violations carrying synthetic confidential text.
+- `cargo test -p converge-server --lib http::error::tests`: a passing test
+  checks that raw internal causes reach neither HTTP responses nor logs.
 - Check both API and embedded builds; run Clippy and formatting checks.
-- `env -u NO_COLOR trunk build --features api` builds the actual WASM bundle.
-- `scripts/check-ui-errors.js` is a Playwright page function. It creates an
-  isolated browser context and intercepts API requests with synthetic fixtures.
+- `env -u NO_COLOR trunk build --features api --locked` builds the actual WASM bundle.
+- `npm run test:ui`: 12 passing Playwright tests, each using an isolated browser
+  context and intercepted API requests with synthetic fixtures.
+  `scripts/ui-errors.spec.js` invokes `scripts/check-ui-errors.js`.
   Its 35 checks exercise server rejection, server/network failures, pending guards,
   input preservation, successful retries, late responses, concurrent notices,
   sensitive token handling, and a 390×844 viewport. It also fails on browser
   exceptions or any application call to console log/info/debug/warn/error/etc.
   Browser-generated network diagnostics are distinct from application logging.
+- `scripts/ui-interactions.spec.js` adds 11 regression tests for concurrent
+  member actions, refreshed row data, disabled appearance, dismissed deletion,
+  preserved navigation/group selection, invalid roster loads, repeated and
+  independent notifications, folding/expansion, modal access, pointer hit
+  testing, and scrolling at a narrow viewport. These also reject application
+  console calls and browser exceptions. Real screen-reader announcement
+  behavior has not been tested.
 
-To repeat the browser checks, build the API bundle and serve it locally from
-the repository root:
+To repeat the browser checks, build the API bundle from `crates/converge-web`,
+then install and run the browser runner from the repository root:
 
 ```sh
-python3 -m http.server 8086 --bind 127.0.0.1 --directory crates/converge-web/dist
+npm ci
+npx playwright install chromium
+npm run test:ui
 ```
 
-Run `scripts/check-ui-errors.js` as the `filename` argument to Playwright's
-`browser_run_code_unsafe`, or evaluate the file as a function and invoke it
-with a Playwright `page` from another runner. The checks are not wired into CI.
-They use no production memberships, credentials, or external telemetry.
+The runner starts and stops its own static server on port 8086. Locally it can
+use Chrome installed in `/Applications`, or the executable specified by
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`; CI uses Playwright's Chromium. Failure
+screenshots and traces are saved under `target/playwright`. Checks use no
+production memberships, credentials, or external telemetry.

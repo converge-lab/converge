@@ -34,7 +34,7 @@ pub struct AppState {
     pub group: usize,
     /// Outcomes survive navigation and independent operations. Only an
     /// explicit dismissal removes a failure; successes expire individually.
-    pub notices: Vec<(u64, Notice)>,
+    pub notices: Vec<NoticeEntry>,
     pub next_notice_id: u64,
 }
 
@@ -44,6 +44,23 @@ pub struct AppState {
 pub enum Notice {
     Ok(String),
     Failed(String),
+}
+
+/// Repeats belong to one form/action or one explicitly identified resource.
+/// Equal wording alone cannot identify an operation on a different object.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NoticeOrigin {
+    Action(RwSignal<bool>),
+    #[cfg(any(feature = "api", test))]
+    Resource(&'static str, String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NoticeEntry {
+    pub id: u64,
+    pub notice: Notice,
+    pub occurrences: usize,
+    origin: Option<NoticeOrigin>,
 }
 
 impl Notice {
@@ -64,15 +81,64 @@ impl Notice {
 pub type AppStore = Store<AppState, LocalStorage>;
 
 pub fn push_notice(store: AppStore, notice: Notice) {
+    insert_notice(store, notice, None);
+}
+
+pub fn push_failure(store: AppStore, origin: NoticeOrigin, message: String) {
+    insert_notice(store, Notice::Failed(message), Some(origin));
+}
+
+fn insert_notice(store: AppStore, notice: Notice, origin: Option<NoticeOrigin>) {
+    let repeated = origin.as_ref().and_then(|origin| {
+        store.notices().with_untracked(|notices| {
+            notices
+                .iter()
+                .position(|entry| entry.origin.as_ref() == Some(origin) && entry.notice == notice)
+        })
+    });
+    if let Some(index) = repeated {
+        store.notices().update(|notices| {
+            let mut existing = notices.remove(index);
+            existing.occurrences = existing.occurrences.saturating_add(1);
+            // A repeated failure must become visible even if its previous
+            // occurrence had moved into the folded notification history.
+            notices.push(existing);
+        });
+        return;
+    }
     let id = store.next_notice_id().get_untracked();
     store.next_notice_id().set(id + 1);
-    store.notices().update(|notices| notices.push((id, notice)));
+    let ok = notice.is_ok();
+    store.notices().update(|notices| {
+        notices.push(NoticeEntry {
+            id,
+            notice,
+            occurrences: 1,
+            origin,
+        })
+    });
+    if ok {
+        clear_notice_later(store, id);
+    }
 }
+
+// Expiration belongs to the receipt, including while it is folded out of view.
+// Expanding history must neither start nor reset a success timer.
+#[cfg(target_arch = "wasm32")]
+fn clear_notice_later(store: AppStore, id: u64) {
+    set_timeout(
+        move || dismiss_notice(store, id),
+        std::time::Duration::from_millis(2500),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_notice_later(_store: AppStore, _id: u64) {}
 
 pub fn dismiss_notice(store: AppStore, id: u64) {
     store
         .notices()
-        .update(|notices| notices.retain(|(key, _)| *key != id));
+        .update(|notices| notices.retain(|entry| entry.id != id));
 }
 
 /// Why a load failed. The embedded source never fails; an HTTP `ApiSource`

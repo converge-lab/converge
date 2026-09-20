@@ -4,7 +4,8 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{send, server};
+use common::{send, send_as, server};
+use converge_storage::{Memberships, Tokens, Users};
 use serde_json::json;
 
 #[tokio::test]
@@ -143,7 +144,7 @@ async fn evidence_over_rest() {
 /// is shut, the evidence door is not.
 #[tokio::test]
 async fn archive_off_keeps_only_the_turns_a_decision_cites() {
-    let (_pg, _store, app) = server().await;
+    let (_pg, store, app) = server().await;
     let (_, group) = send(
         &app,
         "POST",
@@ -171,6 +172,37 @@ async fn archive_off_keeps_only_the_turns_a_decision_cites() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // It is the group's call, not one member's: a member who is not
+    // the owner cannot decide what everyone else's sessions record.
+    let beta = store
+        .user_login(converge_storage::Identity {
+            provider: "local".into(),
+            subject: "beta".into(),
+            handle: "beta".into(),
+            name: "Beta".into(),
+        })
+        .await
+        .unwrap();
+    store
+        .token_add(beta, "t".into(), converge_server::auth::hash("cvg_beta"))
+        .await
+        .unwrap();
+    let admin = store.user_lookup("admin").await.unwrap().remove(0).id;
+    let gid: converge_storage::GroupId = group["id"].as_str().unwrap().parse().unwrap();
+    store
+        .member_add(converge_storage::Scope::User(admin), gid, beta)
+        .await
+        .unwrap();
+    let (status, refused) = send_as(
+        &app,
+        "cvg_beta",
+        "PATCH",
+        &format!("/api/v1/projects/{project}"),
+        Some(json!([{ "set_archive_transcripts": true }])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
 
     // The answer to `ensure` carries the policy, so a client learns it
     // in the call it was making anyway.
@@ -226,7 +258,9 @@ async fn archive_off_keeps_only_the_turns_a_decision_cites() {
     .await;
     assert_eq!(stream["items"].as_array().unwrap().len(), 1, "{stream}");
 
-    // And the resume point moves with what was cited.
+    // And the resume point is the first position nobody holds: the
+    // cited turn sits at 7 with nothing below it, so a sender still
+    // starts at the beginning rather than skipping the conversation.
     let (_, opened) = send(
         &app,
         "POST",
@@ -237,5 +271,5 @@ async fn archive_off_keeps_only_the_turns_a_decision_cites() {
         })),
     )
     .await;
-    assert_eq!(opened["next_ordinal"], 8);
+    assert_eq!(opened["next_ordinal"], 0);
 }

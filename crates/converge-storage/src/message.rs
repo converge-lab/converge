@@ -68,10 +68,13 @@ pub trait Messages {
     ) -> impl Future<Output = Result<Vec<MessageId>, StoreError>> + Send;
 
     /// Where a sender resumes: the first position this session holds no
-    /// turn for. The highest `ordinal` plus one, or — for a session
-    /// recorded before turns carried a position — how many turns it
-    /// holds, which for a CLI-written session counted the same way. So
-    /// a client needs no durable record of what it has sent. An unknown
+    /// turn for, counting from zero. Not the highest plus one — a
+    /// decision's cited turns are recorded at their own positions long
+    /// before the ones below them, and resuming past those would leave
+    /// the start of the conversation unrecorded for good. For a session
+    /// recorded before turns carried a position, it is how many turns it
+    /// holds, which for a CLI-written session counted the same way. So a
+    /// client needs no durable record of what it has sent. An unknown
     /// session is `NotFound`.
     fn message_next_ordinal(
         &self,

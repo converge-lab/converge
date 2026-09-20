@@ -51,6 +51,18 @@ pub(crate) async fn pass(kind: Kind, cwd: &Path, at: &Transcript, max: usize) ->
         return Ok(nothing);
     }
     let client = Config::load()?.client()?;
+    // Ask the project before saying anything. A session's title is the
+    // first line of the conversation, so opening one here would put a
+    // slice of the transcript on the server that the project has just
+    // said it does not want.
+    let keeps = client
+        .project_get(ProjectId::from(project.ulid()))
+        .await
+        .context("read the project's archive setting")?
+        .is_some_and(|p| p.archive_transcripts);
+    if !keeps {
+        return Ok(nothing);
+    }
     let opened = client
         .session_ensure(&converge_client::NewSession {
             project_id: ProjectId::from(project.ulid()),
@@ -60,8 +72,8 @@ pub(crate) async fn pass(kind: Kind, cwd: &Path, at: &Transcript, max: usize) ->
         })
         .await
         .context("open the session to record into")?;
-    // The project keeps only what its decisions cite. Those turns ride
-    // on the decision itself, so there is nothing to do here.
+    // Checked twice: the setting can change between the two calls, and
+    // the server refuses the append either way.
     if !opened.archive_transcripts {
         return Ok(nothing);
     }

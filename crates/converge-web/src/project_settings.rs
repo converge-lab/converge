@@ -6,7 +6,7 @@
 //! (`PATCH /projects/{id}`). Group (moving a project) and retiring a project
 //! are drawn but inert — nothing behind either exists yet.
 
-use converge_ui::atoms::{Button, ButtonVariant};
+use converge_ui::atoms::{Button, ButtonVariant, Select};
 use converge_ui::domain::Tone;
 use leptos::prelude::*;
 
@@ -17,7 +17,6 @@ use crate::{data, mutate};
 pub fn ProjectSettings(pid: String) -> impl IntoView {
     let (name, set_name) = signal(data::proj_name(&pid));
     let (desc, set_desc) = signal(data::proj_desc(&pid));
-    let (archives, set_archives) = signal(data::proj_archives(&pid));
     let (flash, set_flash) = signal(None::<String>);
 
     let decisions = data::project_decisions(&pid).len();
@@ -26,6 +25,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
     let group = data::proj_group_name(&pid);
     let title = data::proj_name(&pid);
     let repository = data::proj_repository(&pid);
+    let archives = data::proj_archives(&pid);
 
     let save = {
         let pid = pid.clone();
@@ -99,22 +99,23 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                     // A project-wide call, not a per-machine setting: the
                     // conversations belong to everyone working here. Saved on
                     // change — a policy that needs a second click to take is
-                    // a policy someone will leave half-set.
-                    <select
-                        class="cv-select cv-w-full"
-                        prop:value=move || if archives.get() { "all" } else { "cited" }
-                        on:change={
+                    // a policy someone will leave half-set. The shown value
+                    // is the dataset's, which moves only once the server has
+                    // agreed; the atom marks the option rather than setting
+                    // `value` on the select, which would render blank.
+                    <Select
+                        options=vec![
+                            ("all".to_string(), "Keep the whole conversation".to_string()),
+                            ("cited".to_string(), "Keep only the lines decisions cite".to_string()),
+                        ]
+                        value=(if archives { "all" } else { "cited" }).to_string()
+                        on_change={
                             let pid = pid.clone();
-                            move |ev| {
-                                let keep = event_target_value(&ev) == "all";
-                                set_archives.set(keep);
-                                mutate::set_project_archives(pid.clone(), keep);
-                            }
+                            Callback::new(move |v: String| {
+                                mutate::set_project_archives(pid.clone(), v == "all");
+                            })
                         }
-                    >
-                        <option value="all">"Keep the whole conversation"</option>
-                        <option value="cited">"Keep only the lines decisions cite"</option>
-                    </select>
+                    />
                     <span class="cv-setform__hint">
                         "Whole transcripts are kept so they can be read and analysed later. \
                          Turn that off and agents still record the exact lines a decision \

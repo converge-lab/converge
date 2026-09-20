@@ -137,6 +137,12 @@ pub struct DecisionAdd {
     pub conversation: Option<ConversationIn>,
 }
 
+/// How many turns may ride on one `decision_add`. The hook attaches
+/// ten; the room above that is for a client with no hook recording a
+/// short exchange. It is a bound on what a decision that then fails can
+/// leave behind, so it is not generous.
+const INLINE_TURNS: usize = 100;
+
 /// The conversation a decision's inline evidence belongs to.
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct ConversationIn {
@@ -747,6 +753,45 @@ impl<S: Storage + 'static> Memory<S> {
             .iter()
             .map(|m| parse_id::<MessageId>(m, "evidence"))
             .collect::<Result<Vec<_>, _>>()?;
+        // Anything that can be judged without touching the database is
+        // judged before the turns are written: recording them is a
+        // committed write of its own, and a decision that fails after
+        // it would leave the conversation behind with nothing citing
+        // it — on a project that may have asked for exactly that not to
+        // happen.
+        let anchors: Vec<CodeAnchor> = req
+            .code_evidence
+            .iter()
+            .map(|a| CodeAnchor {
+                commit: a.commit.clone(),
+                path: a.path.clone(),
+                lines: a.lines,
+                excerpt: a.excerpt.clone(),
+                digest: a.digest.clone(),
+            })
+            .collect();
+        for anchor in &anchors {
+            anchor.validate().map_err(map_err)?;
+        }
+        if req.evidence.is_empty() && anchors.is_empty() && req.evidence_turns.is_empty() {
+            return Err(McpError::invalid_params(
+                "evidence is required: `session_ensure` this conversation, \
+                 `message_add` the exchanges that decided it, and pass their \
+                 message ids as `evidence` — or cite committed code as \
+                 `code_evidence`",
+                None,
+            ));
+        }
+        if req.evidence_turns.len() > INLINE_TURNS {
+            return Err(McpError::invalid_params(
+                format!(
+                    "at most {INLINE_TURNS} turns can ride on a decision — \
+                     they are the exchange it cites, not the conversation; \
+                     record the rest with `message_add`"
+                ),
+                None,
+            ));
+        }
         // The exchange, recorded here and cited: for a caller with
         // nothing else putting the conversation on record. Turns that
         // name their position are written once, so a hook or a later
@@ -794,20 +839,6 @@ impl<S: Storage + 'static> Memory<S> {
             evidence.sort_unstable();
             evidence.dedup();
         }
-        // This door is the agent's. A person typing a decision into the
-        // web is their own source; an agent recording one out of a
-        // conversation has to put the conversation on record first, or
-        // "verifiable" is a word in the instructions and nothing else.
-        if evidence.is_empty() && req.code_evidence.is_empty() {
-            return Err(McpError::invalid_params(
-                "evidence is required: `session_ensure` this conversation, \
-                 `message_add` the exchanges that decided it, and pass their \
-                 message ids as `evidence` — or cite committed code as \
-                 `code_evidence`",
-                None,
-            ));
-        }
-
         // Authorship: the deployment user working through the calling
         // agent (see `caller`); the same user is the write's scope.
         let author = self.caller(&context).await?;
@@ -838,17 +869,7 @@ impl<S: Storage + 'static> Memory<S> {
                     authors: vec![author],
                     supersedes,
                     evidence,
-                    code_evidence: req
-                        .code_evidence
-                        .into_iter()
-                        .map(|a| CodeAnchor {
-                            commit: a.commit,
-                            path: a.path,
-                            lines: a.lines,
-                            excerpt: a.excerpt,
-                            digest: a.digest,
-                        })
-                        .collect(),
+                    code_evidence: anchors,
                 },
             )
             .await

@@ -36,33 +36,38 @@ printf 'project_id = "%s"\n' "$HERE" > "$S/here/.converge"
 export HOME="$S/home" XDG_CONFIG_HOME="$S/home/.config" XDG_STATE_HOME="$S/state"
 
 SID="poll-$RUN"
+want() { if [ "$2" = "$3" ]; then echo "  ok: $1 = $3"; else echo "  FAIL: $1 — wanted [$2], got [$3]"; exit 1; fi; }
 poll() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"UserPromptSubmit"}' "$S/here" "$SID" | "$CONVERGE" hook poll --harness claude; }
 # The poll runs at most once every 20 s; the smoke moves its clock back.
+# It must fail loudly: a silent miss would rate-limit every later poll
+# and the run would pass with nothing delivered.
 lift() { python3 -c "
 import json; p='$XDG_STATE_HOME/converge/poll.json'
-d=json.load(open(p)); d['$SID']['at']=0; json.dump(d,open(p,'w'))" 2>/dev/null || true; }
+d=json.load(open(p)); d['$SID']['at']=0; json.dump(d,open(p,'w'))"; }
+# Just the titles, so the step can say what it expected.
 show() { python3 -c "
 import json,sys
 raw=sys.stdin.read().strip()
-if not raw: print('  nothing'); raise SystemExit
+if not raw: print('nothing'); raise SystemExit
 d=json.loads(raw); ctx=(d.get('hookSpecificOutput') or {}).get('additionalContext') or ''
 titles=[l.strip('- ').split(' (')[0] for l in ctx.splitlines() if l.startswith('- ')]
-print('  delivered:', titles or 'nothing')"; }
+print('; '.join(titles) if titles else 'nothing')"; }
 signal() { api POST /signals "{\"source\":\"$1\",\"targets\":[\"$2\"],\"kind\":\"$3\",\"tier\":\"conflict\",\"title\":\"$4\",\"text\":\"t\",\"consequence\":null,\"recommendation\":null,\"produced_by\":{\"user\":\"$ME\"}}" > /dev/null; }
 
 echo "== 1. first poll: the session opens its row and is handed nothing"
-poll | show; lift
+want "delivered" "nothing" "$(poll | show)"; lift
 
 echo "== 2. a signal wholly inside the other project"
 signal "$D_THERE" "$D_OTHER" "duplication" "next door only"
-poll | show; lift
+want "delivered" "nothing" "$(poll | show)"; lift
 
 echo "== 3. a signal reaching into this one"
 signal "$D_THERE" "$D_HERE" "divergence" "reaches us"
-poll | show; lift
+want "delivered" "[conflict/divergence] reaches us" "$(poll | show)"; lift
 
 echo "== 4. and the one it never heard is still unclaimed for whoever it belongs to"
-api GET "/signals?project=$THERE&unseen=true" | python3 -c "
+unseen=$(api GET "/signals?project=$THERE&unseen=true" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
-print('  still new over there:', [i['title'] for i in items])"
+print('; '.join(i['title'] for i in items))")
+want "still new over there" "next door only" "$unseen"

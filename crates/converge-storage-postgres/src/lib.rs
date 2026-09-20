@@ -773,6 +773,34 @@ impl Projects for PgStorage {
         edits: Vec<ProjectEdit>,
     ) -> Result<(), StoreError> {
         let uuid = Uuid::from(id.ulid());
+        // Whether whole conversations are kept is the group's call, not
+        // one member's: it decides what everyone else's sessions record.
+        // The rest of a project's fields are any member's to edit.
+        if edits
+            .iter()
+            .any(|e| matches!(e, ProjectEdit::SetArchiveTranscripts(_)))
+        {
+            let group = sqlx::query_scalar!(
+                r#"select group_id from projects
+                   where id = $1 and ($2::uuid is null or group_visible(group_id, $2))"#,
+                uuid,
+                viewer(scope),
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?
+            .ok_or(StoreError::NotFound)?;
+            // `owner_gate`'s own words are about membership; say what
+            // this refusal is actually about.
+            self.owner_gate(scope, wire::id(group))
+                .await
+                .map_err(|e| match e {
+                    StoreError::Invalid(_) => StoreError::Invalid(
+                        "only the group owner can change whether conversations are kept".into(),
+                    ),
+                    other => other,
+                })?;
+        }
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let held = sqlx::query!(
             r#"select id from projects
@@ -1064,7 +1092,21 @@ impl Messages for PgStorage {
     ) -> Result<i32, StoreError> {
         let session = Uuid::from(session.ulid());
         let found = sqlx::query_scalar!(
-            r#"select coalesce(max(m.ordinal) + 1, count(m.*))::int as "next!"
+            r#"select case
+                   -- Nothing positioned: a session recorded before turns
+                   -- carried one, where the count is what the sender had
+                   -- already sent.
+                   when count(m.ordinal) = 0 then count(m.*)::int
+                   -- The run from zero has not started.
+                   when count(*) filter (where m.ordinal = 0) = 0 then 0
+                   -- The first hole in that run: a decision's cited turns
+                   -- can be recorded long before the ones below them.
+                   else (select min(x.ordinal) + 1 from messages x
+                         where x.session_id = s.id and x.ordinal is not null
+                           and not exists (select 1 from messages y
+                                           where y.session_id = s.id
+                                             and y.ordinal = x.ordinal + 1))
+               end as "next!"
                from sessions s
                join projects p on p.id = s.project_id
                left join messages m on m.session_id = s.id
@@ -1089,20 +1131,26 @@ impl Messages for PgStorage {
         // Conversation order — oldest first, the one forward-reading list;
         // the cursor returns rows strictly *after* it. An invisible
         // session reads as empty, same as an unknown one.
+        //
+        // The sort key is (position, arrival), not position alone. A
+        // turn recorded without a position keeps its `seq`, and a `seq`
+        // can equal another row's `ordinal`, so position alone is not
+        // unique — and a cursor stepping over a tie would skip a row
+        // for good. `seq` is unique per session, so the pair is total.
         Ok(sqlx::query_as!(
             wire::MessageRow,
             r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
                from messages m
                where m.session_id = $1
                  and ($2::uuid is null
-                      or coalesce(m.ordinal, m.seq)
-                         > (select coalesce(ordinal, seq) from messages
+                      or (coalesce(m.ordinal, m.seq), m.seq)
+                         > (select coalesce(ordinal, seq), seq from messages
                             where id = $2 and session_id = $1))
                  and ($4::uuid is null
                       or group_visible((select p.group_id from sessions s
                                         join projects p on p.id = s.project_id
                                         where s.id = m.session_id), $4))
-               order by coalesce(m.ordinal, m.seq)
+               order by coalesce(m.ordinal, m.seq), m.seq
                limit $3"#,
             Uuid::from(session.ulid()),
             page.cursor.map(|c| Uuid::from(c.ulid())),
@@ -1414,6 +1462,9 @@ impl Decisions for PgStorage {
                  and ($3::uuid is null or d.group_id = $3)
                  and ($4::decision_status is null or d.status = $4)
                  and ($6::uuid is null or group_visible(d.group_id, $6))
+                 and ($7::uuid is null
+                      or not exists (select 1 from decision_receipts r
+                                     where r.decision_id = d.id and r.user_id = $7))
                order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,
                         d.id desc
                limit $5"#,
@@ -1423,6 +1474,10 @@ impl Decisions for PgStorage {
             status as Option<PgStatus>,
             limit.map(i64::from),
             viewer(scope),
+            // "New for you" narrows a search the same way it narrows a
+            // listing; ignoring it here answered "everything" to a
+            // question about what is unread.
+            if filter.unseen { viewer(scope) } else { None },
         )
         .fetch_all(&self.pool)
         .await
@@ -1580,7 +1635,7 @@ impl Decisions for PgStorage {
                          between coalesce(a.ordinal, a.seq) - $2
                              and coalesce(a.ordinal, a.seq) + $2
                )
-               order by m.session_id, coalesce(m.ordinal, m.seq)"#,
+               order by m.session_id, coalesce(m.ordinal, m.seq), m.seq"#,
             uuid,
             CONTEXT,
         )

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where exists (\n                   select 1\n                   from evidence e\n                   join messages a on a.id = e.message_id\n                   where e.decision_id = $1\n                     and a.session_id = m.session_id\n                     and coalesce(m.ordinal, m.seq)\n                         between coalesce(a.ordinal, a.seq) - $2\n                             and coalesce(a.ordinal, a.seq) + $2\n               )\n               order by m.session_id, coalesce(m.ordinal, m.seq)",
+  "query": "select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at\n               from messages m\n               where m.session_id = $1\n                 and ($2::uuid is null\n                      or (coalesce(m.ordinal, m.seq), m.seq)\n                         > (select coalesce(ordinal, seq), seq from messages\n                            where id = $2 and session_id = $1))\n                 and ($4::uuid is null\n                      or group_visible((select p.group_id from sessions s\n                                        join projects p on p.id = s.project_id\n                                        where s.id = m.session_id), $4))\n               order by coalesce(m.ordinal, m.seq), m.seq\n               limit $3",
   "describe": {
     "columns": [
       {
@@ -42,7 +42,9 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Int4"
+        "Uuid",
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -55,5 +57,5 @@
       false
     ]
   },
-  "hash": "d9201d8ad66f895e5df56b460104807fb1308083a7d3e7a4f9add16654128515"
+  "hash": "acef8d9590002f70332cec533677913531909f2cd356b43ffd33694eb3b4e649"
 }

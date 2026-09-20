@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select case\n                   -- Nothing positioned: a session recorded before turns\n                   -- carried one, where the count is what the sender had\n                   -- already sent.\n                   when count(m.ordinal) = 0 then count(m.*)::int\n                   -- The run from zero has not started.\n                   when count(*) filter (where m.ordinal = 0) = 0 then 0\n                   -- The first hole in that run: a decision's cited turns\n                   -- can be recorded long before the ones below them.\n                   else (select min(x.ordinal) + 1 from messages x\n                         where x.session_id = s.id and x.ordinal is not null\n                           and not exists (select 1 from messages y\n                                           where y.session_id = s.id\n                                             and y.ordinal = x.ordinal + 1))\n               end as \"next!\"\n               from sessions s\n               join projects p on p.id = s.project_id\n               left join messages m on m.session_id = s.id\n               where s.id = $1\n                 and ($2::uuid is null or group_visible(p.group_id, $2))\n               group by s.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "next!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "815c109082b73eae3c4964f49ac877d760e67e620877353e7fdbe01de2a67dbc"
+}

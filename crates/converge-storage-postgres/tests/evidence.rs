@@ -519,7 +519,7 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         vec!["m0", "m1", "m2", "m3", "m3 rewritten", "loose"]
     );
 
-    // Where a sender resumes: the highest position plus one, so no
+    // Where a sender resumes: the first position nobody holds, so no
     // client has to remember what it sent.
     assert_eq!(
         store
@@ -527,6 +527,41 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
             .await
             .unwrap(),
         4
+    );
+
+    // A decision's cited turns land at their own positions, with
+    // nothing below them yet. Resuming past those would lose the start
+    // of the conversation, so the answer is the first hole, not the
+    // highest plus one.
+    let cited = store
+        .session_ensure(Scope::System, session(project_id, "cited", "cited"))
+        .await
+        .unwrap();
+    store
+        .message_add(Scope::System, cited, vec![at(140, "m140"), at(141, "m141")])
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, cited)
+            .await
+            .unwrap(),
+        0
+    );
+    store
+        .message_add(
+            Scope::System,
+            cited,
+            (0..3).map(|i| at(i, &format!("m{i}"))).collect(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, cited)
+            .await
+            .unwrap(),
+        3
     );
 
     // A session recorded before turns carried positions answers with
@@ -558,6 +593,36 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         Err(StoreError::NotFound)
     ));
 
+    // A turn sent after a rewrite must stay reachable: its position
+    // ties with the rewritten turn's arrival number, and a cursor that
+    // ordered on position alone would step over it for good.
+    store
+        .message_add(Scope::System, sid, vec![at(4, "m4")])
+        .await
+        .unwrap();
+    let mut walked: Vec<String> = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = store
+            .message_list(
+                Scope::System,
+                sid,
+                Pagination {
+                    limit: Some(2),
+                    cursor,
+                },
+            )
+            .await
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        cursor = Some(page[page.len() - 1].id);
+        walked.extend(page.into_iter().map(|m| m.body));
+    }
+    assert!(walked.contains(&"m4".to_string()), "{walked:?}");
+    assert_eq!(walked.len(), 7, "{walked:?}");
+
     // And the cursor walks that same order.
     let rest = store
         .message_list(
@@ -571,5 +636,5 @@ async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
         .await
         .unwrap();
     let bodies: Vec<&str> = rest.iter().map(|m| m.body.as_str()).collect();
-    assert_eq!(bodies, vec!["m2", "m3", "m3 rewritten", "loose"]);
+    assert_eq!(bodies, vec!["m2", "m3", "m3 rewritten", "m4", "loose"]);
 }

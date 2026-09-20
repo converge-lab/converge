@@ -191,12 +191,17 @@ mod api {
             // the badge stops counting it here and on every other device.
             // `session = ""` is this person rather than an agent session.
             let read = [did];
-            let (edges, cited, _) = futures::join!(
+            let (edges, cited, receipted) = futures::join!(
                 client.decision_edges(did),
                 client.decision_sources(did),
                 client.receive("", None, &[], &read)
             );
-            crate::data::mark_read_local(store, &id);
+            // Only once the server holds the receipt: a badge that drops
+            // on a refused write comes back on the next load, and the
+            // count is the server's answer everywhere else.
+            if receipted.is_ok() {
+                crate::data::mark_read_local(store, &id);
+            }
             let (Ok(Some(edges)), Ok(cited)) = (edges, cited) else {
                 return;
             };

@@ -854,7 +854,12 @@ async fn try_sync(kind: Kind) -> Result<()> {
             Response::Notice {
                 system: match left {
                     0 => format!("Converge: recorded {added} message(s) ✓"),
-                    n => format!("Converge: recorded {added} message(s) ✓ ({n} still to send)"),
+                    // One pass per session end, so what is over the cap
+                    // is not "yet to come" — say so rather than promise.
+                    n => format!(
+                        "Converge: recorded {added} message(s) ✓ \
+                         ({n} beyond this pass, not recorded)"
+                    ),
                 },
             },
         );

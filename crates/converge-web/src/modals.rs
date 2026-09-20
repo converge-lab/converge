@@ -11,6 +11,7 @@ use converge_ui::domain::{GroupKind, Tone};
 use leptos::html;
 use leptos::prelude::*;
 
+use crate::feedback::{ActionState, ActionStatus};
 use crate::{data, mutate};
 
 /// Which modal is open.
@@ -70,9 +71,8 @@ pub fn ModalHost() -> impl IntoView {
             ModalKind::NewGroup => view! { <NewGroupModal /> }.into_any(),
             ModalKind::NewProject => view! { <NewProjectModal /> }.into_any(),
             ModalKind::DeleteProject { id, name } => {
-                let run = Callback::new(move |(id, name): (String, String)| {
-                    crate::route::navigate(&crate::route::Route::Dashboard);
-                    mutate::project_delete(id, name);
+                let run = Callback::new(move |(id, name, action, close): (String, String, ActionState, Callback<()>)| {
+                    mutate::project_delete(id, name, action, close);
                 });
                 view! {
                     <DeleteModal
@@ -86,9 +86,8 @@ pub fn ModalHost() -> impl IntoView {
                     .into_any()
             }
             ModalKind::DeleteGroup { id, name } => {
-                let run = Callback::new(move |(id, name): (String, String)| {
-                    crate::route::navigate(&crate::route::Route::Dashboard);
-                    mutate::group_delete(id, name);
+                let run = Callback::new(move |(id, name, action, close): (String, String, ActionState, Callback<()>)| {
+                    mutate::group_delete(id, name, action, close);
                 });
                 view! {
                     <DeleteModal
@@ -106,18 +105,18 @@ pub fn ModalHost() -> impl IntoView {
 }
 
 /// The shared destruction ceremony: retype the name, then the danger
-/// button arms. Deletion itself goes through `mutate` (toast on either
-/// outcome); navigation happens before the request so the screen being
-/// deleted isn't the one left showing.
+/// button arms. Keep the confirmation and its input until the API succeeds;
+/// a refusal is shown inside the modal, and navigation follows success.
 #[component]
 fn DeleteModal(
     id: String,
     name: String,
     what: &'static str,
     why: &'static str,
-    run: Callback<(String, String)>,
+    run: Callback<(String, String, ActionState, Callback<()>)>,
 ) -> impl IntoView {
     let modal = use_modal();
+    let action = ActionState::new();
     let (typed, set_typed) = signal(String::new());
     let input_ref = NodeRef::<html::Input>::new();
     autofocus(input_ref);
@@ -127,11 +126,15 @@ fn DeleteModal(
         let id = id.clone();
         let name = name.clone();
         Callback::new(move |()| {
-            if !armed.get_untracked() {
+            if !armed.get_untracked() || action.pending.get_untracked() {
                 return;
             }
-            modal.set(None);
-            run.run((id.clone(), name.clone()));
+            run.run((
+                id.clone(),
+                name.clone(),
+                action,
+                Callback::new(move |()| modal.set(None)),
+            ));
         })
     };
     view! {
@@ -147,6 +150,7 @@ fn DeleteModal(
                         node_ref=input_ref
                         class="cv-input__field cv-mono"
                         placeholder=name.clone()
+                        disabled=action.pending
                         prop:value=typed
                         on:input=move |ev| set_typed.set(event_target_value(&ev))
                         on:keydown=move |ev| {
@@ -158,6 +162,7 @@ fn DeleteModal(
                     />
                 </div>
             </div>
+            <ActionStatus state=action pending_text="Working…" />
             <div class="cv-modal__foot">
                 <Button
                     label="Cancel"
@@ -167,7 +172,7 @@ fn DeleteModal(
                 <Button
                     label=format!("Delete {what}")
                     tone=Tone::Danger
-                    disabled=Signal::derive(move || !armed.get())
+                    disabled=Signal::derive(move || action.pending.get() || !armed.get())
                     on_click=submit
                 />
             </div>
@@ -178,6 +183,7 @@ fn DeleteModal(
 #[component]
 fn NewGroupModal() -> impl IntoView {
     let modal = use_modal();
+    let action = ActionState::new();
     let (name, set_name) = signal(String::new());
     let (kind, set_kind) = signal(GroupKind::Shared);
     let name_ref = NodeRef::<html::Input>::new();
@@ -189,8 +195,7 @@ fn NewGroupModal() -> impl IntoView {
         if n.is_empty() {
             return;
         }
-        modal.set(None);
-        mutate::create_group(n, kind.get_untracked());
+        mutate::create_group(n, kind.get_untracked(), action, close);
     });
 
     view! {
@@ -204,6 +209,7 @@ fn NewGroupModal() -> impl IntoView {
                     node_ref=name_ref
                     class="cv-input__field"
                     placeholder="platform-team"
+                    disabled=action.pending
                     prop:value=name
                     on:input=move |ev| set_name.set(event_target_value(&ev))
                     on:keydown=move |ev| match ev.key().as_str() {
@@ -225,7 +231,7 @@ fn NewGroupModal() -> impl IntoView {
                             "cv-projchip"
                         }
                     }
-                    on:click=move |_| set_kind.set(GroupKind::Shared)
+                    on:click=move |_| { if !action.pending.get_untracked() { set_kind.set(GroupKind::Shared); } }
                 >
                     {format!("{} shared", Glyph::Shared.glyph())}
                 </span>
@@ -237,17 +243,18 @@ fn NewGroupModal() -> impl IntoView {
                             "cv-projchip"
                         }
                     }
-                    on:click=move |_| set_kind.set(GroupKind::Personal)
+                    on:click=move |_| { if !action.pending.get_untracked() { set_kind.set(GroupKind::Personal); } }
                 >
                     {format!("{} personal", Glyph::Personal.glyph())}
                 </span>
             </div>
+            <ActionStatus state=action pending_text="Working…" />
             <div class="cv-modal__foot">
                 <Button label="Cancel" variant=ButtonVariant::Ghost on_click=close />
                 <Button
                     label="Create group"
                     tone=Tone::Primary
-                    disabled=Signal::derive(move || name.get().trim().is_empty())
+                    disabled=Signal::derive(move || action.pending.get() || name.get().trim().is_empty())
                     on_click=submit
                 />
             </div>
@@ -258,6 +265,7 @@ fn NewGroupModal() -> impl IntoView {
 #[component]
 fn NewProjectModal() -> impl IntoView {
     let modal = use_modal();
+    let action = ActionState::new();
     let (name, set_name) = signal(String::new());
     let name_ref = NodeRef::<html::Input>::new();
     autofocus(name_ref);
@@ -268,8 +276,7 @@ fn NewProjectModal() -> impl IntoView {
         if n.is_empty() {
             return;
         }
-        modal.set(None);
-        mutate::create_project(n);
+        mutate::create_project(n, action, close);
     });
 
     view! {
@@ -283,6 +290,7 @@ fn NewProjectModal() -> impl IntoView {
                     node_ref=name_ref
                     class="cv-input__field"
                     placeholder="api-gateway"
+                    disabled=action.pending
                     prop:value=name
                     on:input=move |ev| set_name.set(event_target_value(&ev))
                     on:keydown=move |ev| match ev.key().as_str() {
@@ -295,12 +303,13 @@ fn NewProjectModal() -> impl IntoView {
                     }
                 />
             </div>
+            <ActionStatus state=action pending_text="Working…" />
             <div class="cv-modal__foot">
                 <Button label="Cancel" variant=ButtonVariant::Ghost on_click=close />
                 <Button
                     label="Create project"
                     tone=Tone::Primary
-                    disabled=Signal::derive(move || name.get().trim().is_empty())
+                    disabled=Signal::derive(move || action.pending.get() || name.get().trim().is_empty())
                     on_click=submit
                 />
             </div>

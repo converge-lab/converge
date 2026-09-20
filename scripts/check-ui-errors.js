@@ -1,8 +1,6 @@
 // Browser regression checks against a local API build with synthetic responses only.
-// Run this page function with Playwright; see docs/tasks/ui-error-handling.md.
-async (page) => {
-  const context = await page.context().browser().newContext({viewport:{width:1280,height:900}});
-  page = await context.newPage();
+// Run with `npm run test:ui`; see docs/tasks/ui-error-handling.md.
+export default async function checkUiErrors(page) {
   page.setDefaultTimeout(5000);
   const origin = 'http://127.0.0.1:8086';
   const uid = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
@@ -438,6 +436,5 @@ async (page) => {
     throw new Error(String(error)+'\nCompleted: '+checks.join('; ')+'\nPage: '+(await page.locator('body').innerText()).slice(0,2500)+'\nExceptions: '+JSON.stringify(panics)+'\nConsole calls: '+JSON.stringify(diagnostics));
   } finally {
     page.removeListener('pageerror',onError);
-    await context.close();
   }
 }

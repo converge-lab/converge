@@ -2,3 +2,6 @@
 
 # trunk build output (converge-web)
 dist/
+
+# Browser regression runner (Rust/WASM stays the application runtime).
+/node_modules/

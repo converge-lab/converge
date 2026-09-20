@@ -3,6 +3,15 @@
 
 use leptos::prelude::*;
 
+/// Capture this callback before starting async work. It updates the URL and
+/// reactive route together, without relying on the later hashchange task.
+#[derive(Clone, Copy)]
+pub(crate) struct Navigation(pub Callback<Route>);
+
+pub(crate) fn navigation() -> Callback<Route> {
+    expect_context::<Navigation>().0
+}
+
 #[derive(Clone, PartialEq)]
 pub enum Route {
     Dashboard,
@@ -29,6 +38,27 @@ pub enum Route {
 }
 
 impl Route {
+    pub(crate) fn project_target(&self) -> Option<&str> {
+        match self {
+            Self::Project(id) | Self::ProjectSettings(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// A removed target must not leave editable controls backed by a missing
+    /// object. Other routes remain where the user deliberately navigated.
+    pub(crate) fn valid_for(self, dataset: &crate::data::Dataset, group: usize) -> Self {
+        if self
+            .project_target()
+            .is_some_and(|id| !dataset.projects.iter().any(|p| p.id == id))
+            || (self == Self::GroupSettings && dataset.groups.get(group).is_none())
+        {
+            Self::Dashboard
+        } else {
+            self
+        }
+    }
+
     pub fn from_hash(hash: &str) -> Route {
         let h = hash.trim_start_matches('#').trim_start_matches('/');
         let mut parts = h.split('/');

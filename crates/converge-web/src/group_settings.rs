@@ -22,6 +22,8 @@ use leptos::prelude::*;
 use crate::feedback::{ActionState, ActionStatus};
 use crate::modals::{self, ModalKind};
 use crate::store::{Notice, push_notice};
+#[cfg(feature = "api")]
+use crate::store::{NoticeOrigin, push_failure};
 use crate::{data, mutate};
 
 /// A member row — all-owned so the reactive closures stay `Send`.
@@ -35,6 +37,13 @@ struct Member {
     owner: bool,
     /// The server's user id (`None` on the embedded fixture).
     user_id: Option<String>,
+}
+
+impl Member {
+    fn key(&self) -> String {
+        // Fixture names are unique; provider handles are not identity keys.
+        self.user_id.clone().unwrap_or_else(|| self.name.clone())
+    }
 }
 
 /// A handle from a display name: the first word, lowercased.
@@ -95,7 +104,7 @@ fn load_members(
     loading: RwSignal<bool>,
 ) {
     use converge_client::{GroupId, StoreError};
-    if members.is_disposed() || loading.get_untracked() {
+    if members.is_disposed() || loading.get_untracked() || gid.is_empty() {
         return;
     }
     error.set(None);
@@ -131,7 +140,7 @@ fn load_members(
             Err(e) => {
                 let message = crate::feedback::message("Couldn't load members", &e);
                 if let Some(Some(message)) = error.try_set(Some(message)) {
-                    push_notice(store, Notice::Failed(message));
+                    push_failure(store, NoticeOrigin::Resource("load members", gid), message);
                 }
             }
         }
@@ -353,122 +362,125 @@ pub fn GroupSettings() -> impl IntoView {
                 {move || members_loading.get().then(|| view! {
                     <p class="cv-fs-sm cv-fg-muted" role="status">"Loading members…"</p>
                 })}
-                {move || members_error.get().map(|message| view! {
+                <p class="cv-fs-sm cv-fg-danger" role="alert">{move || members_error.get()}</p>
+                {move || members_error.get().is_some().then(|| view! {
                     <div class="cv-col cv-gap-8">
-                        <p class="cv-fs-sm cv-fg-danger" role="alert">{message}</p>
                         <div><Button label="Retry" variant=ButtonVariant::Outline
                             on_click=Callback::new(move |()| reload()) /></div>
                     </div>
                 })}
                 <div class="cv-log">
-                    {move || {
+                    <For each=move || members.get() key=Member::key children=move |m| {
                         let account_id = account_id.clone();
                         #[cfg(feature = "api")]
                         let gid = gid.get_value();
-                        members
-                            .get()
-                            .into_iter()
-                            .map(move |m| {
-                                let removing = ActionState::new();
-                                let handle = m.handle.clone();
-                                let name = m.name.clone();
-                                let you = match &m.user_id {
-                                    Some(uid) => *uid == account_id,
-                                    None => m.owner,
+                        let key = m.key();
+                        let original = m.clone();
+                        // Update display data without replacing this row's owner or action.
+                        let row = Signal::derive(move || members.with(|rows| {
+                            rows.iter().find(|member| member.key() == key).cloned()
+                        }).unwrap_or_else(|| original.clone()));
+                        let removing = ActionState::new();
+                        let handle = m.handle.clone();
+                        #[cfg(not(feature = "api"))]
+                        let name = m.name.clone();
+                        let you = match &m.user_id {
+                            Some(uid) => *uid == account_id,
+                            None => m.owner,
+                        };
+                        #[cfg(feature = "api")]
+                        let remove: Callback<()> = {
+                            let gid = gid.clone();
+                            let handle = handle.clone();
+                            let uid = m.user_id.clone();
+                            Callback::new(move |()| {
+                                if !removing.begin() { return; }
+                                use converge_client::{GroupId, StoreError, UserId};
+                                let (Ok(g), Some(Ok(u))) = (
+                                    gid.parse::<GroupId>(),
+                                    uid.as_deref().map(str::parse::<UserId>),
+                                ) else {
+                                    removing.fail("Couldn't remove teammate",
+                                        &StoreError::Backend("invalid membership id".into()));
+                                    return;
                                 };
-                                #[cfg(feature = "api")]
-                                let remove: Callback<()> = {
-                                    let gid = gid.clone();
-                                    let handle = handle.clone();
-                                    let uid = m.user_id.clone();
-                                    Callback::new(move |()| {
-                                        if !removing.begin() { return; }
-                                        use converge_client::{GroupId, StoreError, UserId};
-                                        let (Ok(g), Some(Ok(u))) = (
-                                            gid.parse::<GroupId>(),
-                                            uid.as_deref().map(str::parse::<UserId>),
-                                        ) else {
-                                            removing.fail("Couldn't remove teammate",
-                                                &StoreError::Backend("invalid membership id".into()));
-                                            return;
-                                        };
-                                        let handle = handle.clone();
-                                        leptos::task::spawn_local(async move {
-                                            match crate::store::client().member_remove(g, u).await {
-                                                Ok(()) => {
-                                                    removing.finish();
-                                                    members.try_update(|ms| {
-                                                        ms.retain(|x| {
-                                                            x.user_id.as_deref()
-                                                                != Some(&u.to_string())
-                                                        })
-                                                    });
-                                                    push_notice(store, Notice::Ok(format!(
-                                                        "@{handle} removed — their decisions stay, authored and searchable.",
-                                                    )));
-                                                }
-                                                Err(e) => removing.fail("Couldn't remove teammate", &e),
-                                            }
-                                        });
-                                    })
-                                };
-                                #[cfg(not(feature = "api"))]
-                                let remove: Callback<()> = {
-                                    let handle = handle.clone();
-                                    let name = name.clone();
-                                    Callback::new(move |()| {
-                                        // Keyed by name: handles are derived
-                                        // (first word) and collide across
-                                        // homonyms; names are unique here.
-                                        let name = name.clone();
-                                        members.update(|ms| ms.retain(|x| x.name != name));
-                                        push_notice(store, Notice::Ok(format!(
-                                            "@{handle} removed — their decisions stay, authored and searchable.",
-                                        )));
-                                    })
-                                };
-                                view! {
-                                    <div class="cv-memberrow">
-                                        <Avatar initial=m.initial color=m.color size=28 />
-                                        <div class="cv-minw-0 cv-grow">
-                                            <div class="cv-memberrow__name">
-                                                {name.clone()}
-                                                {you
-                                                    .then(|| {
-                                                        view! {
-                                                            <span class="cv-fs-2xs cv-fg-faint">" — you"</span>
-                                                        }
-                                                    })}
-                                            </div>
-                                            <div class="cv-memberrow__handle">
-                                                {format!("@{handle}")}
-                                            </div>
-                                            <ActionStatus state=removing pending_text="Removing teammate…" />
-                                        </div>
-                                        {if m.owner {
-                                            view! { <span class="cv-memberrow__role">"Owner"</span> }
-                                                .into_any()
-                                        } else if mine.get() {
-                                            view! {
-                                                <button
-                                                    type="button"
-                                                    class="cv-memberrow__x"
-                                                    disabled=removing.pending
-                                                    aria-label=format!("Remove {name}")
-                                                    on:click=move |_| remove.run(())
-                                                >
-                                                    {Glyph::Close.glyph()}
-                                                </button>
-                                            }
-                                                .into_any()
-                                        } else {
-                                            ().into_any()
-                                        }}
-                                    </div>
-                                }
+                                let handle = handle.clone();
+                                leptos::task::spawn_local(async move {
+                                    match crate::store::client().member_remove(g, u).await {
+                                        Ok(()) => {
+                                            removing.finish();
+                                            members.try_update(|ms| {
+                                                ms.retain(|x| {
+                                                    x.user_id.as_deref()
+                                                        != Some(&u.to_string())
+                                                })
+                                            });
+                                            push_notice(store, Notice::Ok(format!(
+                                                "@{handle} removed — their decisions stay, authored and searchable.",
+                                            )));
+                                        }
+                                        Err(e) => removing.fail("Couldn't remove teammate", &e),
+                                    }
+                                });
                             })
-                            .collect_view()
-                    }}
+                        };
+                        #[cfg(not(feature = "api"))]
+                        let remove: Callback<()> = {
+                            let handle = handle.clone();
+                            let name = name.clone();
+                            Callback::new(move |()| {
+                                // Keyed by name: handles are derived
+                                // (first word) and collide across
+                                // homonyms; names are unique here.
+                                let name = name.clone();
+                                members.update(|ms| ms.retain(|x| x.name != name));
+                                push_notice(store, Notice::Ok(format!(
+                                    "@{handle} removed — their decisions stay, authored and searchable.",
+                                )));
+                            })
+                        };
+                        view! {
+                            <div class="cv-memberrow">
+                                {move || { let member = row.get(); view! {
+                                    <Avatar initial=member.initial color=member.color size=28 />
+                                } }}
+                                <div class="cv-minw-0 cv-grow">
+                                    <div class="cv-memberrow__name">
+                                        {move || row.get().name}
+                                        {you
+                                            .then(|| {
+                                                view! {
+                                                    <span class="cv-fs-2xs cv-fg-faint">" — you"</span>
+                                                }
+                                            })}
+                                    </div>
+                                    <div class="cv-memberrow__handle">
+                                        {move || format!("@{}", row.get().handle)}
+                                    </div>
+                                    <ActionStatus state=removing pending_text="Removing teammate…" />
+                                </div>
+                                {if m.owner {
+                                    view! { <span class="cv-memberrow__role">"Owner"</span> }
+                                        .into_any()
+                                } else if mine.get() {
+                                    view! {
+                                        <button
+                                            type="button"
+                                            class="cv-memberrow__x"
+                                            disabled=removing.pending
+                                            aria-label=move || format!("Remove {}", row.get().name)
+                                            on:click=move |_| remove.run(())
+                                        >
+                                            {Glyph::Close.glyph()}
+                                        </button>
+                                    }
+                                        .into_any()
+                                } else {
+                                    ().into_any()
+                                }}
+                            </div>
+                        }
+                    } />
                 </div>
                 <span class="cv-setform__hint" hidden=move || members_loading.get() || members_error.get().is_some()>
                     {move || {
@@ -567,7 +579,8 @@ pub fn GroupSettings() -> impl IntoView {
                                         if inviting.try_get_untracked() == Some(true) {
                                             invite_error.try_set(Some(message));
                                         } else {
-                                            push_notice(store, Notice::Failed(message));
+                                            push_failure(store, NoticeOrigin::Resource(
+                                                "add teammate", format!("{group_id}/{handle}")), message);
                                         }
                                     }
                                 }

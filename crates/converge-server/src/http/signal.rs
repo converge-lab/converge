@@ -25,7 +25,7 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/signals", post(add::<S>).get(list::<S>))
         .route("/api/v1/signals/receipts", post(receive::<S>))
-        .route("/api/v1/signals/claim", post(claim::<S>))
+        .route("/api/v1/signals/claims", post(claim::<S>))
         .route("/api/v1/signals/{id}", get(fetch::<S>).patch(resolve::<S>))
         .route("/api/v1/decisions/{id}/signals", get(by_decision::<S>))
 }
@@ -122,7 +122,9 @@ const CLAIM_CAP: u32 = 20;
 
 /// What one (caller, session) has not been shown: proposed signals
 /// recorded after the session began, with no receipt for it, oldest
-/// first, receipted as they go. A session first seen here opens its row
+/// first, receipted as they go. A claim is the resource — the read has
+/// a side effect, the receipts, so it cannot be a `GET`, and the
+/// answer is what this claim contains. A session first seen here opens its row
 /// and gets `[]`. This is the poll's
 /// endpoint — a hook on the harness's per-prompt seam calls it — and it
 /// is where deliveries and their age are counted.

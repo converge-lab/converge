@@ -439,7 +439,7 @@ impl Client {
             limit: u32,
         }
         self.post(
-            "signals/claim",
+            "signals/claims",
             &Claim {
                 session,
                 harness,

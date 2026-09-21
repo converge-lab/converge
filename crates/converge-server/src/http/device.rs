@@ -17,7 +17,7 @@ use crate::oauth::normalize_user_code;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new().route(
-        "/api/v1/device/{user_code}",
+        "/api/v1/devices/{user_code}",
         get(show::<S>).post(decide::<S>),
     )
 }

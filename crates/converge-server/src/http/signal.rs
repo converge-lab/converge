@@ -24,8 +24,10 @@ use crate::auth::Caller;
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/signals", post(add::<S>).get(list::<S>))
-        .route("/api/v1/signals/receipts", post(receive::<S>))
-        .route("/api/v1/signals/claims", post(claim::<S>))
+        // A claim is not a sub-collection of one signal, so it does not
+        // hang off `/signals`: it is its own thing, beside the receipts
+        // that are its other half.
+        .route("/api/v1/claims", post(claim::<S>))
         .route("/api/v1/signals/{id}", get(fetch::<S>).patch(resolve::<S>))
         .route("/api/v1/decisions/{id}/signals", get(by_decision::<S>))
 }
@@ -64,37 +66,6 @@ async fn fetch<S: Storage>(
             .await?
             .ok_or(StoreError::NotFound)?,
     ))
-}
-
-/// What a session was shown — or, with `session = ""`, what the caller
-/// read on the web.
-#[derive(Deserialize)]
-struct Receipts {
-    session: String,
-    /// claude | codex | opencode | cursor, for a harness session.
-    #[serde(default)]
-    harness: Option<String>,
-    #[serde(default)]
-    signal_ids: Vec<SignalId>,
-}
-
-/// Record receipts; a harness session's row is created on first sight,
-/// which is how a session-start hook draws the line before which the
-/// poll hands it nothing. Ids the caller cannot see are ignored.
-async fn receive<S: Storage>(
-    State(store): State<S>,
-    Extension(caller): Extension<Caller>,
-    Json(receipts): Json<Receipts>,
-) -> Result<StatusCode> {
-    store
-        .signal_receive(
-            Scope::User(caller.user),
-            &receipts.session,
-            receipts.harness.as_deref(),
-            &receipts.signal_ids,
-        )
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// A session asking what it has not been shown.

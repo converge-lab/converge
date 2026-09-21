@@ -439,7 +439,7 @@ impl Client {
             limit: u32,
         }
         self.post(
-            "signals/claims",
+            "claims",
             &Claim {
                 session,
                 harness,
@@ -500,7 +500,7 @@ impl Client {
                 .collect(),
         };
         let response = self
-            .authed(self.http.post(self.url("expert/ask")))
+            .authed(self.http.post(self.url("expert/questions")))
             .json(&body)
             .send()
             .await
@@ -581,7 +581,7 @@ impl Client {
     pub async fn session_login(&self, token: &str) -> Result<(), StoreError> {
         let response = self
             .http
-            .post(self.url("session"))
+            .post(self.origin("auth/session"))
             .json(&Login { token })
             .send()
             .await
@@ -596,7 +596,7 @@ impl Client {
     pub async fn session_logout(&self) -> Result<(), StoreError> {
         let response = self
             .http
-            .delete(self.url("session"))
+            .delete(self.origin("auth/session"))
             .send()
             .await
             .map_err(transport)?;
@@ -645,14 +645,14 @@ impl Client {
     /// The pending grant behind a user code — what is asking to pair.
     /// `None` when the code is unknown, decided, or expired.
     pub async fn device_get(&self, user_code: &str) -> Result<Option<DeviceGrant>, StoreError> {
-        self.fetch(&format!("device/{user_code}")).await
+        self.fetch(&format!("devices/{user_code}")).await
     }
 
     /// Approve or deny the grant. Approving binds the polling device to
     /// the caller's identity.
     pub async fn device_decide(&self, user_code: &str, approve: bool) -> Result<(), StoreError> {
         let response = self
-            .authed(self.http.post(self.url(&format!("device/{user_code}"))))
+            .authed(self.http.post(self.url(&format!("devices/{user_code}"))))
             .json(&Approval { approve })
             .send()
             .await
@@ -682,6 +682,13 @@ impl Client {
 
     fn url(&self, path: &str) -> String {
         format!("{}/api/v1/{path}", self.base.as_str().trim_end_matches('/'))
+    }
+
+    /// A path off the origin, for the few endpoints that are not
+    /// resources of the versioned API: the browser's credential
+    /// exchange, and what third parties call.
+    fn origin(&self, path: &str) -> String {
+        format!("{}/{path}", self.base.as_str().trim_end_matches('/'))
     }
 
     /// POST a creation; the server answers `201 {"id"}`.

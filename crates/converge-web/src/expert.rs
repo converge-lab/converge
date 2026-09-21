@@ -1,6 +1,6 @@
 //! The Expert screen — grounded chat with the server-side expert over
 //! the group's decision memory. On the `api` build the conversation is
-//! real: `POST /api/v1/expert/ask` streams the answer (SSE), grounded
+//! real: `POST /api/v1/expert/questions` streams the answer (SSE), grounded
 //! per the context policy (rich index + selected records), and the
 //! transcript lives client-side — the server keeps no conversations.
 //! The embedded build keeps a canned exchange, enough to show the shape.

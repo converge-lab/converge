@@ -43,7 +43,7 @@ fn header_value<'h>(headers: &'h [(String, String)], name: &str) -> &'h str {
 async fn session(app: &Router) -> String {
     let (status, headers, _) = send(
         app,
-        Request::post("/api/v1/session")
+        Request::post("/auth/session")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(json!({ "token": TOKEN }).to_string()))
             .unwrap(),

@@ -1,5 +1,8 @@
-//! `/api/v1/session` — the browser's credential exchange (a singleton
-//! resource: you hold at most one).
+//! `/auth/session` — the browser's credential exchange (a singleton
+//! resource: you hold at most one). It sits with the other browser-facing
+//! auth routes rather than under `/api/v1`, which is for resources our
+//! own clients address — and a hair away from `/api/v1/sessions`, which
+//! is a recorded conversation and nothing to do with signing in.
 //!
 //! `POST` swaps a bearer token for the `HttpOnly` session cookie, so the
 //! pasted secret never persists in the browser; `DELETE` clears the
@@ -20,7 +23,7 @@ use super::error::Error;
 use crate::auth::{self, COOKIE, Sessions};
 
 pub fn routes<S: Storage + 'static>() -> Router<(S, Sessions)> {
-    Router::new().route("/api/v1/session", post(login::<S>).delete(logout))
+    Router::new().route("/auth/session", post(login::<S>).delete(logout))
 }
 
 #[derive(Deserialize)]

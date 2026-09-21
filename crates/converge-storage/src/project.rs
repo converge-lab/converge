@@ -76,6 +76,20 @@ impl Repository {
             Repository::Github { owner, name } => format!("github.com/{owner}/{name}"),
         }
     }
+
+    /// Where a reader can see the cited lines: the file at that commit,
+    /// with the range selected. Only where the host's URL shape is
+    /// known — a plain git remote may be any forge, and a guessed link
+    /// that 404s is worse than none.
+    pub fn cited_at(&self, commit: &str, path: &str, lines: (u32, u32)) -> Option<String> {
+        let (start, end) = lines;
+        match self {
+            Repository::Git { .. } => None,
+            Repository::Github { owner, name } => Some(format!(
+                "https://github.com/{owner}/{name}/blob/{commit}/{path}#L{start}-L{end}"
+            )),
+        }
+    }
 }
 
 /// A project.
@@ -129,6 +143,33 @@ fn yes() -> bool {
 #[cfg(test)]
 mod tests {
     use super::Repository;
+
+    #[test]
+    fn a_github_anchor_links_to_its_lines_and_a_plain_remote_does_not() {
+        let repo = Repository::from_remote("git@github.com:converge-lab/converge.git").unwrap();
+        assert_eq!(
+            repo.cited_at(
+                "0f2a9c1e5b7d4e8a9c217d4e5f6a8b9012345678",
+                "crates/a/src/lib.rs",
+                (12, 18)
+            ),
+            Some(
+                "https://github.com/converge-lab/converge/blob/\
+                 0f2a9c1e5b7d4e8a9c217d4e5f6a8b9012345678/crates/a/src/lib.rs#L12-L18"
+                    .replace(' ', "")
+            )
+        );
+        // One line cites itself at both ends, which is the form GitHub
+        // renders as a single highlighted line.
+        assert!(
+            repo.cited_at("abc", "a.rs", (3, 3))
+                .unwrap()
+                .ends_with("#L3-L3")
+        );
+        // Any other host: no link rather than a guess.
+        let other = Repository::from_remote("ssh://git@example.com/team/repo.git").unwrap();
+        assert_eq!(other.cited_at("abc", "a.rs", (1, 2)), None);
+    }
 
     #[test]
     fn remotes_normalize_to_one_repository() {

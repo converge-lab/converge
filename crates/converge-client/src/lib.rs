@@ -51,6 +51,28 @@ struct Created<Id> {
     id: Id,
 }
 
+/// A group's own fields, for a merge patch.
+#[derive(Debug, Default, Serialize)]
+pub struct GroupPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+}
+
+/// A project's own fields, for a merge patch.
+#[derive(Debug, Default, Serialize)]
+pub struct ProjectPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<Option<Repository>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_transcripts: Option<bool>,
+}
+
 /// A decision's own fields, for a merge patch: what is `None` is left
 /// alone, and `Some(None)` on a nullable field clears it.
 #[derive(Debug, Default, Serialize)]
@@ -135,8 +157,9 @@ impl Client {
         self.list("groups", &(), page).await
     }
 
-    pub async fn group_edit(&self, id: GroupId, edits: &[GroupEdit]) -> Result<(), StoreError> {
-        self.apply(&format!("groups/{id}"), edits).await
+    /// Change a group's own fields; what is `None` is left alone.
+    pub async fn group_patch(&self, id: GroupId, patch: &GroupPatch) -> Result<(), StoreError> {
+        self.apply(&format!("groups/{id}"), patch).await
     }
 
     /// Owner-only; takes the group's projects, decisions, sessions and
@@ -216,12 +239,13 @@ impl Client {
         self.remove(&format!("projects/{id}")).await
     }
 
-    pub async fn project_edit(
+    /// Change a project's own fields; what is `None` is left alone.
+    pub async fn project_patch(
         &self,
         id: ProjectId,
-        edits: &[ProjectEdit],
+        patch: &ProjectPatch,
     ) -> Result<(), StoreError> {
-        self.apply(&format!("projects/{id}"), edits).await
+        self.apply(&format!("projects/{id}"), patch).await
     }
 
     // Decisions

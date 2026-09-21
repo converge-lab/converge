@@ -33,7 +33,7 @@ async fn group_crud() {
         &app,
         "PATCH",
         &format!("/api/v1/groups/{id}"),
-        Some(json!([{ "set_name": "platform team" }, { "set_description": null }])),
+        Some(json!({ "name": "platform team", "description": null })),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -115,7 +115,7 @@ async fn project_crud() {
         &app,
         "PATCH",
         &format!("/api/v1/projects/{id}"),
-        Some(json!([{ "set_description": "the memory server" }])),
+        Some(json!({ "description": "the memory server" })),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);

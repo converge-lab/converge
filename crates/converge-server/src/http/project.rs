@@ -7,8 +7,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    GroupId, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Scope,
-    Storage, StoreError,
+    GroupId, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
+    Repository, Scope, Storage, StoreError,
 };
 use serde_json::{Value, json};
 
@@ -86,14 +86,50 @@ async fn fetch<S: Storage>(
     ))
 }
 
+/// A project's own fields. Absent leaves one alone; `null` clears a
+/// description or unsets the repository.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Patch {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "super::nullable")]
+    description: Option<Option<String>>,
+    #[serde(default, deserialize_with = "super::nullable")]
+    repository: Option<Option<Repository>>,
+    /// Whether whole conversations are kept here. Owner-only, which
+    /// storage enforces.
+    #[serde(default)]
+    archive_transcripts: Option<bool>,
+}
+
+impl Patch {
+    fn edits(self) -> Vec<ProjectEdit> {
+        let mut edits = Vec::new();
+        if let Some(name) = self.name {
+            edits.push(ProjectEdit::SetName(name));
+        }
+        if let Some(description) = self.description {
+            edits.push(ProjectEdit::SetDescription(description));
+        }
+        if let Some(repository) = self.repository {
+            edits.push(ProjectEdit::SetRepository(repository));
+        }
+        if let Some(keep) = self.archive_transcripts {
+            edits.push(ProjectEdit::SetArchiveTranscripts(keep));
+        }
+        edits
+    }
+}
+
 async fn edit<S: Storage>(
     State(store): State<S>,
     Extension(caller): Extension<Caller>,
     Path(id): Path<ProjectId>,
-    Json(edits): Json<Vec<ProjectEdit>>,
+    Json(patch): Json<Patch>,
 ) -> Result<StatusCode> {
     store
-        .project_edit(Scope::User(caller.user), id, edits)
+        .project_edit(Scope::User(caller.user), id, patch.edits())
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

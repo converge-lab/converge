@@ -168,7 +168,7 @@ async fn archive_off_keeps_only_the_turns_a_decision_cites() {
         &app,
         "PATCH",
         &format!("/api/v1/projects/{project}"),
-        Some(json!([{ "set_archive_transcripts": false }])),
+        Some(json!({ "archive_transcripts": false })),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
@@ -199,7 +199,7 @@ async fn archive_off_keeps_only_the_turns_a_decision_cites() {
         "cvg_beta",
         "PATCH",
         &format!("/api/v1/projects/{project}"),
-        Some(json!([{ "set_archive_transcripts": true }])),
+        Some(json!({ "archive_transcripts": true })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");

@@ -79,10 +79,70 @@ pub struct Config {
     /// Absent → every expert job is disabled and no model is ever called.
     #[serde(default)]
     pub expert: converge_expert::Config,
+    /// GitHub (`[github]` table). Absent → no resolving, no validating
+    /// and no webhooks; anchors still record and read, they are simply
+    /// never checked against the repository.
+    #[serde(default)]
+    pub github: Github,
     /// The config files that existed and merged, weakest first — provenance
     /// for the startup log, not a setting.
     #[serde(skip)]
     pub sources: Vec<String>,
+}
+
+/// How this deployment talks to GitHub.
+///
+/// Two shapes, and the App is the real one: `app_id` with `private_key`
+/// mints an installation token per repository, which is what webhooks
+/// and writes need. A `token` alone is the read-only fallback — enough
+/// to fetch a blob and check a digest, never enough to be written to.
+/// Neither present is a working deployment with the integration off.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Github {
+    /// The App's numeric id, from its settings page.
+    #[serde(default)]
+    pub app_id: Option<u64>,
+    /// PEM private key for the App. A path is read at startup; the key
+    /// itself is accepted so a deployment can hand it over as an
+    /// environment variable and keep it off disk.
+    #[serde(default)]
+    pub private_key: Option<String>,
+    /// Shared secret GitHub signs webhook deliveries with.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
+    /// Read-only personal access token: the fallback when no App is
+    /// registered, and what tests and a local server use.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// API origin, for a future Enterprise host. The public API until
+    /// someone needs otherwise.
+    #[serde(default = "api")]
+    pub api: String,
+}
+
+fn api() -> String {
+    "https://api.github.com".into()
+}
+
+// Derived `Default` would ignore the field defaults above and leave
+// `api` empty, which the `[github]`-absent case relies on being right.
+impl Default for Github {
+    fn default() -> Self {
+        Self {
+            app_id: None,
+            private_key: None,
+            webhook_secret: None,
+            token: None,
+            api: api(),
+        }
+    }
+}
+
+impl Github {
+    /// Can this deployment read a repository at all?
+    pub fn reads(&self) -> bool {
+        self.token.is_some() || (self.app_id.is_some() && self.private_key.is_some())
+    }
 }
 
 /// The single-user identity (`handle` is the natural key; `name` display).
@@ -306,5 +366,59 @@ mod tests {
             oidc.allowed.as_deref(),
             Some(&["alice".into(), "bob".into()][..])
         );
+    }
+
+    /// The App's credentials arrive as environment variables on a
+    /// deployment that keeps secrets out of files, so `[github]` has to
+    /// be reachable that way — and a deployment with neither an App nor
+    /// a token is simply one with the integration off.
+    #[test]
+    fn github_credentials_come_from_the_env_layer() {
+        let with = |vars: Vec<(&str, &str)>| -> Config {
+            config::Config::builder()
+                .add_source(File::from_str(
+                    r#"database_url = "postgres://x""#,
+                    FileFormat::Toml,
+                ))
+                .add_source(
+                    Environment::with_prefix("CONVTEST")
+                        .prefix_separator("_")
+                        .separator("__")
+                        .try_parsing(true)
+                        .source(Some(
+                            vars.into_iter()
+                                .map(|(k, v)| (k.to_string(), v.to_string()))
+                                .collect(),
+                        )),
+                )
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap()
+        };
+
+        let off = with(vec![]);
+        assert!(!off.github.reads());
+        assert_eq!(off.github.api, "https://api.github.com");
+
+        let app = with(vec![
+            ("CONVTEST_GITHUB__APP_ID", "123456"),
+            (
+                "CONVTEST_GITHUB__PRIVATE_KEY",
+                "-----BEGIN RSA PRIVATE KEY-----",
+            ),
+            ("CONVTEST_GITHUB__WEBHOOK_SECRET", "s3cret"),
+        ]);
+        assert_eq!(app.github.app_id, Some(123_456));
+        assert!(app.github.reads());
+
+        // The fallback reads and nothing more; half an App does not read
+        // at all, which is better than failing on the first call.
+        assert!(
+            with(vec![("CONVTEST_GITHUB__TOKEN", "ghp_x")])
+                .github
+                .reads()
+        );
+        assert!(!with(vec![("CONVTEST_GITHUB__APP_ID", "1")]).github.reads());
     }
 }

@@ -994,18 +994,18 @@
   padding: var(--cv-space-18) 0 var(--cv-space-8);
 }
 
-/* ProjectLog table -------------------------------------------------------- */
-.cv-log { display: flex; flex-direction: column; border: 1px solid var(--cv-border); border-radius: 0.6875rem; overflow: hidden; }
+/* ProjectLog -------------------------------------------------------------- */
+.cv-log { display: flex; flex-direction: column; gap: 0.5rem; }
 .cv-logrow {
   display: flex;
   align-items: center;
   gap: 0.8125rem;
   padding: 0.875rem 1.125rem;
-  border-bottom: 1px solid var(--cv-border);
+  border: 1px solid var(--cv-border);
+  border-radius: 0.6875rem;
   background: var(--cv-inset);
   cursor: pointer;
 }
-.cv-logrow:last-child { border-bottom: none; }
 .cv-logrow:hover { background: var(--cv-panel); }
 .cv-logrow__dot { width: 0.4375rem; height: 0.4375rem; flex: none; border-radius: 50%; }
 .cv-logrow__dot--on { background: var(--cv-primary); box-shadow: 0 0 0.5rem color-mix(in srgb, var(--cv-primary) 50%, transparent); }

@@ -22,6 +22,7 @@ async fn signal_round_trip() {
     .await;
     let gid = group["id"].as_str().unwrap();
     let mut decisions = Vec::new();
+    let mut projects = Vec::new();
     for (project, title) in [("server", "a"), ("billing", "b"), ("billing", "c")] {
         let (_, p) = send(
             &app,
@@ -42,6 +43,7 @@ async fn signal_round_trip() {
         )
         .await;
         decisions.push(d["id"].as_str().unwrap().to_string());
+        projects.push(p["id"].as_str().unwrap().to_string());
     }
     let (a, b, c) = (&decisions[0], &decisions[1], &decisions[2]);
 
@@ -242,4 +244,71 @@ async fn signal_round_trip() {
     )
     .await;
     assert_eq!(status, 400);
+
+    // A claim names the project its session is working in, and hears
+    // only about that one. Both sessions open their rows first, so what
+    // follows is a real hand-out rather than a first sight.
+    let claim_in = |session: &'static str, project: String| {
+        let app = app.clone();
+        async move {
+            let (status, got) = send(
+                &app,
+                "POST",
+                "/api/v1/signals/claim",
+                Some(json!({
+                    "session": session, "harness": "claude",
+                    "project": project, "limit": 3,
+                })),
+            )
+            .await;
+            assert_eq!(status, 200, "{got}");
+            got.as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert!(claim_in("sess-a", projects[0].clone()).await.is_empty());
+    assert!(claim_in("sess-c", projects[2].clone()).await.is_empty());
+    let (_, fourth) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": a, "targets": [b], "kind": "divergence", "tier": "conflict",
+            "title": "a and b disagree", "text": "one of them has to move",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": user },
+        })),
+    )
+    .await;
+    let fourth = fourth["id"].as_str().unwrap().to_string();
+    // c's project is on neither end: it hears nothing, and because it
+    // hears nothing it consumes nothing.
+    assert_eq!(
+        claim_in("sess-c", projects[2].clone()).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        claim_in("sess-a", projects[0].clone()).await,
+        vec![fourth.clone()]
+    );
+    // b's project is the other end of a signal raised over in c's:
+    // its own session hears it, because reach is either end.
+    assert!(claim_in("sess-b", projects[1].clone()).await.is_empty());
+    let (_, fifth) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": c, "targets": [b], "kind": "dependency", "tier": "watch",
+            "title": "b leans on c", "text": "c's shape decides b's",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": user },
+        })),
+    )
+    .await;
+    let fifth = fifth["id"].as_str().unwrap().to_string();
+    assert_eq!(claim_in("sess-b", projects[1].clone()).await, vec![fifth]);
 }

@@ -51,6 +51,18 @@ struct Created<Id> {
     id: Id,
 }
 
+/// What `session_ensure` answers: the session, where a sender resumes,
+/// and whether this project keeps whole conversations.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Opened {
+    pub id: SessionId,
+    /// The first position the server holds no turn for. Send from here
+    /// and nothing is sent twice, whatever else has been recording.
+    pub next_ordinal: i32,
+    /// False when the project records only the turns a decision cites.
+    pub archive_transcripts: bool,
+}
+
 #[derive(Serialize)]
 struct Login<'a> {
     token: &'a str,
@@ -281,8 +293,20 @@ impl Client {
     // Sessions + message streams (evidence)
 
     /// Create-or-refresh by the `(kind, external)` natural key.
-    pub async fn session_ensure(&self, new: &NewSession) -> Result<SessionId, StoreError> {
-        self.create("sessions", new).await
+    /// Create-or-refresh by `(kind, external)`, and answer with what a
+    /// sender needs to carry on: the id, where to resume, and whether
+    /// the project keeps whole conversations at all.
+    pub async fn session_ensure(&self, new: &NewSession) -> Result<Opened, StoreError> {
+        let response = self
+            .authed(self.http.post(self.url("sessions")))
+            .json(new)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::CREATED => response.json::<Opened>().await.map_err(transport),
+            _ => Err(fail(response).await),
+        }
     }
 
     pub async fn session_get(&self, id: SessionId) -> Result<Option<Session>, StoreError> {
@@ -364,29 +388,33 @@ impl Client {
             .await
     }
 
-    /// Say that `session` was shown `ids` — through `harness` for an
-    /// agent tool's session, or `""` for this user reading on the web.
-    /// Creates the session's row on first sight, so a session-start hook
-    /// calls it with what it listed, or with nothing, to draw the line
-    /// before which no poll hands it anything.
-    pub async fn signal_receive(
+    /// Say that `session` was shown these decisions and signals —
+    /// through `harness` for an agent tool's session, or `""` for this
+    /// user reading on the web. One call for both kinds: a session start
+    /// lists both and has little time to say so. Creates the session's
+    /// row on first sight, so calling it with nothing still draws the
+    /// line before which no poll hands that session anything.
+    pub async fn receive(
         &self,
         session: &str,
         harness: Option<&str>,
-        ids: &[SignalId],
+        signals: &[SignalId],
+        decisions: &[DecisionId],
     ) -> Result<(), StoreError> {
         #[derive(Serialize)]
         struct Receipts<'a> {
             session: &'a str,
             harness: Option<&'a str>,
             signal_ids: &'a [SignalId],
+            decision_ids: &'a [DecisionId],
         }
         self.submit(
-            "signals/receipts",
+            "receipts",
             &Receipts {
                 session,
                 harness,
-                signal_ids: ids,
+                signal_ids: signals,
+                decision_ids: decisions,
             },
         )
         .await
@@ -400,12 +428,14 @@ impl Client {
         &self,
         session: &str,
         harness: Option<&str>,
+        project: Option<ProjectId>,
         limit: u32,
     ) -> Result<Vec<Signal>, StoreError> {
         #[derive(Serialize)]
         struct Claim<'a> {
             session: &'a str,
             harness: Option<&'a str>,
+            project: Option<ProjectId>,
             limit: u32,
         }
         self.post(
@@ -413,6 +443,7 @@ impl Client {
             &Claim {
                 session,
                 harness,
+                project,
                 limit,
             },
         )

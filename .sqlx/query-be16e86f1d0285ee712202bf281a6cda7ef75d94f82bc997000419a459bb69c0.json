@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, group_id, name, description, repository, created_at\n               from projects\n               where ($1::uuid is null or group_id = $1)\n                 and ($3::uuid is null or id < $3)\n                 and ($4::uuid is null or group_visible(group_id, $4))\n               order by id desc\n               limit $2",
+  "query": "select id, group_id, name, description, repository, archive_transcripts, created_at\n               from projects\n               where id = $1\n                 and ($2::uuid is null or group_visible(group_id, $2))",
   "describe": {
     "columns": [
       {
@@ -30,14 +30,17 @@
       },
       {
         "ordinal": 5,
+        "name": "archive_transcripts",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Int8",
         "Uuid",
         "Uuid"
       ]
@@ -48,8 +51,9 @@
       false,
       true,
       true,
+      false,
       false
     ]
   },
-  "hash": "9a582d7cca3ab7026de57e3bef5ee46b98e1c0ef6d9e89ac06337a72998ac43b"
+  "hash": "be16e86f1d0285ee712202bf281a6cda7ef75d94f82bc997000419a459bb69c0"
 }

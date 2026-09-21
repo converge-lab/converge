@@ -275,6 +275,7 @@ async fn backfill(
             .transpose()
             .context("--group is not a valid id")?,
         status: None,
+        unseen: false,
     };
 
     let store = PgStorage::connect(&config.database_url).await?;

@@ -14,8 +14,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    DecisionId, Message, MessageId, NewMessage, NewSession, Page, Pagination, Scope, Session,
-    SessionFilter, SessionId, Source, Storage, StoreError,
+    DecisionId, Message, MessageId, NewMessage, NewSession, Page, Pagination, ProjectId, Scope,
+    Session, SessionFilter, SessionId, Source, Storage, StoreError,
 };
 use serde_json::{Value, json};
 
@@ -40,8 +40,27 @@ async fn ensure<S: Storage>(
     Extension(caller): Extension<Caller>,
     Json(new): Json<NewSession>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let id = store.session_ensure(Scope::User(caller.user), new).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+    let scope = Scope::User(caller.user);
+    let project = new.project_id;
+    let id = store.session_ensure(scope, new).await?;
+    // What a sender needs to carry on: where to resume, and whether
+    // this project wants the rest of the conversation at all.
+    let next = store.message_next_ordinal(scope, id).await?;
+    let archive = archives(&store, scope, project).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "next_ordinal": next, "archive_transcripts": archive })),
+    ))
+}
+
+/// Does this project keep whole conversations, or only the turns a
+/// decision cites?
+async fn archives<S: Storage>(store: &S, scope: Scope, project: ProjectId) -> Result<bool> {
+    Ok(store
+        .project_get(scope, project)
+        .await?
+        .ok_or(StoreError::NotFound)?
+        .archive_transcripts)
 }
 
 async fn list<S: Storage>(
@@ -76,7 +95,21 @@ async fn append<S: Storage>(
     Path(id): Path<SessionId>,
     Json(new): Json<Vec<NewMessage>>,
 ) -> Result<(StatusCode, Json<Value>)> {
-    let ids = store.message_add(Scope::User(caller.user), id, new).await?;
+    let scope = Scope::User(caller.user);
+    let project = store
+        .session_get(scope, id)
+        .await?
+        .ok_or(StoreError::NotFound)?
+        .project_id;
+    if !archives(&store, scope, project).await? {
+        return Err(StoreError::Invalid(
+            "this project records only the turns a decision cites, not whole \
+             conversations"
+                .into(),
+        )
+        .into());
+    }
+    let ids = store.message_add(scope, id, new).await?;
     crate::metrics::evidence_messages("rest", ids.len());
     Ok((StatusCode::CREATED, Json(json!({ "ids": ids }))))
 }

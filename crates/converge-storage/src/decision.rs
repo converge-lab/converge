@@ -235,6 +235,10 @@ pub struct DecisionFilter {
     pub project: Option<ProjectId>,
     pub group: Option<GroupId>,
     pub status: Option<DecisionStatus>,
+    /// Only decisions the scope's user holds no receipt for, in any
+    /// session: "new for you". Ignored under `Scope::System`.
+    #[serde(default)]
+    pub unseen: bool,
 }
 
 /// One cited conversation in a decision's evidence — the read projection
@@ -290,6 +294,19 @@ pub trait Decisions {
         scope: Scope,
         id: DecisionId,
     ) -> impl Future<Output = Result<Option<Edges>, StoreError>> + Send;
+
+    /// Note that `session` of the scope's user was shown `ids` — the
+    /// same receipts the signals side keeps, for decisions. A harness
+    /// session's row is created on first sight; `session = ""` is the
+    /// person reading on the web. Ids the user cannot see are ignored.
+    /// `Scope::System` has no receipts — `Invalid`.
+    fn decision_receive(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[DecisionId],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The evidence read projection: cited sessions with their anchored
     /// messages and surrounding context, grouped and ordered. `None` when

@@ -275,8 +275,21 @@ mod api {
         };
         leptos::task::spawn_local(async move {
             let client = client();
-            let (edges, cited) =
-                futures::join!(client.decision_edges(did), client.decision_sources(did));
+            // Opening a decision is reading it: the receipt says so, and
+            // the badge stops counting it here and on every other device.
+            // `session = ""` is this person rather than an agent session.
+            let read = [did];
+            let (edges, cited, receipted) = futures::join!(
+                client.decision_edges(did),
+                client.decision_sources(did),
+                client.receive("", None, &[], &read)
+            );
+            // Only once the server holds the receipt: a badge that drops
+            // on a refused write comes back on the next load, and the
+            // count is the server's answer everywhere else.
+            if receipted.is_ok() {
+                crate::data::mark_read_local(store, &id);
+            }
             let edges = match edges {
                 Ok(Some(edges)) => edges,
                 result => {
@@ -344,14 +357,22 @@ mod api {
                 let (g_page, p_page, u_page, a_page, d_page, s_page) = Default::default();
                 let no_projects = ProjectFilter::default();
                 let no_decisions = DecisionFilter::default();
+                // The unread badge is the server's answer, not a fixture:
+                // decisions this user holds no receipt for, in any session.
+                let unseen_decisions = DecisionFilter {
+                    unseen: true,
+                    ..Default::default()
+                };
+                let (n_page,) = Default::default();
                 let no_signals = SignalFilter::default();
-                let (me, groups, projects, users, agents, decisions, signals) = futures::join!(
+                let (me, groups, projects, users, agents, decisions, unseen, signals) = futures::join!(
                     client.me(),
                     client.group_list(&g_page),
                     client.project_list(&no_projects, &p_page),
                     client.user_list(&u_page),
                     client.agent_list(&a_page),
                     client.decision_list(&no_decisions, &d_page),
+                    client.decision_list(&unseen_decisions, &n_page),
                     client.signal_list(&no_signals, &s_page),
                 );
                 let me = me.map_err(oops("Couldn't load identity"))?;
@@ -360,6 +381,7 @@ mod api {
                 let users = users.map_err(oops("Couldn't load users"))?;
                 let agents = agents.map_err(oops("Couldn't load agents"))?;
                 let decisions = decisions.map_err(oops("Couldn't load decisions"))?;
+                let unseen = unseen.map_err(oops("Couldn't load unread decisions"))?;
                 let signals = signals.map_err(oops("Couldn't load signals"))?;
 
                 // Remaining residue from the fixture seed (unread, extras,
@@ -408,7 +430,7 @@ mod api {
                         .map(|s| signal(s, &decisions.items))
                         .collect(),
                     decision_extras: extras,
-                    unread: mock.unread,
+                    unread: unseen.items.iter().map(|d| d.id.to_string()).collect(),
                     agent_context: mock.agent_context,
                 };
                 Ok(Rc::new(build_dataset(assembled)))
@@ -533,6 +555,7 @@ mod api {
             name: p.name.clone(),
             description: p.description.clone(),
             repository: p.repository.as_ref().map(|r| r.canonical()),
+            archive_transcripts: p.archive_transcripts,
             created_at: rfc3339(p.created_at),
         }
     }

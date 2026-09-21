@@ -56,6 +56,7 @@ fn run_search(
                 "rejected" => Some(DecisionStatus::Rejected),
                 _ => None,
             },
+            unseen: false,
         };
         let request = revision.get_untracked();
         leptos::task::spawn_local(async move {

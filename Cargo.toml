@@ -51,9 +51,13 @@ markdown = "1"
 
 # HTTP client — compiles native (rustls) and to wasm (browser fetch; the
 # TLS feature is target-gated away there).
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
-    "rustls-tls",
+    # 0.13 renamed the TLS feature and split query strings and form
+    # bodies out into their own features.
+    "form",
+    "query",
+    "rustls",
     # The expert's SSE answers ride a body stream (native and wasm).
     "stream",
 ] }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where s.status = 'proposed'\n                 and s.captured_at > $1\n                 and not exists (select 1 from signal_receipts r\n                                 where r.signal_id = s.id\n                                   and r.user_id = $2 and r.session = $3)\n                 and group_visible((select p.group_id from decisions d\n                                    join projects p on p.id = d.project_id\n                                    where d.id = s.source), $2)\n               order by s.id asc\n               limit $4",
+  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where s.status = 'proposed'\n                 and s.captured_at > $1\n                 and not exists (select 1 from signal_receipts r\n                                 where r.signal_id = s.id\n                                   and r.user_id = $2 and r.session = $3)\n                 and ($5::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $5)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $5))\n                 and group_visible((select p.group_id from decisions d\n                                    join projects p on p.id = d.project_id\n                                    where d.id = s.source), $2)\n               order by s.id asc\n               limit $4",
   "describe": {
     "columns": [
       {
@@ -101,7 +101,8 @@
         "Timestamptz",
         "Uuid",
         "Text",
-        "Int8"
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -121,5 +122,5 @@
       false
     ]
   },
-  "hash": "32b18a3bbeaf41a95cc3d21acd2ba4481f7eb060791cb998f2ba75b2538f7029"
+  "hash": "85f72447db1c5d68d68db5ef189d80108c92a9c46c7f5aebdbcaae0d168f8850"
 }

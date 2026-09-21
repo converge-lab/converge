@@ -349,7 +349,7 @@ pub struct Refreshed {
 
 impl Report {
     fn path() -> Option<PathBuf> {
-        Some(crate::watermark::state_dir()?.join("update-report.json"))
+        Some(crate::state::dir()?.join("update-report.json"))
     }
 
     fn save(&self) -> Result<()> {
@@ -517,6 +517,9 @@ mod tests {
 
     #[test]
     fn repair_refreshes_only_what_is_wired_and_keeps_a_snapshot() {
+        let _env = crate::state::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = temp();
         // Snapshots and the report live under the state dir.
         unsafe { std::env::set_var("XDG_STATE_HOME", &dir) };

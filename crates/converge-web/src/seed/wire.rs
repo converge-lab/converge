@@ -38,7 +38,16 @@ pub struct Project {
     /// Canonical repository name (`github.com/owner/name`), when known.
     #[serde(default)]
     pub repository: Option<String>,
+    /// Does this project keep whole conversations, or only the turns a
+    /// decision cites? A fixture that says nothing keeps them.
+    #[serde(default = "kept")]
+    pub archive_transcripts: bool,
     pub created_at: String,
+}
+
+/// A project keeps its conversations unless someone says otherwise.
+fn kept() -> bool {
+    true
 }
 
 /// User (`users` row, as served). `handle` is the natural key (a login /

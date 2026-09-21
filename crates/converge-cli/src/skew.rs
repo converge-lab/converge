@@ -54,7 +54,7 @@ pub async fn check_cached(client: &Client) -> Option<String> {
 }
 
 fn path() -> Option<PathBuf> {
-    Some(crate::watermark::state_dir()?.join("version.json"))
+    Some(crate::state::dir()?.join("version.json"))
 }
 
 fn load() -> Option<Cached> {

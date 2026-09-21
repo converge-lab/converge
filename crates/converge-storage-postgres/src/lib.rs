@@ -728,7 +728,7 @@ impl Projects for PgStorage {
     ) -> Result<Option<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, repository, created_at
+            r#"select id, group_id, name, description, repository, archive_transcripts, created_at
                from projects
                where id = $1
                  and ($2::uuid is null or group_visible(group_id, $2))"#,
@@ -749,7 +749,7 @@ impl Projects for PgStorage {
     ) -> Result<Vec<Project>, StoreError> {
         Ok(sqlx::query_as!(
             wire::ProjectRow,
-            r#"select id, group_id, name, description, repository, created_at
+            r#"select id, group_id, name, description, repository, archive_transcripts, created_at
                from projects
                where ($1::uuid is null or group_id = $1)
                  and ($3::uuid is null or id < $3)
@@ -776,6 +776,34 @@ impl Projects for PgStorage {
         edits: Vec<ProjectEdit>,
     ) -> Result<(), StoreError> {
         let uuid = Uuid::from(id.ulid());
+        // Whether whole conversations are kept is the group's call, not
+        // one member's: it decides what everyone else's sessions record.
+        // The rest of a project's fields are any member's to edit.
+        if edits
+            .iter()
+            .any(|e| matches!(e, ProjectEdit::SetArchiveTranscripts(_)))
+        {
+            let group = sqlx::query_scalar!(
+                r#"select group_id from projects
+                   where id = $1 and ($2::uuid is null or group_visible(group_id, $2))"#,
+                uuid,
+                viewer(scope),
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?
+            .ok_or(StoreError::NotFound)?;
+            // `owner_gate`'s own words are about membership; say what
+            // this refusal is actually about.
+            self.owner_gate(scope, wire::id(group))
+                .await
+                .map_err(|e| match e {
+                    StoreError::Invalid(_) => StoreError::Invalid(
+                        "only the group owner can change whether conversations are kept".into(),
+                    ),
+                    other => other,
+                })?;
+        }
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let held = sqlx::query!(
             r#"select id from projects
@@ -803,6 +831,15 @@ impl Projects for PgStorage {
                         "update projects set description = $2 where id = $1",
                         uuid,
                         description,
+                    )
+                    .execute(&mut *tx)
+                    .await
+                }
+                ProjectEdit::SetArchiveTranscripts(keep) => {
+                    sqlx::query!(
+                        "update projects set archive_transcripts = $2 where id = $1",
+                        uuid,
+                        keep,
                     )
                     .execute(&mut *tx)
                     .await
@@ -985,23 +1022,107 @@ impl Messages for PgStorage {
         let mut ids = Vec::with_capacity(new.len());
         for (offset, message) in new.into_iter().enumerate() {
             let id = MessageId::new();
-            sqlx::query!(
-                r#"insert into messages (id, session_id, seq, speaker, body, sent_at)
-                   values ($1, $2, $3, $4, $5, $6)"#,
+            // A turn that names its position is written once: the same
+            // position arriving again is the same turn, whoever sends
+            // it. The caller still gets an id back, so it can cite what
+            // it sent even when someone else recorded it first — and
+            // the id it gets back always names a row saying what it
+            // sent, see the conflict arm.
+            let written = sqlx::query_scalar!(
+                r#"insert into messages (id, session_id, seq, speaker, body, sent_at, ordinal)
+                   values ($1, $2, $3, $4, $5, $6, $7)
+                   on conflict (session_id, ordinal) where ordinal is not null do nothing
+                   returning id"#,
                 Uuid::from(id.ulid()),
                 session,
                 base + offset as i32,
                 message.speaker,
                 message.body,
                 message.sent_at,
+                message.ordinal,
             )
-            .execute(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(db_err)?;
-            ids.push(id);
+            match written {
+                Some(written) => ids.push(wire::id(written)),
+                // Something already holds that position. It is the same
+                // turn only if it says the same thing: a harness that
+                // rewrites its transcript in place shifts every position
+                // after the edit, and handing back the id of a row with
+                // different words would anchor a decision to a line
+                // nobody said. Such a turn is recorded as itself, with
+                // no position, and reads in arrival order.
+                None => {
+                    let held = sqlx::query!(
+                        "select id, body from messages where session_id = $1 and ordinal = $2",
+                        session,
+                        message.ordinal,
+                    )
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+                    if held.body == message.body {
+                        ids.push(wire::id(held.id));
+                    } else {
+                        let written = sqlx::query_scalar!(
+                            r#"insert into messages (id, session_id, seq, speaker, body, sent_at)
+                               values ($1, $2, $3, $4, $5, $6)
+                               returning id"#,
+                            Uuid::from(id.ulid()),
+                            session,
+                            base + offset as i32,
+                            message.speaker,
+                            message.body,
+                            message.sent_at,
+                        )
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                        ids.push(wire::id(written));
+                    }
+                }
+            }
         }
         tx.commit().await.map_err(db_err)?;
         Ok(ids)
+    }
+
+    async fn message_next_ordinal(
+        &self,
+        scope: Scope,
+        session: SessionId,
+    ) -> Result<i32, StoreError> {
+        let session = Uuid::from(session.ulid());
+        let found = sqlx::query_scalar!(
+            r#"select case
+                   -- Nothing positioned: a session recorded before turns
+                   -- carried one, where the count is what the sender had
+                   -- already sent.
+                   when count(m.ordinal) = 0 then count(m.*)::int
+                   -- The run from zero has not started.
+                   when count(*) filter (where m.ordinal = 0) = 0 then 0
+                   -- The first hole in that run: a decision's cited turns
+                   -- can be recorded long before the ones below them.
+                   else (select min(x.ordinal) + 1 from messages x
+                         where x.session_id = s.id and x.ordinal is not null
+                           and not exists (select 1 from messages y
+                                           where y.session_id = s.id
+                                             and y.ordinal = x.ordinal + 1))
+               end as "next!"
+               from sessions s
+               join projects p on p.id = s.project_id
+               left join messages m on m.session_id = s.id
+               where s.id = $1
+                 and ($2::uuid is null or group_visible(p.group_id, $2))
+               group by s.id"#,
+            session,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        found.ok_or(StoreError::NotFound)
     }
 
     async fn message_list(
@@ -1013,18 +1134,26 @@ impl Messages for PgStorage {
         // Conversation order — oldest first, the one forward-reading list;
         // the cursor returns rows strictly *after* it. An invisible
         // session reads as empty, same as an unknown one.
+        //
+        // The sort key is (position, arrival), not position alone. A
+        // turn recorded without a position keeps its `seq`, and a `seq`
+        // can equal another row's `ordinal`, so position alone is not
+        // unique — and a cursor stepping over a tie would skip a row
+        // for good. `seq` is unique per session, so the pair is total.
         Ok(sqlx::query_as!(
             wire::MessageRow,
             r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
                from messages m
                where m.session_id = $1
                  and ($2::uuid is null
-                      or m.seq > (select seq from messages where id = $2 and session_id = $1))
+                      or (coalesce(m.ordinal, m.seq), m.seq)
+                         > (select coalesce(ordinal, seq), seq from messages
+                            where id = $2 and session_id = $1))
                  and ($4::uuid is null
                       or group_visible((select p.group_id from sessions s
                                         join projects p on p.id = s.project_id
                                         where s.id = m.session_id), $4))
-               order by m.seq
+               order by coalesce(m.ordinal, m.seq), m.seq
                limit $3"#,
             Uuid::from(session.ulid()),
             page.cursor.map(|c| Uuid::from(c.ulid())),
@@ -1267,6 +1396,9 @@ impl Decisions for PgStorage {
                  and ($3::decision_status is null or d.status = $3)
                  and ($5::uuid is null or d.id < $5)
                  and ($6::uuid is null or group_visible(d.group_id, $6))
+                 and ($7::uuid is null
+                      or not exists (select 1 from decision_receipts r
+                                     where r.decision_id = d.id and r.user_id = $7))
                order by d.id desc
                limit $4"#,
             filter.project.map(|p| Uuid::from(p.ulid())),
@@ -1275,6 +1407,7 @@ impl Decisions for PgStorage {
             page.limit.map(i64::from),
             page.cursor.map(|c| Uuid::from(c.ulid())),
             viewer(scope),
+            if filter.unseen { viewer(scope) } else { None },
         )
         .fetch_all(&self.pool)
         .await
@@ -1332,6 +1465,9 @@ impl Decisions for PgStorage {
                  and ($3::uuid is null or d.group_id = $3)
                  and ($4::decision_status is null or d.status = $4)
                  and ($6::uuid is null or group_visible(d.group_id, $6))
+                 and ($7::uuid is null
+                      or not exists (select 1 from decision_receipts r
+                                     where r.decision_id = d.id and r.user_id = $7))
                order by ts_rank_cd(d.search, websearch_to_tsquery('english', $1)) desc,
                         d.id desc
                limit $5"#,
@@ -1341,6 +1477,10 @@ impl Decisions for PgStorage {
             status as Option<PgStatus>,
             limit.map(i64::from),
             viewer(scope),
+            // "New for you" narrows a search the same way it narrows a
+            // listing; ignoring it here answered "everything" to a
+            // question about what is unread.
+            if filter.unseen { viewer(scope) } else { None },
         )
         .fetch_all(&self.pool)
         .await
@@ -1406,6 +1546,45 @@ impl Decisions for PgStorage {
         tx.commit().await.map_err(db_err)
     }
 
+    async fn decision_receive(
+        &self,
+        scope: Scope,
+        session: &str,
+        harness: Option<&str>,
+        ids: &[DecisionId],
+    ) -> Result<(), StoreError> {
+        let Some(user) = viewer(scope) else {
+            return Err(StoreError::Invalid(
+                "a receipt is per user; System has none".into(),
+            ));
+        };
+        let session = session.trim();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        if !session.is_empty() {
+            session_row(&mut tx, user, session, harness).await?;
+        }
+        if !ids.is_empty() {
+            let ids: Vec<Uuid> = ids.iter().map(|id| Uuid::from(id.ulid())).collect();
+            // Only what the user can see, as on the signals side: a
+            // receipt for an invisible decision would be a claim about
+            // something they were never shown.
+            sqlx::query!(
+                r#"insert into decision_receipts (decision_id, user_id, session)
+                   select d.id, $2, $3 from decisions d
+                   join projects p on p.id = d.project_id
+                   where d.id = any($1) and group_visible(p.group_id, $2)
+                   on conflict do nothing"#,
+                &ids[..],
+                user,
+                session,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        tx.commit().await.map_err(db_err)
+    }
+
     async fn decision_sources(
         &self,
         scope: Scope,
@@ -1441,8 +1620,10 @@ impl Decisions for PgStorage {
         }
 
         // The whole excerpt set in one pass: every message within CONTEXT
-        // of any anchor of this decision, in (session, seq) order —
-        // overlapping windows deduplicate for free.
+        // of any anchor of this decision, in conversation order —
+        // overlapping windows deduplicate for free. The position is the
+        // turn's own where it has one, so a window reads in order even
+        // when its turns reached the server out of order.
         let windows = sqlx::query_as!(
             wire::MessageRow,
             r#"select m.id, m.session_id, m.seq, m.speaker, m.body, m.sent_at, m.captured_at
@@ -1453,9 +1634,11 @@ impl Decisions for PgStorage {
                    join messages a on a.id = e.message_id
                    where e.decision_id = $1
                      and a.session_id = m.session_id
-                     and m.seq between a.seq - $2 and a.seq + $2
+                     and coalesce(m.ordinal, m.seq)
+                         between coalesce(a.ordinal, a.seq) - $2
+                             and coalesce(a.ordinal, a.seq) + $2
                )
-               order by m.session_id, m.seq"#,
+               order by m.session_id, coalesce(m.ordinal, m.seq), m.seq"#,
             uuid,
             CONTEXT,
         )
@@ -1883,6 +2066,7 @@ impl Signals for PgStorage {
         scope: Scope,
         session: &str,
         harness: Option<&str>,
+        project: Option<ProjectId>,
         limit: u32,
     ) -> Result<Vec<Signal>, StoreError> {
         let Some(user) = viewer(scope) else {
@@ -1917,7 +2101,10 @@ impl Signals for PgStorage {
             return Ok(Vec::new());
         }
         // Same visibility predicate as every other signal read: the
-        // source decision's group, seen by this user.
+        // source decision's group, seen by this user — and, when the
+        // caller says which project it is working in, the same either-end
+        // reach `signal_list` has, so a session is never handed (and so
+        // never consumes) a signal about a project it is not in.
         let mut signals = sqlx::query_as!(
             wire::SignalRow,
             r#"select s.id, s.source, s.kind, s.tier as "tier: _", s.status as "status: _",
@@ -1930,6 +2117,12 @@ impl Signals for PgStorage {
                  and not exists (select 1 from signal_receipts r
                                  where r.signal_id = s.id
                                    and r.user_id = $2 and r.session = $3)
+                 and ($5::uuid is null
+                      or exists (select 1 from decisions d
+                                 where d.id = s.source and d.project_id = $5)
+                      or exists (select 1 from signal_targets t
+                                 join decisions d on d.id = t.target
+                                 where t.signal_id = s.id and d.project_id = $5))
                  and group_visible((select p.group_id from decisions d
                                     join projects p on p.id = d.project_id
                                     where d.id = s.source), $2)
@@ -1939,6 +2132,7 @@ impl Signals for PgStorage {
             user,
             session,
             i64::from(limit),
+            project.map(|p| Uuid::from(p.ulid())),
         )
         .fetch_all(&mut *tx)
         .await

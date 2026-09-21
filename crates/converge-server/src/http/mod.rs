@@ -14,6 +14,7 @@ mod expert;
 mod group;
 mod oauth;
 mod project;
+mod receipts;
 mod session;
 mod signal;
 mod signin;
@@ -63,6 +64,7 @@ pub fn app<S: Storage + 'static>(
         .merge(expert::routes().with_state((store.clone(), expert.clone())))
         .merge(evidence::routes().with_state(store.clone()))
         .merge(signal::routes().with_state(store.clone()))
+        .merge(receipts::routes().with_state(store.clone()))
         .merge(agent::routes().with_state(store.clone()))
         .merge(device::routes().with_state(store.clone()))
         .merge(token::routes().with_state(store.clone()))

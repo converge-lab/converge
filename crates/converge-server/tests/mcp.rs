@@ -671,3 +671,124 @@ async fn code_evidence_rides_the_mcp_door() {
     );
     assert_eq!(got["decision"]["evidence"], json!([]));
 }
+
+/// One call, for an agent with nothing else recording the conversation:
+/// the exchange rides on `decision_add`, and the sync that comes later
+/// with the whole conversation does not copy what is already there.
+#[tokio::test]
+async fn a_decision_can_carry_its_own_exchange() {
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let (_, project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group["id"], "name": "p", "description": null })),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap();
+
+    // No session_ensure, no message_add, no ids to carry: the turns and
+    // the conversation they belong to come with the decision.
+    let decision = call(
+        &app,
+        "decision_add",
+        json!({
+            "project_id": project,
+            "title": "Cite the exchange inline",
+            "summary": "One call.",
+            "conversation": { "external": "agent-7", "title": "the conversation" },
+            "evidence_turns": [
+                { "speaker": "maksim", "body": "which way?", "ordinal": 4 },
+                { "speaker": "agent", "body": "this way, because…", "ordinal": 5 },
+            ],
+        }),
+    )
+    .await["decision_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let got = call(&app, "decision_get", json!({ "decision_id": decision })).await;
+    let cited: Vec<&str> = got["decision"]["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(cited.len(), 2, "{got}");
+
+    // The same conversation, synced in full afterwards: the two turns
+    // already recorded keep their ids, and the decision still points at
+    // the lines it cited.
+    let sid = call(
+        &app,
+        "session_ensure",
+        json!({ "project_id": project, "external": "agent-7", "title": "the conversation" }),
+    )
+    .await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let ids = call(
+        &app,
+        "message_add",
+        json!({ "session_id": sid, "messages": [
+            { "speaker": "maksim", "body": "before", "ordinal": 3 },
+            { "speaker": "maksim", "body": "which way?", "ordinal": 4 },
+            { "speaker": "agent", "body": "this way, because…", "ordinal": 5 },
+            { "speaker": "maksim", "body": "after", "ordinal": 6 },
+        ]}),
+    )
+    .await["message_ids"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let ids: Vec<&str> = ids.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(cited.contains(&ids[1]), "{ids:?} vs {cited:?}");
+    assert!(cited.contains(&ids[2]), "{ids:?} vs {cited:?}");
+
+    // Four turns on record, in conversation order, each once.
+    let (_, sources) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{decision}/sources"),
+        None,
+    )
+    .await;
+    let bodies: Vec<&str> = sources[0]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["body"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        bodies,
+        vec!["before", "which way?", "this way, because…", "after"],
+        "{sources}"
+    );
+
+    // Turns without the conversation they belong to are a caller error.
+    let orphan = rpc(
+        &app,
+        "tools/call",
+        json!({ "name": "decision_add", "arguments": {
+            "project_id": project, "title": "t", "summary": "s",
+            "evidence_turns": [{ "speaker": "a", "body": "b", "ordinal": 0 }],
+        }}),
+    )
+    .await;
+    let refusal = orphan["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+        + orphan["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+    assert!(refusal.contains("conversation"), "{orphan}");
+}

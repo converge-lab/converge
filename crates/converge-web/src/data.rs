@@ -136,6 +136,9 @@ pub struct ProjectInfo {
     pub description: Option<String>,
     /// Canonical repository name, when a bind has recorded one.
     pub repository: Option<String>,
+    /// Whole conversations are kept here, not only the turns decisions
+    /// cite.
+    pub archive_transcripts: bool,
 }
 
 /// The signed-in account.
@@ -410,6 +413,7 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                 name: p.name.clone(),
                 description: p.description.clone(),
                 repository: p.repository.clone(),
+                archive_transcripts: p.archive_transcripts,
             })
             .collect(),
         decisions,
@@ -592,6 +596,7 @@ pub fn add_project_local(
         name,
         description,
         repository: None,
+        archive_transcripts: true,
     });
     if let Some(g) = ds.groups.iter_mut().find(|g| g.id == group_id) {
         g.project_ids.push(id);
@@ -719,6 +724,27 @@ pub fn proj_repository(pid: &str) -> Option<String> {
         .and_then(|p| p.repository.clone())
 }
 
+/// Does this project keep whole conversations?
+pub fn proj_archives(pid: &str) -> bool {
+    ds().projects
+        .iter()
+        .find(|p| p.id == pid)
+        .is_none_or(|p| p.archive_transcripts)
+}
+
+/// Flip the local copy after the server has agreed.
+pub fn set_proj_archives_local(store: AppStore, id: &str, keep: bool) {
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let mut ds = (*cur).clone();
+    if let Some(p) = ds.projects.iter_mut().find(|p| p.id == id) {
+        p.archive_transcripts = keep;
+    }
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
 pub fn proj_desc(pid: &str) -> String {
     ds().projects
         .iter()
@@ -778,6 +804,21 @@ pub fn project_decisions(pid: &str) -> Vec<Rc<Dec>> {
         .filter(|d| d.project_id == pid)
         .cloned()
         .collect()
+}
+
+/// Drop a decision's unread mark here, now that the server holds its
+/// receipt: the badge should fall the moment it is opened, not at the
+/// next boot.
+pub fn mark_read_local(store: AppStore, id: &str) {
+    let Some(cur) = store.dataset().get_untracked() else {
+        return;
+    };
+    if !cur.unread.iter().any(|x| x == id) {
+        return;
+    }
+    let mut ds = (*cur).clone();
+    ds.unread.retain(|x| x != id);
+    store.dataset().set(Some(Rc::new(ds)));
 }
 
 pub fn is_unread(id: &str) -> bool {

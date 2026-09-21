@@ -30,14 +30,15 @@ use std::process::Command;
 
 use anyhow::Result;
 use converge_client::{
-    DecisionFilter, MessageId, Pagination, ProjectId, Signal, SignalFilter, SignalId, SignalStatus,
-    Tier,
+    DecisionFilter, DecisionId, Pagination, ProjectId, Signal, SignalFilter, SignalId,
+    SignalStatus, Tier,
 };
 use serde_json::{Value, json};
 
 use crate::config::Config;
 use crate::harness::{Effect, Harness, Kind, Payload, Response};
 use crate::marker::{self, State};
+use crate::transcript::Turn;
 
 /// Whatever the harness put on stdin, before it means anything.
 fn raw() -> Value {
@@ -205,7 +206,17 @@ right away."
 /// What the bound block fetches: the project name, the decision index
 /// lines, and the open signals. `None` = the server answered but
 /// doesn't know the project for this account.
-type Index = Option<(String, Vec<String>, Vec<Open>)>;
+type Index = Option<(String, Vec<Recorded>, Vec<Open>)>;
+
+/// A decision as the block lists it.
+#[derive(Debug, Clone, PartialEq)]
+struct Recorded {
+    id: DecisionId,
+    title: String,
+    status: String,
+    /// Never shown to this user before, in any session on any machine.
+    new: bool,
+}
 
 /// An open signal as the block shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +230,25 @@ struct Open {
     new: bool,
 }
 
+/// The decision lines: what is new to this reader leads, newest first
+/// within each half, so a session start opens on what changed.
+fn lines_of_decisions(decisions: &[Recorded]) -> String {
+    let mut shown: Vec<&Recorded> = decisions.iter().collect();
+    shown.sort_by_key(|d| (std::cmp::Reverse(d.new), std::cmp::Reverse(d.id)));
+    shown
+        .iter()
+        .map(|d| {
+            format!(
+                "- {} [{}]{}",
+                d.title,
+                d.status,
+                if d.new { " ← NEW" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The bound block and its visible line, from what the server said.
 /// Pure, so the wording and the order are testable without a server.
 /// This listing is deliberately unfiltered by receipts: it is the one
@@ -226,11 +256,12 @@ struct Open {
 fn render(
     project: ProjectId,
     name: &str,
-    decisions: &[String],
+    decisions: &[Recorded],
     signals: &[Open],
 ) -> (String, String) {
     let is_new = |s: &Open| s.new;
     let new = signals.iter().filter(|s| is_new(s)).count();
+    let new_decisions = decisions.iter().filter(|d| d.new).count();
     let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
     // The list limits cap what we can count; say "N+" at the cap
     // instead of understating a bigger corpus as exactly N.
@@ -254,8 +285,12 @@ fn render(
         format!(" ({})", detail.join(", "))
     };
     let system = format!(
-        "Converge: \"{name}\" — {} decision(s), {} open signal(s){detail} ✓",
+        "Converge: \"{name}\" — {} decision(s){}, {} open signal(s){detail} ✓",
         counted(decisions.len(), 30),
+        match new_decisions {
+            0 => String::new(),
+            n => format!(" ({n} new)"),
+        },
         counted(signals.len(), 10),
     );
     let mut block = if decisions.is_empty() {
@@ -274,8 +309,13 @@ fn render(
              project memory is active. Decisions below are in force — \
              `decision_get` for the full record before re-deciding a \
              settled topic; `decision_add` (with `supersedes`/`evidence`) \
-             when a new decision lands.\n\nDecisions:\n{}",
-            decisions.join("\n")
+             when a new decision lands.\n\nDecisions{}:\n{}",
+            if new_decisions > 0 {
+                " (← NEW = not shown to you before, in any session)"
+            } else {
+                ""
+            },
+            lines_of_decisions(decisions),
         )
     };
     if !signals.is_empty() {
@@ -443,49 +483,55 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
             return Ok(None);
         };
         let name = found.name;
-        let decisions = client
-            .decision_list(
-                &DecisionFilter {
-                    project: Some(project),
-                    ..Default::default()
-                },
-                &Pagination {
-                    limit: Some(30),
-                    cursor: None,
-                },
-            )
-            .await?
-            .items
-            .iter()
-            .map(|d| {
-                format!(
-                    "- {} [{}]",
-                    d.title,
-                    format!("{:?}", d.status).to_lowercase()
-                )
-            })
-            .collect();
-        // The open signals, and which of them this user has never been
-        // shown: two reads of one list, the second narrowed by receipts.
+        // Both lists, and for each the half this user has never been
+        // shown: four reads in one round trip's worth of waiting, and
+        // the marks fall out of the difference rather than any local
+        // file, so they are the same on every machine.
+        let recorded = DecisionFilter {
+            project: Some(project),
+            ..Default::default()
+        };
+        let recorded_unseen = DecisionFilter {
+            unseen: true,
+            ..recorded.clone()
+        };
         let open = SignalFilter {
             project: Some(project),
             status: Some(SignalStatus::Proposed),
             ..Default::default()
         };
-        let unseen = SignalFilter {
+        let open_unseen = SignalFilter {
             unseen: true,
             ..open.clone()
         };
-        let page = Pagination {
+        let thirty = Pagination {
+            limit: Some(30),
+            cursor: None,
+        };
+        let ten = Pagination {
             limit: Some(10),
             cursor: None,
         };
-        let (listed, fresh) = tokio::try_join!(
-            client.signal_list(&open, &page),
-            client.signal_list(&unseen, &page)
+        let (all_decisions, new_decisions, listed, fresh) = tokio::try_join!(
+            client.decision_list(&recorded, &thirty),
+            client.decision_list(&recorded_unseen, &thirty),
+            client.signal_list(&open, &ten),
+            client.signal_list(&open_unseen, &ten)
         )?;
+        let new_decisions: BTreeSet<DecisionId> =
+            new_decisions.items.iter().map(|d| d.id).collect();
+        let decisions: Vec<Recorded> = all_decisions
+            .items
+            .iter()
+            .map(|d| Recorded {
+                id: d.id,
+                title: d.title.clone(),
+                status: format!("{:?}", d.status).to_lowercase(),
+                new: new_decisions.contains(&d.id),
+            })
+            .collect();
         let fresh: BTreeSet<SignalId> = fresh.items.iter().map(|s| s.id).collect();
-        let signals = listed
+        let signals: Vec<Open> = listed
             .items
             .iter()
             .map(|s| Open {
@@ -510,6 +556,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
     // this call too, and the budget already spent its patience.
     let fetch_ok = fetched.is_ok();
     let mut listed: Vec<SignalId> = Vec::new();
+    let mut listed_decisions: Vec<DecisionId> = Vec::new();
     let (block, system, degraded) = match fetched {
         Ok(None) => {
             // The server disowned the project; a lingering cached index
@@ -536,6 +583,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
         }
         Ok(Some((name, decisions, signals))) => {
             listed = signals.iter().map(|s| s.id).collect();
+            listed_decisions = decisions.iter().map(|d| d.id).collect();
             let (block, system) = render(project, &name, &decisions, &signals);
             // Last-good cache: written on success, served on failure.
             // A ghost binding (Ok(None)) clears it instead — the server
@@ -607,7 +655,7 @@ async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (Str
     if let (Ok(client), Some(session), true) = (&client, session, fetch_ok) {
         let _ = tokio::time::timeout(
             RECEIPT_BUDGET,
-            client.signal_receive(session, Some(harness), &listed),
+            client.receive(session, Some(harness), &listed, &listed_decisions),
         )
         .await;
     }
@@ -637,13 +685,15 @@ const POLL_CLAIM: u32 = 3;
 pub async fn poll(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     let payload = harness.parse(&raw());
-    // Only a bound project has signals to hear about.
-    let Ok(State::Bound { .. }) = marker::find(&payload.cwd) else {
+    // Only a bound project has signals to hear about — and only this
+    // project's: a claim consumes, so a signal handed to a session
+    // working somewhere else is one this session never hears.
+    let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) else {
         return Ok(());
     };
     // The ledger is keyed by session: a harness that sends none cannot
     // be polled for without repeating itself.
-    let Some(session) = payload.session.filter(|s| !s.trim().is_empty()) else {
+    let Some(session) = payload.session.clone().filter(|s| !s.trim().is_empty()) else {
         return Ok(());
     };
     let now = crate::poll::now();
@@ -659,7 +709,12 @@ pub async fn poll(kind: Kind) -> Result<()> {
         Ok(client) => {
             match tokio::time::timeout(
                 POLL_BUDGET,
-                client.signal_claim(&session, Some(kind.flag()), POLL_CLAIM),
+                client.signal_claim(
+                    &session,
+                    Some(kind.flag()),
+                    Some(ProjectId::from(project.ulid())),
+                    POLL_CLAIM,
+                ),
             )
             .await
             {
@@ -685,6 +740,10 @@ pub async fn poll(kind: Kind) -> Result<()> {
     };
     stamps.record(&session, now, failed, shown.len());
     let _ = stamps.save();
+    // The same gate that paces the poll paces the evidence backlog: a
+    // bounded, oldest-first pass in a process of its own, so a decision
+    // recorded later in this session finds its conversation already on
+    // the server and has almost nothing left to send.
     if shown.is_empty() {
         return Ok(());
     }
@@ -763,7 +822,7 @@ pub async fn sync(kind: Kind) -> Result<()> {
     let harness = kind.harness();
     // Best effort throughout: a sync problem must never surface as a
     // session failure. The quiet paths just return.
-    if let Err(e) = try_sync(harness).await {
+    if let Err(e) = try_sync(kind).await {
         respond(
             harness,
             Response::Notice {
@@ -774,91 +833,87 @@ pub async fn sync(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-async fn try_sync(harness: &dyn Harness) -> Result<()> {
+async fn try_sync(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
     let payload = harness.parse(&raw());
     // Only bound repos sync; unbound and disabled stay quiet.
-    let State::Bound { project, .. } = marker::find(&payload.cwd)? else {
+    let State::Bound { .. } = marker::find(&payload.cwd)? else {
         return Ok(());
     };
-    let added = push_transcript(harness, &payload, project).await?.len();
+    let Some(at) = payload.transcript.as_ref() else {
+        return Ok(());
+    };
+    // The whole conversation, once, at the end: nothing during the
+    // session waits on it, and a project that keeps no archive answers
+    // for itself.
+    let crate::archive::Sent { sent: added, left } =
+        crate::archive::pass(kind, &payload.cwd, at, ARCHIVE_CAP).await?;
     if added > 0 {
         respond(
             harness,
             Response::Notice {
-                system: format!("Converge: synced {added} message(s) to evidence ✓"),
+                system: match left {
+                    0 => format!("Converge: recorded {added} message(s) ✓"),
+                    // One pass per session end, so what is over the cap
+                    // is not "yet to come" — say so rather than promise.
+                    n => format!(
+                        "Converge: recorded {added} message(s) ✓ \
+                         ({n} beyond this pass, not recorded)"
+                    ),
+                },
             },
         );
     }
     Ok(())
 }
 
-/// Push what the transcript holds that the server does not yet, and
-/// return the ids it got. Watermarked, so calling it twice sends nothing
-/// twice: the session-end sync and a `decision_add` in mid-session share
-/// it, and what the second returns is exactly the turns since the last
-/// push — the conversation that led to the decision. Empty when the
-/// harness records nothing readable, or the content has no session id
-/// to key on.
-async fn push_transcript(
-    harness: &dyn Harness,
-    payload: &Payload,
-    project: ProjectId,
-) -> Result<Vec<MessageId>> {
-    let Some(transcript) = payload.transcript.as_ref() else {
-        return Ok(Vec::new());
-    };
-    let parsed = harness.transcript(transcript)?;
-    let Some(external) = parsed.session_id.clone() else {
-        return Ok(Vec::new());
-    };
+/// The exchange a decision cites, taken straight from the transcript
+/// and carried in the call itself.
+///
+/// Nothing is sent from here: the turns ride along with `decision_add`
+/// and the server records them, and because each one names its position
+/// the drain can send the same turns later without making a second
+/// copy. So the pre-tool hook touches no network, cannot time out, and
+/// cannot leave a decision with nothing to cite.
+struct Exchange {
+    /// The harness's own id for the conversation.
+    external: String,
+    title: String,
+    /// Each turn at its position in the conversation.
+    turns: Vec<(usize, Turn)>,
+}
 
-    let mut marks = crate::watermark::Watermarks::load()?;
-    let key = transcript.key();
-    // What has not been pushed yet — by message id where the harness has
-    // them (a transcript edited in place still syncs right), by count
-    // otherwise, where a shrunk transcript sends nothing rather than
-    // duplicates.
-    let fresh = marks.pending(&key, &parsed.turns);
-    if fresh.is_empty() {
-        marks.done(&key, &parsed.turns);
-        marks.save()?;
-        return Ok(Vec::new());
-    }
-
-    let config = Config::load()?;
-    let client = config.client()?;
-
-    let session = client
-        .session_ensure(&converge_client::NewSession {
-            project_id: project,
-            kind: converge_client::SessionKind::Transcript,
-            external,
-            title: crate::transcript::title(&parsed.turns, &format!("{} session", harness.label())),
-        })
-        .await?;
-    let messages: Vec<_> = fresh
-        .iter()
-        .map(|t| converge_client::NewMessage {
-            speaker: t.speaker.clone(),
-            body: t.body.clone(),
-            sent_at: t.sent_at,
-        })
+fn exchange(kind: Kind, payload: &Payload) -> Option<Exchange> {
+    let at = payload.transcript.as_ref()?;
+    let parsed = kind.harness().transcript(at).ok()?;
+    let external = parsed.session_id.clone()?;
+    let title = crate::transcript::title(
+        &parsed.turns,
+        &format!("{} session", kind.harness().label()),
+    );
+    let from = parsed.turns.len().saturating_sub(CITED_TURNS);
+    let turns: Vec<(usize, Turn)> = parsed
+        .turns
+        .into_iter()
+        .enumerate()
+        .skip(from)
+        .filter(|(_, t)| !t.body.trim().is_empty())
         .collect();
-    let ids = client.message_add(session, &messages).await?;
-
-    marks.done(&key, &parsed.turns);
-    marks.save()?;
-    Ok(ids)
+    (!turns.is_empty()).then_some(Exchange {
+        external,
+        title,
+        turns,
+    })
 }
 
 // ─── pre-tool: context collector ──────────────────────────────────────────
 
-/// The budget for putting the conversation on record before a
-/// `decision_add`: a few turns to the server. Past it, the call goes
-/// through as the model made it and the server says what is missing.
-const CTX_BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
 /// How many of the turns since the last push a decision cites.
 const CITED_TURNS: usize = 10;
+/// Turns one session end will record. A conversation longer than this
+/// keeps the rest for the next end — the archive is nobody's critical
+/// path.
+const ARCHIVE_CAP: usize = 5_000;
 
 pub async fn ctx(kind: Kind) -> Result<()> {
     let harness = kind.harness();
@@ -890,15 +945,11 @@ pub async fn ctx(kind: Kind) -> Result<()> {
         .as_deref()
         .is_some_and(|tool| tool.ends_with("decision_add"))
     {
-        if let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) {
-            match tokio::time::timeout(CTX_BUDGET, push_transcript(harness, &payload, project))
-                .await
-            {
-                Ok(Ok(ids)) => cite(&mut merged, &ids),
-                Ok(Err(e)) => notes.push(format!("evidence not recorded — {e}")),
-                Err(_) => notes.push(format!(
-                    "evidence not recorded — sync exceeded {CTX_BUDGET:?}"
-                )),
+        if let Ok(State::Bound { .. }) = marker::find(&payload.cwd) {
+            match exchange(kind, &payload) {
+                Some(exchange) => cite(&mut merged, &exchange),
+                None => notes
+                    .push("no conversation to cite — this harness records none here".to_string()),
             }
         }
         // Code citations are filled in here too: a bare `path:lines` is
@@ -926,27 +977,25 @@ pub async fn ctx(kind: Kind) -> Result<()> {
     Ok(())
 }
 
-/// Cite the newest of `ids` on the call, merged with what the model
-/// cited itself, without duplicates.
-fn cite(merged: &mut Value, ids: &[MessageId]) {
-    let mut evidence: Vec<String> = merged["evidence"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let newest = ids.len().saturating_sub(CITED_TURNS);
-    for id in &ids[newest..] {
-        let id = id.to_string();
-        if !evidence.contains(&id) {
-            evidence.push(id);
-        }
-    }
-    if !evidence.is_empty() {
-        merged["evidence"] = json!(evidence);
-    }
+/// Put the exchange on the call: the conversation it belongs to and
+/// the turns themselves, each with its position, so the server records
+/// them once and anchors the decision to them. What the model cited
+/// itself stays exactly as it wrote it, beside these.
+fn cite(merged: &mut Value, exchange: &Exchange) {
+    merged["conversation"] = json!({ "external": exchange.external, "title": exchange.title });
+    merged["evidence_turns"] = Value::Array(
+        exchange
+            .turns
+            .iter()
+            .map(|(at, turn)| {
+                json!({
+                    "speaker": turn.speaker,
+                    "body": turn.body,
+                    "ordinal": i32::try_from(*at).unwrap_or(i32::MAX),
+                })
+            })
+            .collect(),
+    );
 }
 
 /// Keep only code anchors that carry every field; return how many went.
@@ -1111,6 +1160,55 @@ mod tests {
         }
     }
 
+    fn recorded(id: &str, title: &str, new: bool) -> Recorded {
+        Recorded {
+            id: id.parse().unwrap(),
+            title: title.into(),
+            status: "accepted".into(),
+            new,
+        }
+    }
+
+    #[test]
+    fn render_marks_decisions_the_user_was_never_shown() {
+        let project: ProjectId = "01J00000000000000000000000".parse().unwrap();
+        let old = recorded("01J0000000000000000000000A", "settled last week", false);
+        let fresh = recorded("01J0000000000000000000000B", "settled today", true);
+        let decisions = [old, fresh];
+
+        let (block, system) = render(project, "p", &decisions, &[]);
+        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- ")).collect();
+        // What this reader has not seen leads, and says so once.
+        assert_eq!(
+            lines,
+            [
+                "- settled today [accepted] ← NEW",
+                "- settled last week [accepted]"
+            ]
+        );
+        assert!(
+            block.contains("Decisions (← NEW = not shown to you before"),
+            "{block}"
+        );
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 2 decision(s) (1 new), 0 open signal(s) ✓"
+        );
+
+        // Nothing new: no mark, no legend, no parenthetical.
+        let seen: Vec<Recorded> = decisions
+            .iter()
+            .cloned()
+            .map(|d| Recorded { new: false, ..d })
+            .collect();
+        let (block, system) = render(project, "p", &seen, &[]);
+        assert!(!block.contains("NEW"), "{block}");
+        assert_eq!(
+            system,
+            "Converge: \"p\" — 2 decision(s), 0 open signal(s) ✓"
+        );
+    }
+
     #[test]
     fn render_marks_what_the_user_was_never_shown() {
         let project: ProjectId = "01J00000000000000000000000".parse().unwrap();
@@ -1118,7 +1216,7 @@ mod tests {
         let mid = open("01J00000000000000000000002", Tier::Watch, "mid", false);
         let hi = open("01J00000000000000000000003", Tier::Coordinate, "hi", true);
         let signals = [lo.clone(), mid.clone(), hi.clone()];
-        let decisions = ["- one [accepted]".to_string()];
+        let decisions = [recorded("01J0000000000000000000000A", "one", false)];
 
         // Only `hi` has no receipt: it is new and leads; the conflict
         // leads the rest; the visible line counts both.
@@ -1222,22 +1320,40 @@ mod tests {
     }
 
     #[test]
-    fn evidence_is_cited_newest_first_and_incomplete_code_is_dropped() {
-        let ids: Vec<MessageId> = (0..12).map(|_| MessageId::new()).collect();
-        let mut call = json!({ "title": "t", "evidence": [ids[11].to_string(), "01J00000000000000000000009"] });
-        cite(&mut call, &ids);
-        let cited: Vec<&str> = call["evidence"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
+    fn the_exchange_rides_on_the_call_and_incomplete_code_is_dropped() {
+        let turns: Vec<(usize, Turn)> = (3..6)
+            .map(|at| {
+                (
+                    at,
+                    Turn {
+                        speaker: "user".into(),
+                        body: format!("turn {at}"),
+                        sent_at: None,
+                    },
+                )
+            })
             .collect();
-        // The model's own citations stay first; the newest ten follow,
-        // the one already cited not twice.
-        assert_eq!(cited.len(), 2 + CITED_TURNS - 1);
-        assert_eq!(cited[0], ids[11].to_string());
-        assert!(!cited.contains(&ids[0].to_string().as_str()));
-        assert!(cited.contains(&ids[2].to_string().as_str()));
+        let mut call = json!({ "title": "t", "evidence": ["01J00000000000000000000009"] });
+        cite(
+            &mut call,
+            &Exchange {
+                external: "sess-1".into(),
+                title: "A session".into(),
+                turns,
+            },
+        );
+        // The conversation the turns belong to is named once…
+        assert_eq!(call["conversation"]["external"], "sess-1");
+        assert_eq!(call["conversation"]["title"], "A session");
+        // …and each turn carries its position, so the drain can send the
+        // same turn later without making a second copy of it.
+        let sent = call["evidence_turns"].as_array().unwrap();
+        assert_eq!(sent.len(), 3);
+        assert_eq!(sent[0]["ordinal"], 3);
+        assert_eq!(sent[0]["speaker"], "user");
+        assert_eq!(sent[2]["body"], "turn 5");
+        // What the model cited itself stays exactly as it wrote it.
+        assert_eq!(call["evidence"], json!(["01J00000000000000000000009"]));
 
         let mut call = json!({ "code_evidence": [
             { "path": "a.rs", "lines": [1, 2] },

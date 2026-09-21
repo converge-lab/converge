@@ -2,11 +2,11 @@
 //! structure is learned once: form on top, destructive actions fenced at the
 //! bottom.
 //!
-//! Name and description are real edits (`PATCH /projects/{id}`). Group (moving
-//! a project) and archive/delete are drawn but inert — `ProjectEdit` carries
-//! only name and description, and nothing behind the other two exists yet.
+//! Name, description and whether whole conversations are kept are real edits
+//! (`PATCH /projects/{id}`). Group (moving a project) and retiring a project
+//! are drawn but inert — nothing behind either exists yet.
 
-use converge_ui::atoms::{Button, ButtonVariant};
+use converge_ui::atoms::{Button, ButtonVariant, Select};
 use converge_ui::domain::Tone;
 use leptos::prelude::*;
 
@@ -17,6 +17,9 @@ use crate::{data, mutate};
 #[component]
 pub fn ProjectSettings(pid: String) -> impl IntoView {
     let saving = ActionState::new();
+    // Its own state: the switch saves on change, so it must not borrow
+    // the form's "saving" and leave the Save button looking busy.
+    let switching = ActionState::new();
     let (name, set_name) = signal(data::proj_name(&pid));
     let (desc, set_desc) = signal(data::proj_desc(&pid));
     let (flash, set_flash) = signal(None::<String>);
@@ -27,6 +30,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
     let group = data::proj_group_name(&pid);
     let title = data::proj_name(&pid);
     let repository = data::proj_repository(&pid);
+    let archives = data::proj_archives(&pid);
 
     let save = {
         let pid = pid.clone();
@@ -95,6 +99,35 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                             }
                         />
                     </div>
+                </div>
+
+                <div class="cv-col cv-gap-6">
+                    <span class="cv-modal__label">"Conversations"</span>
+                    // A project-wide call, not a per-machine setting: the
+                    // conversations belong to everyone working here. Saved on
+                    // change — a policy that needs a second click to take is
+                    // a policy someone will leave half-set. The shown value
+                    // is the dataset's, which moves only once the server has
+                    // agreed; the atom marks the option rather than setting
+                    // `value` on the select, which would render blank.
+                    <Select
+                        options=vec![
+                            ("all".to_string(), "Keep the whole conversation".to_string()),
+                            ("cited".to_string(), "Keep only the lines decisions cite".to_string()),
+                        ]
+                        value=(if archives { "all" } else { "cited" }).to_string()
+                        on_change={
+                            let pid = pid.clone();
+                            Callback::new(move |v: String| {
+                                mutate::set_project_archives(pid.clone(), v == "all", switching);
+                            })
+                        }
+                    />
+                    <span class="cv-setform__hint">
+                        "Whole transcripts are kept so they can be read and analysed later. \
+                         Turn that off and agents still record the exact lines a decision \
+                         cites — the evidence — and nothing else."
+                    </span>
                 </div>
 
                 <div class="cv-col cv-gap-6">

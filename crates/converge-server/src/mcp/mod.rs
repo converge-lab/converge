@@ -123,6 +123,35 @@ pub struct DecisionAdd {
     /// The full form only — the hook completes a bare `path:lines`.
     #[serde(default)]
     pub code_evidence: Vec<CodeAnchorIn>,
+    /// The exchange that produced this decision, recorded and cited in
+    /// this one call. Use it when nothing else is recording the
+    /// conversation for you: no `session_ensure`, no `message_add`, no
+    /// ids to carry. Turns that name an `ordinal` are written once, so
+    /// sending them here and syncing them later is not a duplicate.
+    #[serde(default)]
+    pub evidence_turns: Vec<MessageIn>,
+    /// Which conversation `evidence_turns` belong to: your own stable
+    /// id for this session, and a title for it. Required alongside
+    /// `evidence_turns` unless the conversation is already ensured.
+    #[serde(default)]
+    pub conversation: Option<ConversationIn>,
+}
+
+/// How many turns may ride on one `decision_add`. The hook attaches
+/// ten; the room above that is for a client with no hook recording a
+/// short exchange. It is a bound on what a decision that then fails can
+/// leave behind, so it is not generous.
+const INLINE_TURNS: usize = 100;
+
+/// The conversation a decision's inline evidence belongs to.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ConversationIn {
+    /// Your own stable reference for this conversation — a session id,
+    /// a thread URL. Ensuring twice returns the same session.
+    pub external: String,
+    /// Human-readable, shown wherever the source is cited.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// A code anchor on the wire, as `converge_storage::CodeAnchor`.
@@ -162,6 +191,9 @@ pub struct DecisionList {
     /// accepted | draft | proposed | rejected | superseded (derived).
     #[serde(default)]
     pub status: Option<String>,
+    /// Only decisions you have not been shown yet, in any session.
+    #[serde(default)]
+    pub unseen: bool,
     /// Newest first; omit for everything.
     #[serde(default)]
     pub limit: Option<u32>,
@@ -250,6 +282,11 @@ pub struct MessageIn {
     /// Who said it, as displayed ("maksim", "claude").
     pub speaker: String,
     pub body: String,
+    /// Where this turn sits in the conversation, counting from 0. Send
+    /// it and the same turn is never recorded twice, however often it
+    /// is sent; leave it out and every send appends.
+    #[serde(default)]
+    pub ordinal: Option<i32>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -632,7 +669,18 @@ impl<S: Storage + 'static> Memory<S> {
             )
             .await
             .map_err(map_err)?;
-        json_result(&serde_json::json!({ "session_id": id }))
+        let scope = self.scope(&context)?;
+        let next = self
+            .store
+            .message_next_ordinal(scope, id)
+            .await
+            .map_err(map_err)?;
+        let archive = archives(&self.store, scope, project_id).await?;
+        json_result(&serde_json::json!({
+            "session_id": id,
+            "next_ordinal": next,
+            "archive_transcripts": archive,
+        }))
     }
 
     #[tool(description = "Append messages to a session's stream, in order — \
@@ -655,11 +703,27 @@ impl<S: Storage + 'static> Memory<S> {
                 // (the time-authority decision); importers with real
                 // external timestamps use the REST batch surface instead.
                 sent_at: None,
+                ordinal: m.ordinal,
             })
             .collect();
+        let scope = self.scope(&context)?;
+        let project = self
+            .store
+            .session_get(scope, session)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| McpError::invalid_params("unknown session_id", None))?
+            .project_id;
+        if !archives(&self.store, scope, project).await? {
+            return Err(McpError::invalid_params(
+                "this project records only the turns a decision cites, not whole \
+                 conversations — send them as `evidence_turns` on `decision_add`",
+                None,
+            ));
+        }
         let ids = self
             .store
-            .message_add(self.scope(&context)?, session, messages)
+            .message_add(scope, session, messages)
             .await
             .map_err(map_err)?;
         crate::metrics::evidence_messages("mcp", ids.len());
@@ -684,16 +748,32 @@ impl<S: Storage + 'static> Memory<S> {
             .iter()
             .map(|s| parse_id::<DecisionId>(s, "supersedes"))
             .collect::<Result<Vec<_>, _>>()?;
-        let evidence = req
+        let mut evidence = req
             .evidence
             .iter()
             .map(|m| parse_id::<MessageId>(m, "evidence"))
             .collect::<Result<Vec<_>, _>>()?;
-        // This door is the agent's. A person typing a decision into the
-        // web is their own source; an agent recording one out of a
-        // conversation has to put the conversation on record first, or
-        // "verifiable" is a word in the instructions and nothing else.
-        if evidence.is_empty() && req.code_evidence.is_empty() {
+        // Anything that can be judged without touching the database is
+        // judged before the turns are written: recording them is a
+        // committed write of its own, and a decision that fails after
+        // it would leave the conversation behind with nothing citing
+        // it — on a project that may have asked for exactly that not to
+        // happen.
+        let anchors: Vec<CodeAnchor> = req
+            .code_evidence
+            .iter()
+            .map(|a| CodeAnchor {
+                commit: a.commit.clone(),
+                path: a.path.clone(),
+                lines: a.lines,
+                excerpt: a.excerpt.clone(),
+                digest: a.digest.clone(),
+            })
+            .collect();
+        for anchor in &anchors {
+            anchor.validate().map_err(map_err)?;
+        }
+        if req.evidence.is_empty() && anchors.is_empty() && req.evidence_turns.is_empty() {
             return Err(McpError::invalid_params(
                 "evidence is required: `session_ensure` this conversation, \
                  `message_add` the exchanges that decided it, and pass their \
@@ -702,7 +782,63 @@ impl<S: Storage + 'static> Memory<S> {
                 None,
             ));
         }
-
+        if req.evidence_turns.len() > INLINE_TURNS {
+            return Err(McpError::invalid_params(
+                format!(
+                    "at most {INLINE_TURNS} turns can ride on a decision — \
+                     they are the exchange it cites, not the conversation; \
+                     record the rest with `message_add`"
+                ),
+                None,
+            ));
+        }
+        // The exchange, recorded here and cited: for a caller with
+        // nothing else putting the conversation on record. Turns that
+        // name their position are written once, so a hook or a later
+        // sync sending the same ones is not a second copy.
+        if !req.evidence_turns.is_empty() {
+            let Some(conversation) = &req.conversation else {
+                return Err(McpError::invalid_params(
+                    "evidence_turns needs `conversation` — your own stable id for this \
+                     conversation, and a title",
+                    None,
+                ));
+            };
+            let session = self
+                .store
+                .session_ensure(
+                    self.scope(&context)?,
+                    NewSession {
+                        project_id,
+                        kind: SessionKind::Transcript,
+                        external: conversation.external.clone(),
+                        title: conversation
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| conversation.external.clone()),
+                    },
+                )
+                .await
+                .map_err(map_err)?;
+            let turns: Vec<NewMessage> = req
+                .evidence_turns
+                .iter()
+                .map(|m| NewMessage {
+                    speaker: m.speaker.clone(),
+                    body: m.body.clone(),
+                    sent_at: None,
+                    ordinal: m.ordinal,
+                })
+                .collect();
+            let recorded = self
+                .store
+                .message_add(self.scope(&context)?, session, turns)
+                .await
+                .map_err(map_err)?;
+            evidence.extend(recorded);
+            evidence.sort_unstable();
+            evidence.dedup();
+        }
         // Authorship: the deployment user working through the calling
         // agent (see `caller`); the same user is the write's scope.
         let author = self.caller(&context).await?;
@@ -733,17 +869,7 @@ impl<S: Storage + 'static> Memory<S> {
                     authors: vec![author],
                     supersedes,
                     evidence,
-                    code_evidence: req
-                        .code_evidence
-                        .into_iter()
-                        .map(|a| CodeAnchor {
-                            commit: a.commit,
-                            path: a.path,
-                            lines: a.lines,
-                            excerpt: a.excerpt,
-                            digest: a.digest,
-                        })
-                        .collect(),
+                    code_evidence: anchors,
                 },
             )
             .await
@@ -816,6 +942,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .map(|s| parse_id::<GroupId>(s, "group_id"))
                 .transpose()?,
             status: req.status.as_deref().map(parse_status).transpose()?,
+            unseen: req.unseen,
         };
         let page = Pagination {
             limit: req.limit,
@@ -870,6 +997,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .map(|s| parse_id::<GroupId>(s, "group_id"))
                 .transpose()?,
             status: None,
+            unseen: false,
         };
         let decisions = self
             .store
@@ -1095,6 +1223,21 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
 }
 
 // ---- shared plumbing -------------------------------------------------------
+
+/// Does this project keep whole conversations, or only the turns a
+/// decision cites? A project that has gone missing under the caller
+/// keeps nothing.
+async fn archives<S: Storage>(
+    store: &S,
+    scope: Scope,
+    project: ProjectId,
+) -> Result<bool, McpError> {
+    Ok(store
+        .project_get(scope, project)
+        .await
+        .map_err(map_err)?
+        .is_some_and(|p| p.archive_transcripts))
+}
 
 fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let text = serde_json::to_string_pretty(value)

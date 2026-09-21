@@ -169,6 +169,14 @@ pub trait Signals {
     /// receipted in the same transaction, so two claims never hand out
     /// the same signal. A session unknown so far is created now and gets
     /// nothing: what came before is the session-start listing's job.
+    ///
+    /// `project` is the one the session is working in: only signals
+    /// touching it on either end are handed over, the same reach as
+    /// [`SignalFilter::project`]. Without it every visible group is
+    /// claimed from, which is what clients released before this did —
+    /// and a claim consumes, so a signal handed to the wrong session is
+    /// one the right session is never offered.
+    ///
     /// Callers narrow tier on what comes back; a signal they drop is not
     /// offered to that session again, and stays `Proposed` for every
     /// other reader. `Scope::System` has no sessions — `Invalid`.
@@ -177,6 +185,7 @@ pub trait Signals {
         scope: Scope,
         session: &str,
         harness: Option<&str>,
+        project: Option<ProjectId>,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<Signal>, StoreError>> + Send;
 

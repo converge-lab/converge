@@ -759,3 +759,96 @@ async fn code_anchors_are_validated_stored_and_edited() {
         .unwrap();
     assert_eq!(got.code_evidence, vec![second]);
 }
+
+#[tokio::test]
+async fn receipts_decide_what_is_unseen() {
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    let first = store
+        .decision_add(Scope::System, decision(project, me, "first"))
+        .await
+        .unwrap();
+    let second = store
+        .decision_add(Scope::System, decision(project, me, "second"))
+        .await
+        .unwrap();
+    let unseen = |scope: Scope| {
+        let store = store.clone();
+        async move {
+            let mut ids: Vec<_> = store
+                .decision_list(
+                    scope,
+                    DecisionFilter {
+                        unseen: true,
+                        ..Default::default()
+                    },
+                    Pagination::default(),
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|d| d.id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        }
+    };
+    let mut both = vec![first, second];
+    both.sort_unstable();
+    assert_eq!(unseen(Scope::User(me)).await, both);
+
+    // Shown in a harness session: seen, in every session after.
+    store
+        .decision_receive(Scope::User(me), "s1", Some("claude"), &[first])
+        .await
+        .unwrap();
+    assert_eq!(unseen(Scope::User(me)).await, vec![second]);
+    // Read on the web is the same receipt with an empty session.
+    store
+        .decision_receive(Scope::User(me), "", None, &[second])
+        .await
+        .unwrap();
+    assert_eq!(unseen(Scope::User(me)).await, vec![]);
+    // Idempotent, and the unfiltered listing still holds everything.
+    store
+        .decision_receive(Scope::User(me), "", None, &[second, second])
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .decision_list(
+                Scope::User(me),
+                DecisionFilter::default(),
+                Pagination::default()
+            )
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    // System has no receipts: it sees everything, and cannot record one.
+    assert_eq!(unseen(Scope::System).await, both);
+    assert!(matches!(
+        store
+            .decision_receive(Scope::System, "", None, &[first])
+            .await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // A stranger's receipt says nothing about what this user has seen,
+    // and a decision they cannot see is not receipted at all.
+    let stranger = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "stranger".into(),
+            handle: "stranger".into(),
+            name: "Stranger".into(),
+        })
+        .await
+        .unwrap();
+    store
+        .decision_receive(Scope::User(stranger), "", None, &[first])
+        .await
+        .unwrap();
+    assert_eq!(unseen(Scope::User(stranger)).await, vec![]);
+}

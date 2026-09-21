@@ -54,6 +54,7 @@ pub fn assemble(seed: &Seed) -> Assembled {
             name: p.name.clone(),
             description: p.description.clone(),
             repository: None,
+            archive_transcripts: true,
             created_at: p.created_at.clone(),
         })
         .collect();

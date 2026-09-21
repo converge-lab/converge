@@ -16,6 +16,7 @@
 //! preferably `token_cmd`), overridable with `CONVERGE_SERVER` /
 //! `CONVERGE_TOKEN`.
 
+mod archive;
 mod backup;
 mod config;
 mod device;
@@ -27,9 +28,9 @@ mod poll;
 mod project;
 mod setup;
 mod skew;
+mod state;
 mod transcript;
 mod update;
-mod watermark;
 
 use clap::{Args, Parser, Subcommand};
 

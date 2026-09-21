@@ -77,6 +77,7 @@ fn message(speaker: &str, body: &str) -> NewMessage {
         speaker: speaker.into(),
         body: body.into(),
         sent_at: None,
+        ordinal: None,
     }
 }
 
@@ -447,4 +448,193 @@ async fn sources_derive_windows_around_anchors() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn an_ordinal_identifies_a_turn_and_orders_the_stream() {
+    let (_pg, store) = store().await;
+    let project_id = project(&store).await;
+    let sid = store
+        .session_ensure(Scope::System, session(project_id, "s", "s"))
+        .await
+        .unwrap();
+    let at = |ordinal: i32, body: &str| NewMessage {
+        ordinal: Some(ordinal),
+        ..message("a", body)
+    };
+
+    // The tail of a conversation arrives first — a decision citing it
+    // before anything has been synced.
+    let tail = store
+        .message_add(Scope::System, sid, vec![at(2, "m2"), at(3, "m3")])
+        .await
+        .unwrap();
+    // Then the sync sends the conversation from the beginning. The two
+    // turns already recorded are the same turns, not copies: their ids
+    // come back so the sender can cite what it sent either way.
+    let whole = store
+        .message_add(
+            Scope::System,
+            sid,
+            vec![at(0, "m0"), at(1, "m1"), at(2, "m2"), at(3, "m3")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(whole[2], tail[0]);
+    assert_eq!(whole[3], tail[1]);
+
+    // A harness that rewrites its transcript shifts every position
+    // after the edit. Position 3 now says something else, so it is
+    // another turn, not a second id for the one already there.
+    let shifted = store
+        .message_add(Scope::System, sid, vec![at(3, "m3 rewritten")])
+        .await
+        .unwrap();
+    assert_ne!(shifted[0], tail[1]);
+    let body = store
+        .message_list(Scope::System, sid, Pagination::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| m.id == shifted[0])
+        .unwrap()
+        .body;
+    assert_eq!(body, "m3 rewritten");
+
+    // A turn with no position keeps the old behaviour: appended, and
+    // ordered by its seq.
+    store
+        .message_add(Scope::System, sid, vec![message("a", "loose")])
+        .await
+        .unwrap();
+
+    // The stream reads in conversation order, not arrival order.
+    let stream = store
+        .message_list(Scope::System, sid, Pagination::default())
+        .await
+        .unwrap();
+    let bodies: Vec<&str> = stream.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(
+        bodies,
+        vec!["m0", "m1", "m2", "m3", "m3 rewritten", "loose"]
+    );
+
+    // Where a sender resumes: the first position nobody holds, so no
+    // client has to remember what it sent.
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, sid)
+            .await
+            .unwrap(),
+        4
+    );
+
+    // A decision's cited turns land at their own positions, with
+    // nothing below them yet. Resuming past those would lose the start
+    // of the conversation, so the answer is the first hole, not the
+    // highest plus one.
+    let cited = store
+        .session_ensure(Scope::System, session(project_id, "cited", "cited"))
+        .await
+        .unwrap();
+    store
+        .message_add(Scope::System, cited, vec![at(140, "m140"), at(141, "m141")])
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, cited)
+            .await
+            .unwrap(),
+        0
+    );
+    store
+        .message_add(
+            Scope::System,
+            cited,
+            (0..3).map(|i| at(i, &format!("m{i}"))).collect(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, cited)
+            .await
+            .unwrap(),
+        3
+    );
+
+    // A session recorded before turns carried positions answers with
+    // how many it holds, which for a CLI-written session counted the
+    // same way.
+    let legacy = store
+        .session_ensure(Scope::System, session(project_id, "legacy", "legacy"))
+        .await
+        .unwrap();
+    store
+        .message_add(
+            Scope::System,
+            legacy,
+            vec![message("a", "one"), message("a", "two")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .message_next_ordinal(Scope::System, legacy)
+            .await
+            .unwrap(),
+        2
+    );
+    assert!(matches!(
+        store
+            .message_next_ordinal(Scope::System, SessionId::new())
+            .await,
+        Err(StoreError::NotFound)
+    ));
+
+    // A turn sent after a rewrite must stay reachable: its position
+    // ties with the rewritten turn's arrival number, and a cursor that
+    // ordered on position alone would step over it for good.
+    store
+        .message_add(Scope::System, sid, vec![at(4, "m4")])
+        .await
+        .unwrap();
+    let mut walked: Vec<String> = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = store
+            .message_list(
+                Scope::System,
+                sid,
+                Pagination {
+                    limit: Some(2),
+                    cursor,
+                },
+            )
+            .await
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        cursor = Some(page[page.len() - 1].id);
+        walked.extend(page.into_iter().map(|m| m.body));
+    }
+    assert!(walked.contains(&"m4".to_string()), "{walked:?}");
+    assert_eq!(walked.len(), 7, "{walked:?}");
+
+    // And the cursor walks that same order.
+    let rest = store
+        .message_list(
+            Scope::System,
+            sid,
+            Pagination {
+                limit: Some(10),
+                cursor: Some(stream[1].id),
+            },
+        )
+        .await
+        .unwrap();
+    let bodies: Vec<&str> = rest.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(bodies, vec!["m2", "m3", "m3 rewritten", "m4", "loose"]);
 }

@@ -70,6 +70,7 @@ async fn record<S: Storage>(
                 speaker: "test".into(),
                 body: format!("the line that decided {title}"),
                 sent_at: None,
+                ordinal: None,
             }],
         )
         .await

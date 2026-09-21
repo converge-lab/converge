@@ -41,20 +41,46 @@ pub struct NewMessage {
     pub body: String,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub sent_at: Option<OffsetDateTime>,
+    /// Where this turn sits in the conversation it came from — the
+    /// index in a transcript. Two sends of the same position and the
+    /// same body are one message, and reads order by it, so a turn
+    /// that arrives late still reads in its place. The same position
+    /// with a different body is a different turn, recorded without a
+    /// position. Absent for writers that cannot number their turns;
+    /// those keep arrival order.
+    #[serde(default)]
+    pub ordinal: Option<i32>,
 }
 
 /// Storage operations on messages.
 pub trait Messages {
-    /// Append a batch to a session, in order, atomically; returns the new
-    /// ids. Appends to one session are serialized (concurrent batches
-    /// can't interleave or collide on `seq`). An unknown session is
-    /// `NotFound`.
+    /// Append a batch to a session, in order, atomically; returns their
+    /// ids — including for turns already recorded at the same
+    /// `ordinal`, which are not written twice, so a caller can cite
+    /// what it sent whether or not it got there first. Appends to one
+    /// session are serialized (concurrent batches can't interleave or
+    /// collide on `seq`). An unknown session is `NotFound`.
     fn message_add(
         &self,
         scope: Scope,
         session: SessionId,
         new: Vec<NewMessage>,
     ) -> impl Future<Output = Result<Vec<MessageId>, StoreError>> + Send;
+
+    /// Where a sender resumes: the first position this session holds no
+    /// turn for, counting from zero. Not the highest plus one — a
+    /// decision's cited turns are recorded at their own positions long
+    /// before the ones below them, and resuming past those would leave
+    /// the start of the conversation unrecorded for good. For a session
+    /// recorded before turns carried a position, it is how many turns it
+    /// holds, which for a CLI-written session counted the same way. So a
+    /// client needs no durable record of what it has sent. An unknown
+    /// session is `NotFound`.
+    fn message_next_ordinal(
+        &self,
+        scope: Scope,
+        session: SessionId,
+    ) -> impl Future<Output = Result<i32, StoreError>> + Send;
 
     /// A session's stream in conversation order — **oldest first**, the
     /// one list in the system that reads forward. The cursor returns

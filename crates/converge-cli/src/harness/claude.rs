@@ -177,10 +177,10 @@ mod tests {
         assert_eq!(parsed.cwd, PathBuf::from("/repo"));
         assert_eq!(parsed.tool_input["a"], 1);
         assert_eq!(parsed.tool_response["project_id"], "x");
-        assert_eq!(
-            parsed.transcript.as_ref().map(Transcript::key),
-            Some("/t.jsonl".to_string())
-        );
+        assert!(matches!(
+            parsed.transcript.as_ref(),
+            Some(Transcript::File(at)) if at == std::path::Path::new("/t.jsonl")
+        ));
 
         // Claude nests both the context block and the rewritten input
         // under hookSpecificOutput; nothing else there does.

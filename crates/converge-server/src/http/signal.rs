@@ -12,8 +12,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
-    Author, DecisionId, NewSignal, Page, Pagination, Scope, Signal, SignalFilter, SignalId,
-    SignalStatus, Storage, StoreError,
+    Author, DecisionId, NewSignal, Page, Pagination, ProjectId, Scope, Signal, SignalFilter,
+    SignalId, SignalStatus, Storage, StoreError,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -105,6 +105,11 @@ struct Claim {
     /// claude | codex | opencode | cursor.
     #[serde(default)]
     harness: Option<String>,
+    /// The project this session is working in. Only signals touching it
+    /// on either end are handed over. Omitted — as clients released
+    /// before this do — every visible group is claimed from.
+    #[serde(default)]
+    project: Option<ProjectId>,
     /// At most this many, oldest first; the ledger advances past what is
     /// returned, and only that. Capped, so a client cannot drain a burst
     /// into one prompt.
@@ -132,6 +137,7 @@ async fn claim<S: Storage>(
             Scope::User(caller.user),
             &claim.session,
             claim.harness.as_deref(),
+            claim.project,
             limit,
         )
         .await?;

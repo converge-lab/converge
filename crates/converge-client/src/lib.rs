@@ -51,6 +51,24 @@ struct Created<Id> {
     id: Id,
 }
 
+/// A decision's own fields, for a merge patch: what is `None` is left
+/// alone, and `Some(None)` on a nullable field clears it.
+#[derive(Debug, Default, Serialize)]
+pub struct DecisionPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<DecisionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consequences: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alternatives: Option<Vec<Alternative>>,
+}
+
 /// What `session_ensure` answers: the session, where a sender resumes,
 /// and whether this project keeps whole conversations.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -269,12 +287,103 @@ impl Client {
             .await
     }
 
-    pub async fn decision_edit(
+    /// Change a decision's own fields. A field left out is untouched;
+    /// `Some(None)` on a nullable one clears it. Edges are not fields —
+    /// they have their own calls below.
+    pub async fn decision_patch(
         &self,
         id: DecisionId,
-        edits: &[DecisionEdit],
+        patch: &DecisionPatch,
     ) -> Result<(), StoreError> {
-        self.apply(&format!("decisions/{id}"), edits).await
+        self.apply(&format!("decisions/{id}"), patch).await
+    }
+
+    /// `id` replaces `other`.
+    pub async fn decision_supersede(
+        &self,
+        id: DecisionId,
+        other: DecisionId,
+    ) -> Result<(), StoreError> {
+        self.put(&format!("decisions/{id}/supersedes/{other}"), &())
+            .await
+    }
+
+    pub async fn decision_unsupersede(
+        &self,
+        id: DecisionId,
+        other: DecisionId,
+    ) -> Result<(), StoreError> {
+        self.remove(&format!("decisions/{id}/supersedes/{other}"))
+            .await
+    }
+
+    /// Cross-reference, with the reason the pair is worth reading
+    /// together. Re-linking updates the reason.
+    pub async fn decision_relate(
+        &self,
+        id: DecisionId,
+        other: DecisionId,
+        why: Option<&str>,
+    ) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct Why<'a> {
+            why: Option<&'a str>,
+        }
+        self.put(&format!("decisions/{id}/related/{other}"), &Why { why })
+            .await
+    }
+
+    pub async fn decision_unrelate(
+        &self,
+        id: DecisionId,
+        other: DecisionId,
+    ) -> Result<(), StoreError> {
+        self.remove(&format!("decisions/{id}/related/{other}"))
+            .await
+    }
+
+    /// Anchor a recorded turn as one of the lines that decided it.
+    pub async fn decision_anchor(
+        &self,
+        id: DecisionId,
+        message: MessageId,
+    ) -> Result<(), StoreError> {
+        self.put(&format!("decisions/{id}/evidence/{message}"), &())
+            .await
+    }
+
+    pub async fn decision_unanchor(
+        &self,
+        id: DecisionId,
+        message: MessageId,
+    ) -> Result<(), StoreError> {
+        self.remove(&format!("decisions/{id}/evidence/{message}"))
+            .await
+    }
+
+    /// Anchor a committed range. A code anchor has no id of its own, so
+    /// it is posted to the collection and dropped by its key.
+    pub async fn decision_cite(
+        &self,
+        id: DecisionId,
+        anchor: &CodeAnchor,
+    ) -> Result<(), StoreError> {
+        self.submit(&format!("decisions/{id}/code-evidence"), anchor)
+            .await
+    }
+
+    pub async fn decision_uncite(
+        &self,
+        id: DecisionId,
+        commit: &str,
+        path: &str,
+        lines: (u32, u32),
+    ) -> Result<(), StoreError> {
+        let (start, end) = lines;
+        self.remove(&format!(
+            "decisions/{id}/code-evidence?commit={commit}&path={path}&lines={start}-{end}"
+        ))
+        .await
     }
 
     /// The one-hop graph neighbourhood, both directions.
@@ -788,7 +897,22 @@ impl Client {
         }
     }
 
-    /// PATCH an edit batch; the server answers `204`.
+    /// PUT a relation into existence; the server answers `204`, and
+    /// putting one that already exists says so again.
+    async fn put(&self, path: &str, body: &(impl Serialize + ?Sized)) -> Result<(), StoreError> {
+        let response = self
+            .authed(self.http.put(self.url(path)))
+            .json(body)
+            .send()
+            .await
+            .map_err(transport)?;
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(()),
+            _ => Err(fail(response).await),
+        }
+    }
+
+    /// PATCH a merge patch or an edit batch; the server answers `204`.
     async fn apply(&self, path: &str, edits: &(impl Serialize + ?Sized)) -> Result<(), StoreError> {
         let response = self
             .authed(self.http.patch(self.url(path)))

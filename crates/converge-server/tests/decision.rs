@@ -92,12 +92,12 @@ async fn decision_crud() {
     assert_eq!(decision["authors"].as_array().unwrap().len(), 2);
     assert_eq!(decision["alternatives"][0]["why_rejected"], "slower");
 
-    // The atomic edit batch.
+    // Fields change through a merge patch on the item.
     let (status, _) = send(
         &app,
         "PATCH",
         &format!("/api/v1/decisions/{id}"),
-        Some(json!([{ "set_status": "accepted" }, { "set_context": "ctx" }])),
+        Some(json!({ "status": "accepted", "context": "ctx" })),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -146,7 +146,7 @@ async fn decision_crud() {
         (
             "PATCH",
             format!("/api/v1/decisions/{missing}"),
-            Some(json!([{ "set_title": "x" }])),
+            Some(json!({ "title": "x" })),
         ),
     ] {
         let (status, _) = send(&app, method, &uri, body).await;
@@ -303,9 +303,9 @@ async fn decision_graph() {
     // Removing the last inbound edge restores the stored status.
     let (status, _) = send(
         &app,
-        "PATCH",
-        &format!("/api/v1/decisions/{b}"),
-        Some(json!([{ "remove_supersedes": a }])),
+        "DELETE",
+        &format!("/api/v1/decisions/{b}/supersedes/{a}"),
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -315,9 +315,9 @@ async fn decision_graph() {
     // Cross-refs round-trip with `why`, visible from both ends.
     send(
         &app,
-        "PATCH",
-        &format!("/api/v1/decisions/{b}"),
-        Some(json!([{ "add_related": { "to": a, "why": "shared context" } }])),
+        "PUT",
+        &format!("/api/v1/decisions/{b}/related/{a}"),
+        Some(json!({ "why": "shared context" })),
     )
     .await;
     let (_, edges) = send(&app, "GET", &format!("/api/v1/decisions/{b}/edges"), None).await;
@@ -334,9 +334,9 @@ async fn decision_graph() {
     // Self-loops are the caller's error.
     let (status, _) = send(
         &app,
-        "PATCH",
-        &format!("/api/v1/decisions/{b}"),
-        Some(json!([{ "add_supersedes": b }])),
+        "PUT",
+        &format!("/api/v1/decisions/{b}/supersedes/{b}"),
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -442,9 +442,12 @@ async fn code_evidence_over_rest() {
     assert_eq!(decision["code_evidence"][0]["excerpt"], excerpt);
     let (status, _) = send(
         &app,
-        "PATCH",
-        &format!("/api/v1/decisions/{id}"),
-        Some(json!([{ "remove_code_evidence": { "commit": "b".repeat(40), "path": "src/main.rs", "lines": [1, 1] } }])),
+        "DELETE",
+        &format!(
+            "/api/v1/decisions/{id}/code-evidence?commit={}&path=src/main.rs&lines=1-1",
+            "b".repeat(40)
+        ),
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);

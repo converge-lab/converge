@@ -5,40 +5,32 @@
 //! update with no full reload (see `data::*_local`). The embedded build has no
 //! server, so it applies locally with a generated slug id, enough for the
 //! offline demo. The dataset is only touched on success, so the UI never
-//! shows a create the server rejected; a failure reports back through the
-//! store's `notice` slot (the modal has already closed optimistically), which
-//! the shell renders as a dismissible toast.
+//! shows a create the server rejected. Forms stay open until success, retain
+//! their input on failure, and hand late failures to the shell.
 
 use converge_ui::domain::GroupKind;
 use leptos::prelude::*;
 
 use crate::data;
+use crate::feedback::ActionState;
 use crate::route::{Route, navigate};
-use crate::store::{AppStateStoreFields, use_store};
-
-/// Report a failed mutation: log it and surface it as the shell's toast.
+use crate::store::{AppStateStoreFields, Notice, push_notice, use_store};
 #[cfg(feature = "api")]
-fn fail(store: crate::store::AppStore, message: String) {
-    leptos::logging::error!("{message}");
-    store
-        .notice()
-        .set(Some(crate::store::Notice::Failed(message)));
-}
+use converge_client::StoreError;
 
 /// Confirm a write that changed nothing visible on screen — an edited
 /// description, say. The toast lives above the router, so unlike anything the
 /// screen itself could set, it survives the screen being re-created.
 fn done(store: crate::store::AppStore, message: &str) {
-    store
-        .notice()
-        .set(Some(crate::store::Notice::Ok(message.to_string())));
+    push_notice(store, Notice::Ok(message.to_string()));
 }
 
 /// Create a group, switch to it, and land on its (empty) dashboard.
-pub fn create_group(name: String, kind: GroupKind) {
+pub fn create_group(name: String, kind: GroupKind, action: ActionState, close: Callback<()>) {
     let store = use_store();
-    // A fresh attempt supersedes any lingering failure notice.
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     #[cfg(feature = "api")]
     {
         use converge_client::{GroupKind as Ck, NewGroup};
@@ -54,16 +46,25 @@ pub fn create_group(name: String, kind: GroupKind) {
             };
             match crate::store::client().group_add(&new).await {
                 Ok(id) => {
+                    let active = action.finish();
+                    if active {
+                        close.run(());
+                    }
                     let idx = data::add_group_local(store, id.to_string(), name, kind);
-                    store.group().set(idx);
-                    navigate(&Route::Dashboard);
+                    if active {
+                        store.group().set(idx);
+                        navigate(&Route::Dashboard);
+                    }
+                    done(store, "Group created.");
                 }
-                Err(e) => fail(store, format!("Couldn't create group “{name}” — {e}")),
+                Err(e) => action.fail("Couldn't create group", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
+        close.run(());
         let idx = data::add_group_local(store, slug(&name), name, kind);
         store.group().set(idx);
         navigate(&Route::Dashboard);
@@ -72,17 +73,19 @@ pub fn create_group(name: String, kind: GroupKind) {
 
 /// Create a project in the current group; stay in place (the sidebar unlocks
 /// its full layout once the group is no longer empty).
-pub fn create_project(name: String) {
+pub fn create_project(name: String, action: ActionState, close: Callback<()>) {
     let store = use_store();
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     let group_id = data::cur_group().id;
     #[cfg(feature = "api")]
     {
         use converge_client::{GroupId, NewProject};
         let Ok(gid) = group_id.parse::<GroupId>() else {
-            fail(
-                store,
-                format!("Couldn't create “{name}” — bad group id {group_id}"),
+            action.fail(
+                "Couldn't create project",
+                &StoreError::Backend("invalid group id".into()),
             );
             return;
         };
@@ -94,13 +97,21 @@ pub fn create_project(name: String) {
                 repository: None,
             };
             match crate::store::client().project_add(&new).await {
-                Ok(id) => data::add_project_local(store, &group_id, id.to_string(), name, None),
-                Err(e) => fail(store, format!("Couldn't create project “{name}” — {e}")),
+                Ok(id) => {
+                    if action.finish() {
+                        close.run(());
+                    }
+                    data::add_project_local(store, &group_id, id.to_string(), name, None);
+                    done(store, "Project created.");
+                }
+                Err(e) => action.fail("Couldn't create project", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
+        close.run(());
         let id = slug(&name);
         data::add_project_local(store, &group_id, id, name, None);
     }
@@ -110,9 +121,11 @@ pub fn create_project(name: String) {
 /// projects and every decision recorded under it are untouched. `kind` is not
 /// here on purpose: it is fixed at creation, and turning a personal space into
 /// a shared one is a separate operation the server doesn't offer yet.
-pub fn edit_group(id: String, name: String, desc: String) {
+pub fn edit_group(id: String, name: String, desc: String, action: ActionState) {
     let store = use_store();
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
@@ -120,7 +133,10 @@ pub fn edit_group(id: String, name: String, desc: String) {
         let Ok(gid) = id.parse::<GroupId>() else {
             // "Impossible" (ids come from the dataset), but a silent Save is
             // worse than a strange toast if it ever happens.
-            fail(store, format!("Couldn't save “{name}” — bad group id {id}"));
+            action.fail(
+                "Couldn't save group",
+                &StoreError::Backend("invalid group id".into()),
+            );
             return;
         };
         let edits = vec![
@@ -130,17 +146,19 @@ pub fn edit_group(id: String, name: String, desc: String) {
         leptos::task::spawn_local(async move {
             match crate::store::client().group_edit(gid, &edits).await {
                 Ok(()) => {
+                    action.finish();
                     data::edit_group_local(store, &id, name, description);
                     done(store, "Group saved.");
                 }
                 // Editing is owner-only server-side; a member's attempt comes
-                // back as a refusal, which the toast reports verbatim.
-                Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
+                // back as a refusal beside the Save action.
+                Err(e) => action.fail("Couldn't save group", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
         data::edit_group_local(store, &id, name, description);
         done(store, "Group saved.");
     }
@@ -148,17 +166,19 @@ pub fn edit_group(id: String, name: String, desc: String) {
 
 /// Edit a project's display name and description; the id stays fixed, so every
 /// reference and decision link is untouched.
-pub fn edit_project(id: String, name: String, desc: String) {
+pub fn edit_project(id: String, name: String, desc: String, action: ActionState) {
     let store = use_store();
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
         use converge_client::{ProjectEdit, ProjectId};
         let Ok(pid) = id.parse::<ProjectId>() else {
-            fail(
-                store,
-                format!("Couldn't save “{name}” — bad project id {id}"),
+            action.fail(
+                "Couldn't save project",
+                &StoreError::Backend("invalid project id".into()),
             );
             return;
         };
@@ -169,15 +189,17 @@ pub fn edit_project(id: String, name: String, desc: String) {
         leptos::task::spawn_local(async move {
             match crate::store::client().project_edit(pid, &edits).await {
                 Ok(()) => {
+                    action.finish();
                     data::edit_project_local(store, &id, name, description);
                     done(store, "Project saved.");
                 }
-                Err(e) => fail(store, format!("Couldn't save “{name}” — {e}")),
+                Err(e) => action.fail("Couldn't save project", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
         data::edit_project_local(store, &id, name, description);
         done(store, "Project saved.");
     }
@@ -186,9 +208,11 @@ pub fn edit_project(id: String, name: String, desc: String) {
 /// Keep whole conversations for this project, or only the turns its
 /// decisions cite. A project-wide call: the conversations belong to
 /// everyone working in it, not to the machine that recorded them.
-pub fn set_project_archives(id: String, keep: bool) {
+pub fn set_project_archives(id: String, keep: bool, action: ActionState) {
     let store = use_store();
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     let said = |keep: bool| match keep {
         true => "Whole conversations are kept for this project.",
         false => "Only the lines decisions cite are kept now.",
@@ -197,84 +221,127 @@ pub fn set_project_archives(id: String, keep: bool) {
     {
         use converge_client::{ProjectEdit, ProjectId};
         let Ok(pid) = id.parse::<ProjectId>() else {
-            fail(store, format!("Couldn't change it — bad project id {id}"));
+            action.fail(
+                "Couldn't change what this project keeps",
+                &StoreError::Backend("invalid project id".into()),
+            );
             return;
         };
         let edits = vec![ProjectEdit::SetArchiveTranscripts(keep)];
         leptos::task::spawn_local(async move {
             match crate::store::client().project_edit(pid, &edits).await {
                 Ok(()) => {
+                    action.finish();
                     data::set_proj_archives_local(store, &id, keep);
                     done(store, said(keep));
                 }
-                Err(e) => fail(store, format!("Couldn't change it — {e}")),
+                Err(e) => action.fail("Couldn't change what this project keeps", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
         data::set_proj_archives_local(store, &id, keep);
         done(store, said(keep));
     }
 }
 
 /// Delete a project permanently — decisions, sessions, the lot. The
-/// dataset flips only on server success; the caller navigates first
-/// (the active screen may be the one being deleted).
-pub fn project_delete(id: String, name: String) {
+/// dataset flips only on server success; until then the confirmation
+/// stays open, and a refusal leaves both the screen and typed name intact.
+pub fn project_delete(id: String, name: String, action: ActionState, close: Callback<()>) {
     let store = use_store();
-    store.notice().set(None);
+    let go = crate::route::navigation();
+    if !action.begin() {
+        return;
+    }
     #[cfg(feature = "api")]
     {
         use converge_client::ProjectId;
         let Ok(pid) = id.parse::<ProjectId>() else {
-            fail(store, format!("Couldn't delete “{name}” — bad id {id}"));
+            action.fail(
+                "Couldn't delete project",
+                &StoreError::Backend("invalid project id".into()),
+            );
             return;
         };
         leptos::task::spawn_local(async move {
             match crate::store::client().project_delete(pid).await {
                 Ok(()) => {
+                    if action.finish() {
+                        close.run(());
+                    }
+                    if crate::route::current_route().project_target() == Some(id.as_str()) {
+                        go.run(Route::Dashboard);
+                    }
                     data::drop_project_local(store, &id);
                     done(store, &format!("Project “{name}” deleted."));
                 }
                 // The evidence-pinning refusal (409) lands here verbatim.
-                Err(e) => fail(store, format!("Couldn't delete “{name}” — {e}")),
+                Err(e) => action.fail("Couldn't delete project", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
+        close.run(());
+        if crate::route::current_route().project_target() == Some(id.as_str()) {
+            go.run(Route::Dashboard);
+        }
         data::drop_project_local(store, &id);
         done(store, &format!("Project “{name}” deleted."));
     }
 }
 
-/// Delete a group and everything under it. On success the active group
-/// resets to the first remaining one.
-pub fn group_delete(id: String, name: String) {
+/// Delete a group and everything under it. Preserve a different active group;
+/// if the deleted group was selected, fall back to the first remaining one.
+pub fn group_delete(id: String, name: String, action: ActionState, close: Callback<()>) {
     let store = use_store();
-    store.notice().set(None);
+    let go = crate::route::navigation();
+    if !action.begin() {
+        return;
+    }
     #[cfg(feature = "api")]
     {
         use converge_client::GroupId;
         let Ok(gid) = id.parse::<GroupId>() else {
-            fail(store, format!("Couldn't delete “{name}” — bad id {id}"));
+            action.fail(
+                "Couldn't delete group",
+                &StoreError::Backend("invalid group id".into()),
+            );
             return;
         };
         leptos::task::spawn_local(async move {
             match crate::store::client().group_delete(gid).await {
                 Ok(()) => {
-                    store.group().set(0);
+                    if action.finish() {
+                        close.run(());
+                    }
+                    if crate::route::current_route() == Route::GroupSettings
+                        && store.dataset().get_untracked().is_some_and(|data| {
+                            data.groups
+                                .get(store.group().get_untracked())
+                                .is_some_and(|group| group.id == id)
+                        })
+                    {
+                        go.run(Route::Dashboard);
+                    }
                     data::drop_group_local(store, &id);
                     done(store, &format!("Group “{name}” deleted."));
                 }
-                Err(e) => fail(store, format!("Couldn't delete “{name}” — {e}")),
+                Err(e) => action.fail("Couldn't delete group", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
-        store.group().set(0);
+        action.finish();
+        close.run(());
+        if crate::route::current_route() == Route::GroupSettings {
+            go.run(Route::Dashboard);
+        }
         data::drop_group_local(store, &id);
         done(store, &format!("Group “{name}” deleted."));
     }
@@ -283,10 +350,12 @@ pub fn group_delete(id: String, name: String) {
 /// Resolve a signal with the user's verdict: confirm (it holds) or
 /// dismiss (it will not be raised again). The dataset flips only on
 /// server success; dismissal drops the signal from every list.
-pub fn resolve_signal(id: String, confirm: bool) {
+pub fn resolve_signal(id: String, confirm: bool, action: ActionState) {
     use crate::seed::SignalStatus;
     let store = use_store();
-    store.notice().set(None);
+    if !action.begin() {
+        return;
+    }
     let status = if confirm {
         SignalStatus::Confirmed
     } else {
@@ -296,14 +365,17 @@ pub fn resolve_signal(id: String, confirm: bool) {
     {
         use converge_client::{Author, SignalId, SignalStatus as Ws, UserId};
         let Ok(sid) = id.parse::<SignalId>() else {
-            fail(store, format!("Couldn't resolve the signal — bad id {id}"));
+            action.fail(
+                "Couldn't resolve the signal",
+                &StoreError::Backend("invalid signal id".into()),
+            );
             return;
         };
         let me = data::account().user_id;
         let Ok(uid) = me.parse::<UserId>() else {
-            fail(
-                store,
-                format!("Couldn't resolve the signal — bad user id {me}"),
+            action.fail(
+                "Couldn't resolve the signal",
+                &StoreError::Backend("invalid user id".into()),
             );
             return;
         };
@@ -317,13 +389,30 @@ pub fn resolve_signal(id: String, confirm: bool) {
                 .signal_resolve(sid, ws, &Author::User(uid))
                 .await
             {
-                Ok(()) => data::resolve_signal_local(store, &id, status),
-                Err(e) => fail(store, format!("Couldn't resolve the signal — {e}")),
+                Ok(()) => {
+                    if action.finish() && !confirm {
+                        navigate(&Route::Signals);
+                    }
+                    data::resolve_signal_local(store, &id, status);
+                    done(
+                        store,
+                        if confirm {
+                            "Signal confirmed."
+                        } else {
+                            "Signal dismissed."
+                        },
+                    );
+                }
+                Err(e) => action.fail("Couldn't resolve the signal", &e),
             }
         });
     }
     #[cfg(not(feature = "api"))]
     {
+        action.finish();
+        if !confirm {
+            navigate(&Route::Signals);
+        }
         data::resolve_signal_local(store, &id, status);
     }
 }

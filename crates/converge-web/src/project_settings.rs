@@ -10,11 +10,16 @@ use converge_ui::atoms::{Button, ButtonVariant, Select};
 use converge_ui::domain::Tone;
 use leptos::prelude::*;
 
+use crate::feedback::{ActionState, ActionStatus};
 use crate::modals::{self, ModalKind};
 use crate::{data, mutate};
 
 #[component]
 pub fn ProjectSettings(pid: String) -> impl IntoView {
+    let saving = ActionState::new();
+    // Its own state: the switch saves on change, so it must not borrow
+    // the form's "saving" and leave the Save button looking busy.
+    let switching = ActionState::new();
     let (name, set_name) = signal(data::proj_name(&pid));
     let (desc, set_desc) = signal(data::proj_desc(&pid));
     let (flash, set_flash) = signal(None::<String>);
@@ -36,7 +41,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
             }
             // As on the group's settings: the write re-creates this screen, so
             // a local confirmation line would never survive to be read.
-            mutate::edit_project(pid.clone(), n, desc.get_untracked());
+            mutate::edit_project(pid.clone(), n, desc.get_untracked(), saving);
         })
     };
 
@@ -61,6 +66,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                     <div class="cv-input">
                         <input
                             class="cv-input__field cv-mono"
+                            disabled=saving.pending
                             prop:value=name
                             on:input=move |ev| set_name.set(event_target_value(&ev))
                             on:keydown=move |ev| {
@@ -82,6 +88,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                         <input
                             class="cv-input__field"
                             placeholder="What this service is responsible for — one line."
+                            disabled=saving.pending
                             prop:value=desc
                             on:input=move |ev| set_desc.set(event_target_value(&ev))
                             on:keydown=move |ev| {
@@ -112,7 +119,7 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                         on_change={
                             let pid = pid.clone();
                             Callback::new(move |v: String| {
-                                mutate::set_project_archives(pid.clone(), v == "all");
+                                mutate::set_project_archives(pid.clone(), v == "all", switching);
                             })
                         }
                     />
@@ -138,11 +145,12 @@ pub fn ProjectSettings(pid: String) -> impl IntoView {
                     </span>
                 </div>
 
+                <ActionStatus state=saving pending_text="Saving…" />
                 <div>
                     <Button
                         label="Save changes"
                         tone=Tone::Primary
-                        disabled=Signal::derive(move || name.get().trim().is_empty())
+                        disabled=Signal::derive(move || saving.pending.get() || name.get().trim().is_empty())
                         on_click=save
                     />
                 </div>

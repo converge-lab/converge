@@ -15,9 +15,11 @@ mod data;
 mod decision_detail;
 mod expert;
 pub mod ext;
+mod feedback;
 mod group_settings;
 mod modals;
 mod mutate;
+mod notices;
 mod onboard;
 mod pair;
 mod project_log;
@@ -221,6 +223,7 @@ fn App() -> impl IntoView {
         navigate(&r);
         set_route.set(r);
     });
+    provide_context(route::Navigation(go));
     // Switching the active group resets to the dashboard, like the prototype.
     let switch_group = Callback::new(move |i: usize| {
         store.group().set(i);
@@ -337,7 +340,15 @@ fn App() -> impl IntoView {
                     // project's header). Screens with cross-write state keep
                     // it outside the component (see `expert::ExpertState`).
                     track_data(store);
-                    match route.get() {
+                    let requested = route.get();
+                    let current = requested.clone().valid_for(
+                        &store.dataset().get_untracked().expect("ready dataset"),
+                        store.group().get_untracked(),
+                    );
+                    if current != requested {
+                        go.run(current.clone());
+                    }
+                    match current {
                         // Full-screen onboarding only when there is no group
                         // at all; an *empty group* renders the dashboard,
                         // which shows the guide under its own header — the
@@ -378,61 +389,11 @@ fn App() -> impl IntoView {
             // re-creates the active screen, so a message the screen owned would
             // be destroyed before anyone read it. Failures wait to be
             // dismissed; a success is a receipt and clears itself.
-            {move || {
-                store.notice().get().map(|notice| {
-                    let ok = notice.is_ok();
-                    if ok {
-                        clear_notice_later(store);
-                    }
-                    view! {
-                        <div
-                            class=if ok { "cv-toast cv-toast--ok" } else { "cv-toast" }
-                            role=if ok { "status" } else { "alert" }
-                        >
-                            <span>{notice.text().to_string()}</span>
-                            <button
-                                type="button"
-                                class="cv-toast__close"
-                                aria-label="Dismiss"
-                                on:click=move |_| store.notice().set(None)
-                            >
-                                {Glyph::Close.glyph()}
-                            </button>
-                        </div>
-                    }
-                })
-            }}
+            <notices::Notices store=store />
         }
         .into_any()
     }
 }
-
-/// Retire a success toast on its own after a beat. One timer lives at a
-/// time — scheduling cancels the previous one, so an older success's timer
-/// can't cut a newer toast short — and it only clears a success (a failure
-/// raised in the meantime stays put).
-#[cfg(target_arch = "wasm32")]
-fn clear_notice_later(store: AppStore) {
-    use std::cell::Cell;
-    thread_local! {
-        static TIMER: Cell<Option<TimeoutHandle>> = const { Cell::new(None) };
-    }
-    let handle = set_timeout_with_handle(
-        move || {
-            if store.notice().get_untracked().is_some_and(|n| n.is_ok()) {
-                store.notice().set(None);
-            }
-        },
-        std::time::Duration::from_millis(2500),
-    )
-    .ok();
-    if let Some(old) = TIMER.with(|t| t.replace(handle)) {
-        old.clear();
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn clear_notice_later(_store: AppStore) {}
 
 /// The app's boot phase, derived from the store by `App`'s gate memo.
 /// `PartialEq` is what lets the memo swallow same-phase writes.
@@ -485,46 +446,58 @@ fn resume() -> Option<String> {
 /// stored by the app.
 fn login() -> impl IntoView + use<> {
     let (token, set_token) = signal(String::new());
-    let (notice, set_notice) = signal(None::<String>);
-    // Does this deployment offer IdP sign-in? (Open capability read; the
-    // embedded build has no API to ask.)
+    let signing = feedback::ActionState::new();
+    let providers = feedback::ActionState::new();
     let (idp, set_idp) = signal(None::<String>);
     #[cfg(feature = "api")]
-    leptos::task::spawn_local(async move {
-        if let Ok(info) = crate::store::client().auth_info().await {
-            set_idp.set(info.oidc);
+    let load_providers = move || {
+        if !providers.begin() {
+            return;
         }
-    });
+        leptos::task::spawn_local(async move {
+            match crate::store::client().auth_info().await {
+                Ok(info) => {
+                    providers.finish();
+                    set_idp.try_set(info.oidc);
+                }
+                Err(error) => providers.fail("Couldn't load sign-in options", &error),
+            }
+        });
+    };
     #[cfg(not(feature = "api"))]
-    let _ = set_idp;
+    let load_providers = move || {
+        let _ = set_idp;
+    };
+    load_providers();
+
     #[cfg(feature = "api")]
     let submit = move || {
         let secret = token.get_untracked();
-        if secret.trim().is_empty() {
+        if secret.trim().is_empty() || !signing.begin() {
             return;
         }
         leptos::task::spawn_local(async move {
             use converge_client::StoreError;
             match crate::store::client().session_login(secret.trim()).await {
                 Ok(()) => {
-                    let _ = match resume() {
+                    let navigation = match resume() {
                         Some(next) => window().location().assign(&next),
                         None => window().location().reload(),
                     };
+                    if navigation.is_err() {
+                        signing.fail_message("Signed in. Reload this page to continue.".into());
+                    }
                 }
                 Err(StoreError::Unauthorized) => {
-                    set_notice.set(Some("That token isn't recognized.".into()));
+                    signing.fail_message("That token isn't recognized.".into())
                 }
-                Err(e) => set_notice.set(Some(format!("Sign-in failed: {e}"))),
+                Err(e) => signing.fail("Couldn't sign in", &e),
             }
         });
     };
-    // The embedded fixture never asks for login; the arm exists so the
-    // screen compiles (and stays previewable) in both builds.
     #[cfg(not(feature = "api"))]
     let submit = move || {
-        let _ = token.get_untracked();
-        set_notice.set(Some("This build has no API to sign in to.".into()));
+        signing.fail_message("This build has no API to sign in to.".into());
     };
     view! {
         <div class="cv-boot">
@@ -540,6 +513,7 @@ fn login() -> impl IntoView + use<> {
                         type="password"
                         placeholder="cvg_…"
                         prop:value=token
+                        disabled=signing.pending
                         on:input=move |ev| set_token.set(event_target_value(&ev))
                         on:keydown=move |ev| {
                             if ev.key() == "Enter" {
@@ -548,7 +522,10 @@ fn login() -> impl IntoView + use<> {
                         }
                     />
                 </div>
-                <Button label="Sign in" on_click=Callback::new(move |()| submit()) />
+                <Button label="Sign in"
+                    disabled=Signal::derive(move || signing.pending.get() || token.get().trim().is_empty())
+                    on_click=Callback::new(move |()| submit()) />
+                <feedback::ActionStatus state=signing pending_text="Signing in…" />
                 {move || {
                     idp.get()
                         .map(|label| {
@@ -561,15 +538,10 @@ fn login() -> impl IntoView + use<> {
                             }
                         })
                 }}
-                {move || {
-                    notice
-                        .get()
-                        .map(|msg| {
-                            view! {
-                                <div class="cv-fs-sm cv-fg-danger cv-mt-8">{msg}</div>
-                            }
-                        })
-                }}
+                <feedback::ActionStatus state=providers pending_text="Loading sign-in options…" />
+                {move || providers.error.get().is_some().then(|| view! {
+                    <Button label="Retry sign-in options" on_click=Callback::new(move |()| load_providers()) />
+                })}
             </div>
         </div>
     }
@@ -583,7 +555,10 @@ fn boot_error(msg: String) -> impl IntoView {
                 <div class="cv-fs-xl cv-fw-semibold cv-fg-danger cv-mb-8">
                     "Couldn't load decision memory"
                 </div>
-                <div class="cv-fs-md cv-fg-muted cv-lh-normal">{msg}</div>
+                <div role="alert" class="cv-fs-md cv-fg-muted cv-lh-normal cv-mb-16">{msg}</div>
+                <Button label="Retry" on_click=Callback::new(move |()| {
+                    let _ = window().location().reload();
+                }) />
             </div>
         </div>
     }
@@ -602,6 +577,7 @@ fn Sidebar(
     let acct = data::account();
     let (acct_open, set_acct_open) = signal(false);
     let (theme, set_theme) = signal(read_theme());
+    let signing_out = RwSignal::new(false);
 
     let toggle_theme = move |_| {
         let next = if theme.get_untracked() == "light" {
@@ -616,12 +592,24 @@ fn Sidebar(
     // Clear the session cookie, then reload into the login screen. Against
     // the embedded fixture there is no session — just close the menu.
     let logout = move |_| {
+        if signing_out.get_untracked() {
+            return;
+        }
         set_acct_open.set(false);
         #[cfg(feature = "api")]
-        leptos::task::spawn_local(async {
-            let _ = crate::store::client().session_logout().await;
-            let _ = window().location().reload();
-        });
+        {
+            signing_out.set(true);
+            leptos::task::spawn_local(async move {
+                let result = crate::store::client().session_logout().await;
+                signing_out.try_set(false);
+                match result {
+                    Ok(()) => {
+                        let _ = window().location().reload();
+                    }
+                    Err(error) => feedback::notify(store, "Couldn't sign out", "session", &error),
+                }
+            });
+        }
     };
 
     view! {
@@ -776,6 +764,9 @@ fn Sidebar(
                 }
             }}
 
+            {move || signing_out.get().then(|| view! {
+                <p role="status" class="cv-fs-sm cv-fg-muted">"Signing out…"</p>
+            })}
             // account + menu
             <div class="cv-relative">
                 {move || {

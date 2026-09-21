@@ -13,6 +13,7 @@ pub fn Input(
     #[prop(optional, into)] lead: Option<Glyph>,
     #[prop(optional, into)] value: Option<Signal<String>>,
     #[prop(optional, into)] trail: String,
+    #[prop(optional, into)] disabled: Signal<bool>,
     #[prop(optional, into)] on_input: Option<Callback<String>>,
     #[prop(optional, into)] on_keydown: Option<Callback<KeyboardEvent>>,
 ) -> impl IntoView {
@@ -34,6 +35,7 @@ pub fn Input(
                 class="cv-input__field"
                 prop:value=move || value.map(|v| v.get()).unwrap_or_default()
                 placeholder=placeholder
+                disabled=disabled
                 on:input=oninput
                 on:keydown=onkeydown
             />

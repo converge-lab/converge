@@ -813,6 +813,8 @@ dependencies = [
  "testcontainers-modules",
  "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "ulid",
  "uuid",
 ]

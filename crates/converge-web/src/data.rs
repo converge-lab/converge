@@ -628,6 +628,11 @@ pub fn drop_project_local(store: AppStore, id: &str) {
         .get_untracked()
         .expect("dataset loaded before a mutation");
     let mut ds = (*cur).clone();
+    remove_project(&mut ds, id);
+    store.dataset().set(Some(Rc::new(ds)));
+}
+
+fn remove_project(ds: &mut Dataset, id: &str) {
     ds.projects.retain(|p| p.id != id);
     for g in &mut ds.groups {
         g.project_ids.retain(|p| p != id);
@@ -642,28 +647,43 @@ pub fn drop_project_local(store: AppStore, id: &str) {
     ds.signals
         .retain(|s| s.from != id && !doomed.contains(&s.dec_id));
     ds.unread.retain(|p| p != id);
-    store.dataset().set(Some(Rc::new(ds)));
 }
 
 /// Reflect a deleted group: the group and, transitively, each of its
-/// projects. The caller re-points the active-group index first.
+/// projects, in one dataset update. Keep another selected group selected.
 pub fn drop_group_local(store: AppStore, id: &str) {
-    let projects: Vec<String> = ds()
+    // This also runs after an API response, outside a reactive owner. Read
+    // the captured store instead of looking it up through component context.
+    let cur = store
+        .dataset()
+        .get_untracked()
+        .expect("dataset loaded before a mutation");
+    let selected = cur
+        .groups
+        .get(store.group().get_untracked())
+        .map(|g| g.id.clone());
+    let projects: Vec<String> = cur
         .projects
         .iter()
         .filter(|p| p.group_id == id)
         .map(|p| p.id.clone())
         .collect();
-    for p in &projects {
-        drop_project_local(store, p);
-    }
-    let cur = store
-        .dataset()
-        .get_untracked()
-        .expect("dataset loaded before a mutation");
     let mut ds = (*cur).clone();
+    for p in &projects {
+        remove_project(&mut ds, p);
+    }
     ds.groups.retain(|g| g.id != id);
-    store.dataset().set(Some(Rc::new(ds)));
+    let index = ds
+        .groups
+        .iter()
+        .position(|g| Some(&g.id) == selected.as_ref())
+        .unwrap_or(0);
+    leptos::prelude::batch(|| {
+        if store.group().get_untracked() != index {
+            store.group().set(index);
+        }
+        store.dataset().set(Some(Rc::new(ds)));
+    });
 }
 
 /// Reflect an edited project's name/description in place (the id is immutable).
@@ -1007,6 +1027,74 @@ mod tests {
         let seed = Seed::parse(EMBEDDED).expect("embedded seed parses");
         validate(&seed).expect("embedded seed validates");
         build_dataset(assemble(&seed))
+    }
+
+    #[test]
+    fn group_deletion_updates_the_captured_store_without_component_context() {
+        use crate::store::AppState;
+        use leptos::prelude::Owner;
+
+        let original = dataset();
+        let group = original.groups[0].clone();
+        let remaining_groups = original.groups.len() - 1;
+        let remaining_projects = original.projects.len() - group.project_ids.len();
+        let owner = Owner::new();
+        // Deliberately do not provide the store as context: API completions
+        // have the handle but no component owner to look it up from.
+        let store = owner.with(|| {
+            AppStore::new_local(AppState {
+                dataset: Some(Rc::new(original)),
+                ..Default::default()
+            })
+        });
+        drop_group_local(store, &group.id);
+        let updated = store.dataset().get_untracked().unwrap();
+        assert_eq!(updated.groups.len(), remaining_groups);
+        assert_eq!(updated.projects.len(), remaining_projects);
+        assert!(
+            !updated
+                .decisions
+                .iter()
+                .any(|d| group.project_ids.contains(&d.project_id))
+        );
+        owner.cleanup();
+    }
+
+    #[test]
+    fn deleting_another_group_preserves_the_selection_and_only_missing_routes_redirect() {
+        use crate::{route::Route, store::AppState};
+        use leptos::prelude::Owner;
+        let mut original = dataset();
+        let deleted = original.groups[0].id.clone();
+        let mut remaining = original.groups[0].clone();
+        remaining.id = "remaining-group".into();
+        remaining.project_ids.clear();
+        original.groups.push(remaining.clone());
+        let selected = original.groups.len() - 1;
+        let owner = Owner::new();
+        let store = owner.with(|| {
+            AppStore::new_local(AppState {
+                group: selected,
+                dataset: Some(Rc::new(original)),
+                ..Default::default()
+            })
+        });
+        drop_group_local(store, &deleted);
+        let updated = store.dataset().get_untracked().unwrap();
+        let selected = store.group().get_untracked();
+        assert_eq!(updated.groups[selected].id, remaining.id);
+        assert!(Route::Settings.valid_for(&updated, selected) == Route::Settings);
+        assert!(
+            Route::ProjectSettings("missing".into()).valid_for(&updated, selected)
+                == Route::Dashboard
+        );
+        assert!(Route::GroupSettings.valid_for(&updated, selected) == Route::GroupSettings);
+        for group in updated.groups.clone() {
+            drop_group_local(store, &group.id);
+        }
+        let empty = store.dataset().get_untracked().unwrap();
+        assert!(Route::GroupSettings.valid_for(&empty, 0) == Route::Dashboard);
+        owner.cleanup();
     }
 
     /// The dataset builds from the embedded seed with the expected inventory.

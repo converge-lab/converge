@@ -12,7 +12,10 @@
 //! against the committed `.sqlx/` cache — regenerate it with
 //! `cargo xtask prepare` after changing any query.
 
+mod error;
 mod wire;
+
+use error::db_err;
 
 use std::collections::HashMap;
 
@@ -2529,25 +2532,6 @@ fn no_self_loop(id: Uuid, target: DecisionId, verb: &str) -> Result<Uuid, StoreE
         )));
     }
     Ok(target)
-}
-
-/// Map sqlx failures onto the backend-agnostic [`StoreError`].
-fn db_err(e: sqlx::Error) -> StoreError {
-    match &e {
-        sqlx::Error::RowNotFound => StoreError::NotFound,
-        sqlx::Error::Database(d) if d.code().as_deref() == Some("23503") => {
-            // Foreign-key violation: the caller referenced a record that
-            // doesn't exist (e.g. an unknown project).
-            StoreError::Invalid(format!("missing referenced record: {d}"))
-        }
-        sqlx::Error::Database(d) if d.code().as_deref() == Some("23505") => {
-            StoreError::Conflict(d.to_string())
-        }
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            StoreError::Unavailable(e.to_string())
-        }
-        _ => StoreError::Backend(e.to_string()),
-    }
 }
 
 /// One code anchor, set semantics: the same range at the same commit is

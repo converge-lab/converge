@@ -87,6 +87,22 @@ jobs:
         run: cargo check -p converge-client -p converge-ui -p converge-web --all-features --target wasm32-unknown-unknown
       - name: Clippy wasm crates
         run: cargo clippy -p converge-ui -p converge-web --all-features --target wasm32-unknown-unknown -- -D warnings
+      - name: Install Trunk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - name: Build browser bundle (including wasm-bindgen)
+        working-directory: crates/converge-web
+        run: trunk build --features api --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser error-handling regressions
+        run: npm run test:ui
 
   clippy:
     runs-on: ubuntu-latest

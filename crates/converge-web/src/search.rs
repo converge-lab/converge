@@ -6,10 +6,21 @@
 
 use crate::data::{self, Dec};
 use crate::route::Route;
+#[cfg(feature = "api")]
+use converge_ui::atoms::{Button, ButtonVariant};
 use converge_ui::atoms::{Glyph, Input, Select};
 use converge_ui::molecules::AvatarStack;
 use leptos::prelude::*;
 use std::rc::Rc;
+
+#[derive(Clone)]
+enum SearchResult {
+    Browse,
+    Loading,
+    Ready(Vec<String>),
+    #[cfg(feature = "api")]
+    Failed(String),
+}
 
 /// One search pass. The async side stores plain decision *ids* — the
 /// spawned future has no reactive context, so dataset resolution waits
@@ -18,13 +29,17 @@ fn run_search(
     query: String,
     project: String,
     status: String,
-    current: RwSignal<String>,
-    results: RwSignal<Option<Vec<String>>>,
+    revision: RwSignal<u64>,
+    results: RwSignal<SearchResult>,
 ) {
+    // Include filter changes and repeated queries in the stale-response
+    // guard; comparing only the query text lets older requests win.
+    revision.update(|value| *value += 1);
     if query.trim().is_empty() {
-        results.set(None);
+        results.set(SearchResult::Browse);
         return;
     }
+    results.set(SearchResult::Loading);
     #[cfg(feature = "api")]
     {
         use converge_client::{DecisionFilter, DecisionStatus, ProjectId};
@@ -43,26 +58,31 @@ fn run_search(
             },
             unseen: false,
         };
+        let request = revision.get_untracked();
         leptos::task::spawn_local(async move {
             let hits = crate::store::client()
                 .decision_search(&query, &filter, Some(30))
-                .await
-                // A term-free query ("-", "or") is a 400 — render it as
-                // no results, not an error state.
-                .unwrap_or_default();
-            if current.get_untracked() != query {
-                return; // stale: the user kept typing
+                .await;
+            if revision.try_get_untracked() != Some(request) {
+                return; // superseded, or the user left this screen
             }
-            results.set(Some(hits.iter().map(|d| d.id.to_string()).collect()));
+            results.set(match hits {
+                Ok(hits) => SearchResult::Ready(hits.iter().map(|d| d.id.to_string()).collect()),
+                Err(error) => SearchResult::Failed(crate::feedback::message(
+                    "Couldn't search decisions",
+                    &error,
+                )),
+            });
         });
     }
     #[cfg(not(feature = "api"))]
     {
         // Offline analog: case-insensitive substring over the dataset.
-        let _ = &current;
         let needle = query.to_lowercase();
         let hits = data::search_local(&needle, &project, &status);
-        results.set(Some(hits.iter().map(|d| d.id.clone()).collect()));
+        results.set(SearchResult::Ready(
+            hits.iter().map(|d| d.id.clone()).collect(),
+        ));
     }
 }
 
@@ -72,16 +92,16 @@ pub fn Search(go: Callback<Route>) -> impl IntoView {
     let query_value: Signal<String> = query.into();
     let project = RwSignal::new("all".to_string());
     let status = RwSignal::new("all".to_string());
-    // `None` = no active search — browse the recent feed. Ids, not rows:
-    // render-time resolution keeps the async side context-free.
-    let results: RwSignal<Option<Vec<String>>> = RwSignal::new(None);
+    // Ids, not rows: render-time resolution keeps the async side context-free.
+    let results = RwSignal::new(SearchResult::Browse);
+    let revision = RwSignal::new(0);
 
     let refresh = move || {
         run_search(
             query.get_untracked(),
             project.get_untracked(),
             status.get_untracked(),
-            query,
+            revision,
             results,
         )
     };
@@ -150,7 +170,7 @@ pub fn Search(go: Callback<Route>) -> impl IntoView {
             </div>
 
             {move || match results.get() {
-                None => {
+                SearchResult::Browse => {
                     view! {
                         <h1 class="cv-heading cv-fs-3xl cv-mb-4">
                             "Search across every group"
@@ -167,7 +187,18 @@ pub fn Search(go: Callback<Route>) -> impl IntoView {
                     }
                         .into_any()
                 }
-                Some(ids) => {
+                SearchResult::Loading => view! {
+                    <p role="status" class="cv-fs-lg cv-fg-muted">"Searching…"</p>
+                }.into_any(),
+                #[cfg(feature = "api")]
+                SearchResult::Failed(message) => view! {
+                    <div class="cv-col cv-gap-10">
+                        <p role="alert" class="cv-fs-lg cv-fg-danger">{message}</p>
+                        <div><Button label="Retry" variant=ButtonVariant::Outline
+                            on_click=Callback::new(move |()| refresh()) /></div>
+                    </div>
+                }.into_any(),
+                SearchResult::Ready(ids) => {
                     let hits: Vec<Rc<Dec>> =
                         ids.iter().filter_map(|id| data::by_id(id)).collect();
                     if hits.is_empty() {

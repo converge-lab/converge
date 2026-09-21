@@ -61,7 +61,7 @@ pub const EXCERPT_LINES: usize = 120;
 /// lines joined with `\n` and ends with one, whatever the file's own
 /// line endings are. Extract the same range from the blob, normalize
 /// the same way, and the digest matches.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeAnchor {
     /// Full 40-hex commit sha — the same in every clone.
     pub commit: String,
@@ -73,6 +73,17 @@ pub struct CodeAnchor {
     pub excerpt: String,
     /// Hex sha256 of the excerpt bytes.
     pub digest: String,
+    /// When the repository last agreed: the blob at `commit` held these
+    /// lines and they hashed to `digest`. Server-set and ignored on the
+    /// way in, like a timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub verified_at: Option<OffsetDateTime>,
+    /// Why the repository disagreed, when it did: the commit is gone,
+    /// the file is, the range is past the end, or the lines have moved.
+    /// Exclusive with `verified_at`; both absent means nobody asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<String>,
 }
 
 impl CodeAnchor {
@@ -306,6 +317,23 @@ pub trait Decisions {
         session: &str,
         harness: Option<&str>,
         ids: &[DecisionId],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Record what the repository said about one code anchor, addressed
+    /// by its key. `Ok(())` stamps `verified_at` and clears any old
+    /// mismatch; `Err(why)` records the disagreement and clears the
+    /// stamp — an anchor is never both. The anchor itself is untouched:
+    /// what was cited stays cited whatever the repository says now.
+    /// An anchor that is not there is a no-op, not an error: it may
+    /// have been dropped while the check was in flight.
+    fn decision_anchor_checked(
+        &self,
+        scope: Scope,
+        decision: DecisionId,
+        commit: &str,
+        path: &str,
+        lines: (u32, u32),
+        outcome: Result<(), String>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// The evidence read projection: cited sessions with their anchored

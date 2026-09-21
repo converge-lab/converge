@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select decision_id, commit, path, line_start, line_end, excerpt, digest\n             from decision_code_evidence\n             where decision_id = any($1)\n             order by path, line_start, commit",
+  "query": "select decision_id, commit, path, line_start, line_end, excerpt, digest,\n                    verified_at, mismatch\n             from decision_code_evidence\n             where decision_id = any($1)\n             order by path, line_start, commit",
   "describe": {
     "columns": [
       {
@@ -37,6 +37,16 @@
         "ordinal": 6,
         "name": "digest",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "verified_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "mismatch",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -51,8 +61,10 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "aa85bb1bef92a4c01aab48d95e8231769656407b58485be5fbee0b97d446df28"
+  "hash": "72c5ff27e645e40606d6f0c7a083e5aec4666969b03d0da0dd434b719050da2a"
 }

@@ -639,6 +639,7 @@ async fn code_anchors_are_validated_stored_and_edited() {
         lines: (10, 11),
         digest: CodeAnchor::digest_of(&excerpt),
         excerpt,
+        ..Default::default()
     };
 
     // Invariants fail loudly, each naming what is wrong.
@@ -851,4 +852,106 @@ async fn receipts_decide_what_is_unseen() {
         .await
         .unwrap();
     assert_eq!(unseen(Scope::User(stranger)).await, vec![]);
+}
+
+/// What the repository says about an anchor is written beside it and
+/// never into it: the citation stays what was cited.
+#[tokio::test]
+async fn a_checked_anchor_keeps_what_it_cited() {
+    use converge_storage::CodeAnchor;
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    let excerpt = "let x = 1;\n".to_string();
+    let anchor = CodeAnchor {
+        commit: "c".repeat(40),
+        path: "src/lib.rs".into(),
+        lines: (7, 7),
+        digest: CodeAnchor::digest_of(&excerpt),
+        excerpt,
+        ..Default::default()
+    };
+    let id = store
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id: project,
+                status: DecisionStatus::Accepted,
+                title: "t".into(),
+                summary: String::new(),
+                context: None,
+                consequences: None,
+                alternatives: Vec::new(),
+                authors: vec![Author::User(me)],
+                supersedes: Vec::new(),
+                evidence: Vec::new(),
+                code_evidence: vec![anchor.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    let held = |store: PgStorage, id| async move {
+        store
+            .decision_get(Scope::System, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .code_evidence
+            .remove(0)
+    };
+
+    // Nobody has asked yet.
+    let before = held(store.clone(), id).await;
+    assert!(before.verified_at.is_none() && before.mismatch.is_none());
+
+    // The repository agreed.
+    store
+        .decision_anchor_checked(
+            Scope::System,
+            id,
+            &anchor.commit,
+            &anchor.path,
+            anchor.lines,
+            Ok(()),
+        )
+        .await
+        .unwrap();
+    let agreed = held(store.clone(), id).await;
+    assert!(agreed.verified_at.is_some(), "{agreed:?}");
+    assert!(agreed.mismatch.is_none());
+    assert_eq!(agreed.excerpt, anchor.excerpt);
+    assert_eq!(agreed.digest, anchor.digest);
+
+    // Then it did not: the stamp goes, the reason arrives, the citation
+    // is untouched, and the two are never both.
+    store
+        .decision_anchor_checked(
+            Scope::System,
+            id,
+            &anchor.commit,
+            &anchor.path,
+            anchor.lines,
+            Err("the file is gone at that commit".into()),
+        )
+        .await
+        .unwrap();
+    let disagreed = held(store.clone(), id).await;
+    assert!(disagreed.verified_at.is_none(), "{disagreed:?}");
+    assert_eq!(
+        disagreed.mismatch.as_deref(),
+        Some("the file is gone at that commit")
+    );
+    assert_eq!(disagreed.excerpt, anchor.excerpt);
+
+    // An anchor that is not there is a no-op, not an error.
+    store
+        .decision_anchor_checked(
+            Scope::System,
+            id,
+            &anchor.commit,
+            "other.rs",
+            (1, 1),
+            Ok(()),
+        )
+        .await
+        .unwrap();
 }

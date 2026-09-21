@@ -139,7 +139,8 @@ impl PgStorage {
             return Ok(HashMap::new());
         }
         let rows = sqlx::query!(
-            "select decision_id, commit, path, line_start, line_end, excerpt, digest
+            "select decision_id, commit, path, line_start, line_end, excerpt, digest,
+                    verified_at, mismatch
              from decision_code_evidence
              where decision_id = any($1)
              order by path, line_start, commit",
@@ -159,6 +160,8 @@ impl PgStorage {
                     lines: (row.line_start as u32, row.line_end as u32),
                     excerpt: row.excerpt,
                     digest: row.digest,
+                    verified_at: row.verified_at,
+                    mismatch: row.mismatch,
                 });
         }
         Ok(anchors)
@@ -1583,6 +1586,41 @@ impl Decisions for PgStorage {
             .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn decision_anchor_checked(
+        &self,
+        scope: Scope,
+        decision: DecisionId,
+        commit: &str,
+        path: &str,
+        lines: (u32, u32),
+        outcome: Result<(), String>,
+    ) -> Result<(), StoreError> {
+        let (start, end) = lines;
+        let mismatch = outcome.err();
+        sqlx::query!(
+            r#"update decision_code_evidence e
+               set verified_at = case when $6::text is null then now() end,
+                   mismatch    = $6
+               from decisions d
+               join projects p on p.id = d.project_id
+               where e.decision_id = $1 and d.id = e.decision_id
+                 and e.commit = $2 and e.path = $3
+                 and e.line_start = $4 and e.line_end = $5
+                 and ($7::uuid is null or group_visible(p.group_id, $7))"#,
+            Uuid::from(decision.ulid()),
+            commit,
+            path,
+            start as i32,
+            end as i32,
+            mismatch,
+            viewer(scope),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn decision_sources(

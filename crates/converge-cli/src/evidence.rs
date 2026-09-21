@@ -179,6 +179,9 @@ fn anchor_at(at: &Path, start: u32, end: u32, here: &str) -> Result<CodeAnchor, 
         lines: (start, end),
         excerpt,
         digest,
+        // Server-set once the repository has been asked.
+        verified_at: None,
+        mismatch: None,
     };
     // Storage has the last word on what an anchor is; refuse here rather
     // than send one it would send back.

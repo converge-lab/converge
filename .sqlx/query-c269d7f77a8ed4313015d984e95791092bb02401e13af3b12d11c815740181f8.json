@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select e.decision_id, e.commit, e.path, e.line_start, e.line_end,\n                      e.excerpt, e.digest, p.repository\n               from decision_code_evidence e\n               join decisions d on d.id = e.decision_id\n               join projects p on p.id = d.project_id\n               where e.verified_at is null and e.mismatch is null\n               order by d.captured_at, e.path, e.line_start\n               limit $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "commit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "line_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "line_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "excerpt",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "digest",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "repository",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c269d7f77a8ed4313015d984e95791092bb02401e13af3b12d11c815740181f8"
+}

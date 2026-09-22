@@ -955,3 +955,74 @@ async fn a_checked_anchor_keeps_what_it_cited() {
         .await
         .unwrap();
 }
+
+/// The sweep's reading half: what still needs asking, with where to ask.
+#[tokio::test]
+async fn unchecked_anchors_come_back_with_their_repository() {
+    use converge_storage::{CodeAnchor, ProjectEdit, Repository};
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    store
+        .project_edit(
+            Scope::System,
+            project,
+            vec![ProjectEdit::SetRepository(Some(Repository::Github {
+                owner: "converge-lab".into(),
+                name: "converge".into(),
+            }))],
+        )
+        .await
+        .unwrap();
+    let excerpt = "let x = 1;\n".to_string();
+    let anchor = CodeAnchor {
+        commit: "d".repeat(40),
+        path: "src/lib.rs".into(),
+        lines: (3, 3),
+        digest: CodeAnchor::digest_of(&excerpt),
+        excerpt,
+        ..Default::default()
+    };
+    let id = store
+        .decision_add(
+            Scope::System,
+            NewDecision {
+                project_id: project,
+                status: DecisionStatus::Accepted,
+                title: "t".into(),
+                summary: String::new(),
+                context: None,
+                consequences: None,
+                alternatives: Vec::new(),
+                authors: vec![Author::User(me)],
+                supersedes: Vec::new(),
+                evidence: Vec::new(),
+                code_evidence: vec![anchor.clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+    let waiting = store.code_anchors_unchecked(10).await.unwrap();
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0].decision, id);
+    assert_eq!(waiting[0].anchor.digest, anchor.digest);
+    assert!(matches!(
+        &waiting[0].repository,
+        Some(Repository::Github { owner, name })
+            if owner == "converge-lab" && name == "converge"
+    ));
+
+    // Once asked, whatever the answer, it is not waiting any more.
+    store
+        .decision_anchor_checked(
+            Scope::System,
+            id,
+            &anchor.commit,
+            &anchor.path,
+            anchor.lines,
+            Err("the lines at that commit are not the ones cited".into()),
+        )
+        .await
+        .unwrap();
+    assert!(store.code_anchors_unchecked(10).await.unwrap().is_empty());
+}

@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 
 use crate::ids::{AgentId, DecisionId, GroupId, MessageId, ProjectId, UserId};
 use crate::message::Message;
+use crate::project::Repository;
 use crate::session::Session;
 use crate::{Pagination, Scope, StoreError};
 
@@ -49,6 +50,16 @@ pub struct Alternative {
 
 /// The most lines one code anchor may cite; a longer citation is two.
 pub const EXCERPT_LINES: usize = 120;
+
+/// An anchor waiting on the repository, with where to ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unchecked {
+    pub decision: DecisionId,
+    /// `None` when the project never recorded where its code lives, in
+    /// which case there is nobody to ask.
+    pub repository: Option<Repository>,
+    pub anchor: CodeAnchor,
+}
 
 /// A line range in one file at one commit of the project's repository,
 /// with the cited lines as they were and their hash. Written once and
@@ -318,6 +329,15 @@ pub trait Decisions {
         harness: Option<&str>,
         ids: &[DecisionId],
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Code anchors nobody has asked the repository about: no stamp and
+    /// no mismatch, oldest decisions first, each with the repository it
+    /// belongs to so the caller knows where to look. `Scope::System`
+    /// only — this is the server checking its own records.
+    fn code_anchors_unchecked(
+        &self,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Unchecked>, StoreError>> + Send;
 
     /// Record what the repository said about one code anchor, addressed
     /// by its key. `Ok(())` stamps `verified_at` and clears any old

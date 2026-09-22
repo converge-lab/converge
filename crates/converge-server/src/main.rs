@@ -22,6 +22,14 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tracing::info;
 
+/// How many anchors one pass asks about. Small: each is a request to
+/// GitHub, and the backlog is drained over several passes rather than
+/// in a burst that spends a rate limit.
+const ANCHORS_PER_SWEEP: u32 = 25;
+/// How long between passes. Nothing waits on a verdict, so this is
+/// slow on purpose.
+const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 #[derive(Parser)]
 #[command(about = "The Converge server", long_about = None)]
 struct Cli {
@@ -158,6 +166,32 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
     let expert = converge_server::Expert::new(store.clone(), registry, agent);
+
+    // Checking anchors against their repository: a slow loop rather
+    // than part of a write. Nothing waits on an answer, an outage costs
+    // a pass rather than a verdict, and anchors recorded before the App
+    // existed are picked up the same way as new ones.
+    match converge_server::github::Github::new(&config.github) {
+        Some(github) => {
+            info!("github configured — anchors will be checked against their repositories");
+            let store = store.clone();
+            tokio::spawn(async move {
+                loop {
+                    let swept =
+                        converge_server::github::sweep(&store, &github, ANCHORS_PER_SWEEP).await;
+                    if swept.asked() > 0 {
+                        info!(
+                            matched = swept.matched,
+                            mismatched = swept.mismatched,
+                            "checked code anchors"
+                        );
+                    }
+                    tokio::time::sleep(SWEEP_EVERY).await;
+                }
+            });
+        }
+        None => info!("github not configured — code anchors stay unchecked"),
+    }
 
     if let Some(assets) = &config.web.assets {
         info!(assets = %assets.display(), "serving web assets");

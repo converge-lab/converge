@@ -38,7 +38,7 @@ pub mod user;
 pub use agent::{Agent, AgentKind, Agents, NewAgent};
 pub use decision::{
     Alternative, Author, CodeAnchor, Decision, DecisionEdit, DecisionFilter, DecisionStatus,
-    Decisions, EXCERPT_LINES, Edges, NewDecision, Related, Source,
+    Decisions, EXCERPT_LINES, Edges, NewDecision, Related, Source, Unchecked,
 };
 pub use device::{DeviceClaim, DeviceGrant, Devices, NewDeviceGrant};
 pub use group::{Group, GroupEdit, GroupKind, Groups, NewGroup};

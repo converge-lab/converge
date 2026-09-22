@@ -26,7 +26,7 @@ use converge_storage::{
     NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal, Pagination, Project,
     ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Scope, Session, SessionFilter,
     SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus, Signals, Source, StoreError,
-    Token, TokenId, Tokens, User, UserId, Users,
+    Token, TokenId, Tokens, Unchecked, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -1586,6 +1586,41 @@ impl Decisions for PgStorage {
             .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn code_anchors_unchecked(&self, limit: u32) -> Result<Vec<Unchecked>, StoreError> {
+        let rows = sqlx::query!(
+            r#"select e.decision_id, e.commit, e.path, e.line_start, e.line_end,
+                      e.excerpt, e.digest, p.repository
+               from decision_code_evidence e
+               join decisions d on d.id = e.decision_id
+               join projects p on p.id = d.project_id
+               where e.verified_at is null and e.mismatch is null
+               order by d.captured_at, e.path, e.line_start
+               limit $1"#,
+            i64::from(limit),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Unchecked {
+                decision: wire::id(row.decision_id),
+                // Written by this crate from the enum, so it parses; an
+                // unreadable value reads as unset, like everywhere else.
+                repository: row.repository.and_then(|v| serde_json::from_value(v).ok()),
+                anchor: CodeAnchor {
+                    commit: row.commit,
+                    path: row.path,
+                    lines: (row.line_start as u32, row.line_end as u32),
+                    excerpt: row.excerpt,
+                    digest: row.digest,
+                    verified_at: None,
+                    mismatch: None,
+                },
+            })
+            .collect())
     }
 
     async fn decision_anchor_checked(

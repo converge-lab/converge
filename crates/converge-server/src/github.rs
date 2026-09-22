@@ -14,10 +14,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use converge_storage::CodeAnchor;
+use converge_storage::{CodeAnchor, Repository, Scope, Storage};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use reqwest::StatusCode;
 use serde::Deserialize;
+use tracing::{debug, warn};
 
 use crate::config;
 
@@ -280,6 +281,76 @@ pub fn verdict(anchor: &CodeAnchor, blob: Option<&str>) -> Result<(), String> {
         Ok(())
     } else {
         Err("the lines at that commit are not the ones cited".into())
+    }
+}
+
+/// Ask the repository about anchors nobody has asked about yet.
+///
+/// Answers are written one at a time, so a pass that dies halfway has
+/// still done its work. An outage writes nothing: a mismatch is a
+/// verdict, and we only have one when GitHub answered. An anchor whose
+/// project records no repository, or one whose host we cannot read, is
+/// left alone rather than marked wrong — nobody asked, and the anchor
+/// is still checkable by hand from any clone.
+pub async fn sweep<S: Storage>(store: &S, github: &Github, limit: u32) -> Swept {
+    let mut swept = Swept::default();
+    let Ok(waiting) = store.code_anchors_unchecked(limit).await else {
+        return swept;
+    };
+    for unchecked in waiting {
+        let Some(Repository::Github { owner, name }) = unchecked.repository else {
+            swept.unreachable += 1;
+            continue;
+        };
+        let anchor = unchecked.anchor;
+        let blob = match github
+            .blob(&owner, &name, &anchor.commit, &anchor.path)
+            .await
+        {
+            Ok(blob) => blob,
+            Err(why) => {
+                debug!(%owner, %name, path = %anchor.path, %why, "anchor left unchecked");
+                swept.unreachable += 1;
+                continue;
+            }
+        };
+        let outcome = verdict(&anchor, blob.as_deref());
+        match &outcome {
+            Ok(()) => swept.matched += 1,
+            Err(_) => swept.mismatched += 1,
+        }
+        if let Err(e) = store
+            .decision_anchor_checked(
+                Scope::System,
+                unchecked.decision,
+                &anchor.commit,
+                &anchor.path,
+                anchor.lines,
+                outcome,
+            )
+            .await
+        {
+            warn!(decision = %unchecked.decision, error = %e, "recording an anchor check failed");
+        }
+    }
+    swept
+}
+
+/// What one pass did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Swept {
+    /// The repository still holds the cited lines.
+    pub matched: usize,
+    /// It answered, and disagreed.
+    pub mismatched: usize,
+    /// Nobody could be asked: no repository on the project, a host we
+    /// do not read, or GitHub was unreachable.
+    pub unreachable: usize,
+}
+
+impl Swept {
+    pub fn asked(&self) -> usize {
+        self.matched + self.mismatched
     }
 }
 

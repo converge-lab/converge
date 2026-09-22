@@ -3,7 +3,7 @@ use crate::domain::DecisionRef;
 use crate::molecules::AvatarStack;
 use leptos::prelude::*;
 
-/// A row in a project's decision log table: unread dot + avatars + title/summary
+/// A row in a project's decision log: unread dot + avatars + title/summary
 /// + status + date. Denser than `DecisionMiniRow`; lives inside a `.cv-log`.
 #[component]
 pub fn DecisionLogRow(

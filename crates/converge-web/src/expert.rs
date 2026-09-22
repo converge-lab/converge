@@ -7,16 +7,11 @@
 
 use converge_ui::atoms::Glyph;
 use converge_ui::domain::ChatRole;
-use converge_ui::molecules::{ChatBubble, ChatComposer, ChatListItem};
+use converge_ui::molecules::{ChatBubble, ChatComposer};
+use leptos::html;
 use leptos::prelude::*;
 
 use crate::store::AppStateStoreFields;
-
-const SUGGESTIONS: [&str; 3] = [
-    "What must an agent know before touching authentication?",
-    "Which decisions are still proposed, and what's blocking them?",
-    "Summarize what this group has settled about deployment.",
-];
 
 /// One transcript turn.
 #[derive(Clone, PartialEq)]
@@ -155,66 +150,87 @@ pub fn Expert() -> impl IntoView {
         state.grounded.set(None);
     }
     let thread = state.thread;
+    let is_empty = Memo::new(move |_| thread.with(Vec::is_empty));
     let grounded = state.grounded;
+    let busy = state.busy;
+    let messages_ref = NodeRef::<html::Div>::new();
+    let following = RwSignal::new(true);
+
+    // Follow new tokens after the DOM updates, unless the reader has scrolled
+    // back. Only the transcript scrolls; the composer stays mounted in place.
+    Effect::new(move |_| {
+        thread.track();
+        if following.get_untracked() {
+            request_animation_frame(move || {
+                if following.try_get_untracked() == Some(true)
+                    && let Some(Some(el)) = messages_ref.try_get_untracked()
+                {
+                    el.set_scroll_top(el.scroll_height());
+                }
+            });
+        }
+    });
 
     view! {
         <div class="cv-expert">
-            <div class="cv-expert__chats">
+            <div class="cv-expert__area" class:cv-expert__area--empty=move || is_empty.get()>
                 <div
-                    class="cv-expert__newchat"
-                    on:click=move |_| {
-                        thread.set(Vec::new());
-                        grounded.set(None);
+                    class="cv-expert__messages"
+                    node_ref=messages_ref
+                    on:scroll=move |_| {
+                        if let Some(el) = messages_ref.get_untracked() {
+                            following.set(el.scroll_height() - el.scroll_top() - el.client_height() < 48);
+                        }
                     }
                 >
-                    <span class="cv-fg-expert">"＋"</span>
-                    " New chat"
-                </div>
-                <div class="cv-expert__chatslabel">"Chats"</div>
-                <ChatListItem title="New chat" active=true on_click=Callback::new(move |_| {}) />
-            </div>
-
-            <div class="cv-expert__area">
-                <div class="cv-row cv-gap-9 cv-mb-12">
-                    <span class="cv-fg-expert cv-fs-2xl">{Glyph::Expert.glyph()}</span>
-                    <h1 class="cv-heading cv-fs-2xl">"Expert model"</h1>
-                    <span class="cv-spacer"></span>
                     {move || {
                         grounded
                             .get()
                             .map(|(d, s)| {
                                 view! {
-                                    <span class="cv-fs-xs cv-fg-faint">
+                                    <div class="cv-fs-xs cv-fg-faint cv-mb-12">
                                         {format!(
                                             "grounded in {d} decision{} · {s} open signal{}",
                                             if d == 1 { "" } else { "s" },
                                             if s == 1 { "" } else { "s" },
                                         )}
-                                    </span>
+                                    </div>
                                 }
                             })
                     }}
-                </div>
 
-                {move || {
-                    if thread.get().is_empty() {
-                        empty_state(state).into_any()
-                    } else {
-                        thread_view(state).into_any()
-                    }
-                }}
+                    {move || {
+                        if is_empty.get() {
+                            empty_state().into_any()
+                        } else {
+                            thread_view(state).into_any()
+                        }
+                    }}
+                </div>
+                <div class="cv-expert__composer">
+                    <ChatComposer
+                        placeholder=Signal::derive(move || {
+                            if busy.get() { "Answering…" } else { "Ask the expert…" }.to_string()
+                        })
+                        pending=busy
+                        on_send=Callback::new(move |q: String| {
+                            following.set(true);
+                            send(state, q);
+                        })
+                    />
+                </div>
             </div>
         </div>
     }
 }
 
-/// Empty state — hero, composer, and three suggestion chips.
-fn empty_state(state: ExpertState) -> impl IntoView {
+/// The introduction occupies the transcript area until the first message.
+fn empty_state() -> impl IntoView {
     view! {
         <div class="cv-expert__empty">
             <div class="cv-text-center cv-expert__lead">
                 <div class="cv-fs-5xl cv-fg-expert cv-mb-8">{Glyph::Expert.glyph()}</div>
-                <h2 class="cv-heading cv-fs-4xl cv-mb-9">"Ask the expert"</h2>
+                <h1 class="cv-heading cv-fs-4xl cv-mb-9">"Ask the expert"</h1>
                 <p class="cv-fs-lg cv-fg-muted cv-lh-relaxed">
                     "It holds all "
                     <span class="cv-fg-secondary">{crate::data::group_decisions().len()}</span>
@@ -223,33 +239,13 @@ fn empty_state(state: ExpertState) -> impl IntoView {
                     " and answers from them — citing what it leaned on."
                 </p>
             </div>
-            <div class="cv-w-full cv-measure">
-                <ChatComposer
-                    placeholder="Ask the expert…"
-                    on_send=Callback::new(move |q: String| send(state, q))
-                />
-            </div>
-            <div class="cv-w-full cv-measure cv-col cv-gap-7">
-                {SUGGESTIONS
-                    .iter()
-                    .map(|s| {
-                        let q = *s;
-                        view! {
-                            <div class="cv-suggest" on:click=move |_| send(state, q.to_string())>
-                                {q}
-                            </div>
-                        }
-                    })
-                    .collect_view()}
-            </div>
         </div>
     }
 }
 
-/// The live conversation plus the docked composer.
+/// The live conversation, independently scrollable above the composer.
 fn thread_view(state: ExpertState) -> impl IntoView {
     let thread = state.thread;
-    let busy = state.busy;
     view! {
         <div class="cv-expert__thread">
             {move || {
@@ -262,18 +258,6 @@ fn thread_view(state: ExpertState) -> impl IntoView {
                         view! { <ChatBubble role=role text=text /> }
                     })
                     .collect_view()
-            }}
-        </div>
-
-        <div class="cv-pt-16">
-            {move || {
-                let waiting = busy.get();
-                view! {
-                    <ChatComposer
-                        placeholder=if waiting { "Answering…" } else { "Ask the expert…" }
-                        on_send=Callback::new(move |q: String| send(state, q))
-                    />
-                }
             }}
         </div>
     }

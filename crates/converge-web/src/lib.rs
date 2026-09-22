@@ -629,9 +629,20 @@ fn Sidebar(
             aria-modal=move || if nav_open.get() { "true" } else { "false" }
             aria-label="Main navigation"
         >
-            <div class="cv-sidebar__logo">
+            <a
+                class="cv-sidebar__logo"
+                href=Route::Dashboard.to_hash()
+                aria-label="Converge — Dashboard"
+                on:click=move |ev: ev::MouseEvent| {
+                    if ev.button() != 0 || ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.alt_key() {
+                        return;
+                    }
+                    ev.prevent_default();
+                    go.run(Route::Dashboard);
+                }
+            >
                 <Logo />
-            </div>
+            </a>
 
             // Groups — a list, not a dropdown: where you are and what else
             // exists are both visible without a click. The header's "＋" adds

@@ -834,36 +834,28 @@
 
 /* Expert (chat) ----------------------------------------------------------- */
 .cv-expert {
-  max-width: 67.5rem;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 13.125rem minmax(0, 1fr);
-  gap: 1.625rem;
-  /* Stretch the grid so the chats column's right border runs full height. */
-  min-height: calc(100vh - 8.25rem);
-}
-.cv-expert__chats { display: flex; flex-direction: column; gap: 0.1875rem; border-right: 1px solid var(--cv-border); padding-right: 1.125rem; }
-.cv-expert__newchat {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5625rem 0.6875rem;
-  border: 1px solid var(--cv-border-strong);
-  border-radius: 0.5rem;
-  cursor: pointer;
-  font-size: 0.8125rem;
-  color: var(--cv-text);
-  margin-bottom: 0.5rem;
+  flex-direction: column;
 }
-.cv-expert__chatslabel {
-  font-weight: 600;
-  font-size: 0.625rem;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--cv-text-faint);
-  padding: 0.375rem 0.6875rem 0.25rem;
+.cv-expert__area { flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 800px; margin-inline: auto; display: flex; flex-direction: column; gap: 1rem; }
+.cv-expert__area--empty { justify-content: center; }
+.cv-expert__area--empty .cv-expert__messages { flex: 0 1 auto; }
+.cv-expert__messages {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-color: var(--cv-text-faint) transparent;
+  scrollbar-width: thin;
 }
-.cv-expert__area { max-width: 46.25rem; width: 100%; margin: 0 auto; display: flex; flex-direction: column; }
+.cv-expert__composer { flex: none; }
 .cv-expert__projs { display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .cv-projchip {
   font-family: var(--cv-font-mono);
@@ -882,15 +874,13 @@
   border-color: color-mix(in srgb, var(--cv-primary) 35%, transparent);
   background: color-mix(in srgb, var(--cv-primary) 10%, transparent);
 }
-.cv-expert__thread { display: flex; flex-direction: column; gap: 1rem; }
+.cv-expert__thread { flex: none; display: flex; flex-direction: column; gap: 1rem; }
 .cv-expert__empty {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1.375rem;
-  padding-bottom: 2.25rem;
 }
 .cv-expert__lead { max-width: 33.75rem; }
 
@@ -956,6 +946,7 @@
 .cv-composer:focus-within { border-color: color-mix(in srgb, var(--cv-expert) 40%, transparent); }
 .cv-composer__input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   outline: none;
@@ -969,9 +960,12 @@
   flex: none;
   width: 2.125rem;
   height: 2.125rem;
+  border: none;
   border-radius: 0.5rem;
+  padding: 0;
   background: var(--cv-expert);
   color: var(--cv-bg);
+  font-family: inherit;
   font-size: 1rem;
   font-weight: 600;
   display: flex;
@@ -979,6 +973,7 @@
   justify-content: center;
   cursor: pointer;
 }
+.cv-composer__send:disabled { opacity: 0.45; cursor: wait; }
 
 .cv-chatitem { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.6875rem; border-radius: 0.5rem; cursor: pointer; border: 1px solid transparent; }
 .cv-chatitem:hover { background: var(--cv-inset); }
@@ -999,31 +994,18 @@
   padding: var(--cv-space-18) 0 var(--cv-space-8);
 }
 
-/* Suggestion chip (Expert empty state) ------------------------------------ */
-.cv-suggest {
-  font-size: 0.78125rem;
-  color: var(--cv-expert);
-  background: color-mix(in srgb, var(--cv-expert) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cv-expert) 20%, transparent);
-  border-radius: 0.5rem;
-  padding: 0.5625rem 0.8125rem;
-  cursor: pointer;
-  text-align: center;
-}
-.cv-suggest:hover { background: color-mix(in srgb, var(--cv-expert) 15%, transparent); }
-
-/* ProjectLog table -------------------------------------------------------- */
-.cv-log { display: flex; flex-direction: column; border: 1px solid var(--cv-border); border-radius: 0.6875rem; overflow: hidden; }
+/* ProjectLog -------------------------------------------------------------- */
+.cv-log { display: flex; flex-direction: column; gap: 0.5rem; }
 .cv-logrow {
   display: flex;
   align-items: center;
   gap: 0.8125rem;
   padding: 0.875rem 1.125rem;
-  border-bottom: 1px solid var(--cv-border);
+  border: 1px solid var(--cv-border);
+  border-radius: 0.6875rem;
   background: var(--cv-inset);
   cursor: pointer;
 }
-.cv-logrow:last-child { border-bottom: none; }
 .cv-logrow:hover { background: var(--cv-panel); }
 .cv-logrow__dot { width: 0.4375rem; height: 0.4375rem; flex: none; border-radius: 50%; }
 .cv-logrow__dot--on { background: var(--cv-primary); box-shadow: 0 0 0.5rem color-mix(in srgb, var(--cv-primary) 50%, transparent); }
@@ -1223,18 +1205,6 @@
   /* Two-column screen grids stack to one column. */
   .cv-dash__grid { grid-template-columns: minmax(0, 1fr); }
   .cv-detail { grid-template-columns: minmax(0, 1fr); }
-  .cv-expert { grid-template-columns: minmax(0, 1fr); min-height: auto; }
-  .cv-expert__chats {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-    border-right: none;
-    border-bottom: 1px solid var(--cv-border);
-    padding-right: 0;
-    padding-bottom: 0.75rem;
-  }
-  .cv-expert__chatslabel { display: none; }
 }
 
 @media (min-width: 1024px) {

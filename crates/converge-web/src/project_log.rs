@@ -1,4 +1,4 @@
-//! The ProjectLog — a single project's decision log as a bordered table, with
+//! The ProjectLog — a single project's decision log as spaced rows, with
 //! reactive status / author / tag filters above it.
 
 use crate::data;

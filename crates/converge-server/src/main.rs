@@ -26,10 +26,6 @@ use tracing::info;
 /// GitHub, and the backlog is drained over several passes rather than
 /// in a burst that spends a rate limit.
 const ANCHORS_PER_SWEEP: u32 = 25;
-/// How long between passes. Nothing waits on a verdict, so this is
-/// slow on purpose.
-const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-
 #[derive(Parser)]
 #[command(about = "The Converge server", long_about = None)]
 struct Cli {
@@ -175,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
         Some(github) => {
             info!("github configured — anchors will be checked against their repositories");
             let store = store.clone();
+            let every = std::time::Duration::from_secs(config.github.sweep_secs.max(5));
             tokio::spawn(async move {
                 loop {
                     let swept =
@@ -186,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
                             "checked code anchors"
                         );
                     }
-                    tokio::time::sleep(SWEEP_EVERY).await;
+                    tokio::time::sleep(every).await;
                 }
             });
         }

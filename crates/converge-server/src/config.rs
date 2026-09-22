@@ -118,6 +118,15 @@ pub struct Github {
     /// someone needs otherwise.
     #[serde(default = "api")]
     pub api: String,
+    /// Seconds between anchor-checking passes. Nothing waits on a
+    /// verdict, so the default is slow; a smaller one is for watching
+    /// it work.
+    #[serde(default = "sweep")]
+    pub sweep_secs: u64,
+}
+
+fn sweep() -> u64 {
+    15 * 60
 }
 
 fn api() -> String {
@@ -134,6 +143,7 @@ impl Default for Github {
             webhook_secret: None,
             token: None,
             api: api(),
+            sweep_secs: sweep(),
         }
     }
 }

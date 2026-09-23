@@ -170,7 +170,7 @@ async fn membership_is_visibility() {
         BOB,
         "PATCH",
         &format!("/api/v1/groups/{gid}"),
-        Some(json!([{ "set_name": "mine now" }])),
+        Some(json!({ "name": "mine now" })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

@@ -645,6 +645,8 @@ mod api {
                     path: c.path.clone(),
                     lines: c.lines,
                     excerpt: c.excerpt.clone(),
+                    verified_at: c.verified_at.map(rfc3339),
+                    mismatch: c.mismatch.clone(),
                 })
                 .collect(),
             captured_at: rfc3339(d.captured_at),

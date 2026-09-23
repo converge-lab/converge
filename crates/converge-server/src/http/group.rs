@@ -75,14 +75,38 @@ async fn fetch<S: Storage>(
     ))
 }
 
+/// A group's own fields. Absent leaves one alone; `null` clears the
+/// description, the only one that can be empty.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Patch {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "super::nullable")]
+    description: Option<Option<String>>,
+}
+
+impl Patch {
+    fn edits(self) -> Vec<GroupEdit> {
+        let mut edits = Vec::new();
+        if let Some(name) = self.name {
+            edits.push(GroupEdit::SetName(name));
+        }
+        if let Some(description) = self.description {
+            edits.push(GroupEdit::SetDescription(description));
+        }
+        edits
+    }
+}
+
 async fn edit<S: Storage>(
     State(store): State<S>,
     Extension(caller): Extension<Caller>,
     Path(id): Path<GroupId>,
-    Json(edits): Json<Vec<GroupEdit>>,
+    Json(patch): Json<Patch>,
 ) -> Result<StatusCode> {
     store
-        .group_edit(Scope::User(caller.user), id, edits)
+        .group_edit(Scope::User(caller.user), id, patch.edits())
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

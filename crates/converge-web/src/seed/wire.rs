@@ -87,6 +87,12 @@ pub struct CodeAnchorRef {
     /// 1-based, inclusive.
     pub lines: (u32, u32),
     pub excerpt: String,
+    /// When the repository last agreed these are the cited lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<String>,
+    /// Why it disagreed, when it did. Exclusive with `verified_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

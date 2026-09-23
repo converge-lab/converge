@@ -28,7 +28,7 @@ async fn session(app: &Router) -> String {
     let response = app
         .clone()
         .oneshot(
-            Request::post("/api/v1/session")
+            Request::post("/auth/session")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json!({ "token": TOKEN }).to_string()))
                 .unwrap(),
@@ -151,7 +151,7 @@ async fn pairing_round_trip() {
     // normalization forgives lowercase, hyphenless entry.
     let (status, _) = send(
         &app,
-        Request::get(format!("/api/v1/device/{user_code}"))
+        Request::get(format!("/api/v1/devices/{user_code}"))
             .body(Body::empty())
             .unwrap(),
     )
@@ -161,7 +161,7 @@ async fn pairing_round_trip() {
     let sloppy = user_code.replace('-', "").to_lowercase();
     let (status, shown) = send(
         &app,
-        Request::get(format!("/api/v1/device/{sloppy}"))
+        Request::get(format!("/api/v1/devices/{sloppy}"))
             .header(header::COOKIE, &cookie)
             .body(Body::empty())
             .unwrap(),
@@ -173,7 +173,7 @@ async fn pairing_round_trip() {
     // Approve. The grant disappears from the approval surface…
     let (status, _) = send(
         &app,
-        Request::post(format!("/api/v1/device/{user_code}"))
+        Request::post(format!("/api/v1/devices/{user_code}"))
             .header(header::COOKIE, &cookie)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(json!({ "approve": true }).to_string()))
@@ -183,7 +183,7 @@ async fn pairing_round_trip() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = send(
         &app,
-        Request::get(format!("/api/v1/device/{user_code}"))
+        Request::get(format!("/api/v1/devices/{user_code}"))
             .header(header::COOKIE, &cookie)
             .body(Body::empty())
             .unwrap(),
@@ -228,7 +228,7 @@ async fn denial_and_client_binding() {
     let user_code = grant["user_code"].as_str().unwrap();
     let (status, _) = send(
         &app,
-        Request::post(format!("/api/v1/device/{user_code}"))
+        Request::post(format!("/api/v1/devices/{user_code}"))
             .header(header::COOKIE, &cookie)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(json!({ "approve": false }).to_string()))
@@ -256,7 +256,7 @@ async fn denial_and_client_binding() {
     // An unknown user code 404s on the approval surface.
     let (status, _) = send(
         &app,
-        Request::get("/api/v1/device/XXXX-XXXX")
+        Request::get("/api/v1/devices/XXXX-XXXX")
             .header(header::COOKIE, &cookie)
             .body(Body::empty())
             .unwrap(),

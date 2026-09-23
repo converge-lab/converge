@@ -269,10 +269,37 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                                             .map(|c| {
                                                 let range = format!("{}:{}-{}", c.path, c.lines.0, c.lines.1);
                                                 let short: String = c.commit.chars().take(7).collect();
+                                                // What the repository said, in the reader's
+                                                // terms: an anchor is readable either way, so
+                                                // this says whether it was taken on faith.
+                                                let (tone, said, why) = match &c.checked {
+                                                    data::Checked::Agreed(at) => (
+                                                        Tone::Primary,
+                                                        "verified".to_string(),
+                                                        format!("the repository agreed {}", crate::when::when(at)),
+                                                    ),
+                                                    data::Checked::Disagreed(why) => (
+                                                        Tone::Danger,
+                                                        "moved".to_string(),
+                                                        why.clone(),
+                                                    ),
+                                                    data::Checked::Unasked => (
+                                                        Tone::Neutral,
+                                                        "unchecked".to_string(),
+                                                        "nobody has asked the repository".to_string(),
+                                                    ),
+                                                };
                                                 view! {
                                                     <div>
                                                         <div class="cv-source__title">
-                                                            <span class="cv-mono">{range}</span>" · "<span class="cv-mono">{short}</span>
+                                                            {match c.link {
+                                                                Some(url) => view! {
+                                                                    <a class="cv-mono cv-link" href=url target="_blank" rel="noreferrer">{range.clone()}</a>
+                                                                }.into_any(),
+                                                                None => view! { <span class="cv-mono">{range.clone()}</span> }.into_any(),
+                                                            }}
+                                                            " · "<span class="cv-mono">{short}</span>" "
+                                                            <span title=why><Badge label=said tone=tone subtle=true /></span>
                                                         </div>
                                                         <pre class="cv-md-pre"><code>{c.excerpt}</code></pre>
                                                     </div>

@@ -13,6 +13,7 @@
 pub mod auth;
 pub mod config;
 pub mod expert;
+pub mod github;
 pub mod http;
 pub mod mcp;
 pub mod metrics;

@@ -71,7 +71,7 @@ sync_now > /dev/null
 want "recorded" "120 turns, turn 1 → turn 120" "$(count)"
 
 echo "== 6. archiving off: the project keeps only what a decision cites"
-api PATCH "/projects/$PID" '[{"set_archive_transcripts":false}]' > /dev/null
+api PATCH "/projects/$PID" '{"archive_transcripts":false}' > /dev/null
 cat >> "$T" <<EOF
 {"type":"user","sessionId":"$SID","cwd":"/repo","timestamp":"2026-09-20T10:05:00Z","message":{"content":"turn 121"}}
 EOF

@@ -26,7 +26,7 @@ use converge_storage::{
     NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal, Pagination, Project,
     ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Scope, Session, SessionFilter,
     SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus, Signals, Source, StoreError,
-    Token, TokenId, Tokens, User, UserId, Users,
+    Token, TokenId, Tokens, Unchecked, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -139,7 +139,8 @@ impl PgStorage {
             return Ok(HashMap::new());
         }
         let rows = sqlx::query!(
-            "select decision_id, commit, path, line_start, line_end, excerpt, digest
+            "select decision_id, commit, path, line_start, line_end, excerpt, digest,
+                    verified_at, mismatch
              from decision_code_evidence
              where decision_id = any($1)
              order by path, line_start, commit",
@@ -159,6 +160,8 @@ impl PgStorage {
                     lines: (row.line_start as u32, row.line_end as u32),
                     excerpt: row.excerpt,
                     digest: row.digest,
+                    verified_at: row.verified_at,
+                    mismatch: row.mismatch,
                 });
         }
         Ok(anchors)
@@ -1583,6 +1586,76 @@ impl Decisions for PgStorage {
             .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn code_anchors_unchecked(&self, limit: u32) -> Result<Vec<Unchecked>, StoreError> {
+        let rows = sqlx::query!(
+            r#"select e.decision_id, e.commit, e.path, e.line_start, e.line_end,
+                      e.excerpt, e.digest, p.repository
+               from decision_code_evidence e
+               join decisions d on d.id = e.decision_id
+               join projects p on p.id = d.project_id
+               where e.verified_at is null and e.mismatch is null
+               order by d.captured_at, e.path, e.line_start
+               limit $1"#,
+            i64::from(limit),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Unchecked {
+                decision: wire::id(row.decision_id),
+                // Written by this crate from the enum, so it parses; an
+                // unreadable value reads as unset, like everywhere else.
+                repository: row.repository.and_then(|v| serde_json::from_value(v).ok()),
+                anchor: CodeAnchor {
+                    commit: row.commit,
+                    path: row.path,
+                    lines: (row.line_start as u32, row.line_end as u32),
+                    excerpt: row.excerpt,
+                    digest: row.digest,
+                    verified_at: None,
+                    mismatch: None,
+                },
+            })
+            .collect())
+    }
+
+    async fn decision_anchor_checked(
+        &self,
+        scope: Scope,
+        decision: DecisionId,
+        commit: &str,
+        path: &str,
+        lines: (u32, u32),
+        outcome: Result<(), String>,
+    ) -> Result<(), StoreError> {
+        let (start, end) = lines;
+        let mismatch = outcome.err();
+        sqlx::query!(
+            r#"update decision_code_evidence e
+               set verified_at = case when $6::text is null then now() end,
+                   mismatch    = $6
+               from decisions d
+               join projects p on p.id = d.project_id
+               where e.decision_id = $1 and d.id = e.decision_id
+                 and e.commit = $2 and e.path = $3
+                 and e.line_start = $4 and e.line_end = $5
+                 and ($7::uuid is null or group_visible(p.group_id, $7))"#,
+            Uuid::from(decision.ulid()),
+            commit,
+            path,
+            start as i32,
+            end as i32,
+            mismatch,
+            viewer(scope),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn decision_sources(

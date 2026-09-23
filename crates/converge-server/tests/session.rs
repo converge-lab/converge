@@ -62,7 +62,7 @@ async fn session_round_trip() {
     let (status, headers, _) = raw(
         &app,
         "POST",
-        "/api/v1/session",
+        "/auth/session",
         &[],
         Some(serde_json::json!({ "token": TOKEN })),
     )
@@ -92,7 +92,7 @@ async fn session_round_trip() {
     assert_eq!(me["provider"], "local");
 
     // Logout answers with an expired cookie.
-    let (status, headers, _) = raw(&app, "DELETE", "/api/v1/session", &[], None).await;
+    let (status, headers, _) = raw(&app, "DELETE", "/auth/session", &[], None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let cleared = set_cookie(&headers);
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
@@ -106,7 +106,7 @@ async fn bad_credentials_stay_out() {
     let (status, _, body) = raw(
         &app,
         "POST",
-        "/api/v1/session",
+        "/auth/session",
         &[],
         Some(serde_json::json!({ "token": "cvg_wrong" })),
     )

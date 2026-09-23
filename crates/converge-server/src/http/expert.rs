@@ -26,7 +26,7 @@ use crate::expert::Expert;
 
 pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
     Router::new()
-        .route("/api/v1/expert/ask", post(ask::<S>))
+        .route("/api/v1/expert/questions", post(ask::<S>))
         .route("/api/v1/expert/timing", get(timing::<S>))
 }
 

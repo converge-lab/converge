@@ -768,6 +768,9 @@ impl<S: Storage + 'static> Memory<S> {
                 lines: a.lines,
                 excerpt: a.excerpt.clone(),
                 digest: a.digest.clone(),
+                // The repository's answer, once it has been asked.
+                verified_at: None,
+                mismatch: None,
             })
             .collect();
         for anchor in &anchors {

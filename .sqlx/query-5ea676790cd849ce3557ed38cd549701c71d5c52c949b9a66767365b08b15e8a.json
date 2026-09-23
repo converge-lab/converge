@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update decision_code_evidence e\n               set verified_at = case when $6::text is null then now() end,\n                   mismatch    = $6\n               from decisions d\n               join projects p on p.id = d.project_id\n               where e.decision_id = $1 and d.id = e.decision_id\n                 and e.commit = $2 and e.path = $3\n                 and e.line_start = $4 and e.line_end = $5\n                 and ($7::uuid is null or group_visible(p.group_id, $7))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ea676790cd849ce3557ed38cd549701c71d5c52c949b9a66767365b08b15e8a"
+}

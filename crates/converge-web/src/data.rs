@@ -48,6 +48,39 @@ pub struct CodeRef {
     pub path: String,
     pub lines: (u32, u32),
     pub excerpt: String,
+    /// What the repository said, last time it was asked: checked and
+    /// agreeing, checked and disagreeing with the reason, or nobody
+    /// asked. An anchor is readable either way — this says whether it
+    /// has been taken on faith.
+    pub checked: Checked,
+    /// Where these lines can be read, when the host's URL shape is
+    /// known. `None` for a plain git remote, where a guessed link
+    /// would as likely 404 as work.
+    pub link: Option<String>,
+}
+
+/// Where an anchor's lines can be read, built from the project's
+/// canonical repository name. Only `github.com` has a URL shape we
+/// know; any other host gets no link rather than a guess that as
+/// likely 404s as works.
+fn cited_at(repo: Option<&str>, anchor: &wire::CodeAnchorRef) -> Option<String> {
+    let rest = repo?.strip_prefix("github.com/")?;
+    let (start, end) = anchor.lines;
+    Some(format!(
+        "https://github.com/{rest}/blob/{}/{}#L{start}-L{end}",
+        anchor.commit, anchor.path
+    ))
+}
+
+/// The repository's answer about an anchor.
+#[derive(Clone, PartialEq)]
+pub enum Checked {
+    /// Nobody has asked: no integration, or not yet swept.
+    Unasked,
+    /// The lines at that commit are the ones cited, as of this time.
+    Agreed(String),
+    /// They are not, and this is why.
+    Disagreed(String),
 }
 
 /// A rejected alternative + why it lost.
@@ -303,6 +336,14 @@ pub fn build_dataset(a: Assembled) -> Dataset {
         .map(|ag| (ag.id.as_str(), ag.name.as_str()))
         .collect();
 
+    // Which repository each project's anchors point into, so a code
+    // citation can offer the lines rather than only describe them.
+    let repo_of: HashMap<&str, &str> = a
+        .projects
+        .iter()
+        .filter_map(|p| Some((p.id.as_str(), p.repository.as_deref()?)))
+        .collect();
+
     let mut extras = a.decision_extras;
     let decisions: Vec<Rc<Dec>> = a
         .decisions
@@ -362,6 +403,12 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                         path: c.path.clone(),
                         lines: c.lines,
                         excerpt: c.excerpt.clone(),
+                        checked: match (&c.verified_at, &c.mismatch) {
+                            (_, Some(why)) => Checked::Disagreed(why.clone()),
+                            (Some(at), None) => Checked::Agreed(at.clone()),
+                            (None, None) => Checked::Unasked,
+                        },
+                        link: cited_at(repo_of.get(d.project_id.as_str()).copied(), c),
                     })
                     .collect(),
                 supersedes: d.supersedes.clone(),

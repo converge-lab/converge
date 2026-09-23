@@ -18,6 +18,17 @@ mod receipts;
 mod session;
 mod signal;
 mod signin;
+
+/// A merge patch's nullable field: `null` is a value here, not an
+/// absence, so serde has to be told to keep the difference between
+/// "clear this" and "do not touch it".
+pub(crate) fn nullable<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
 mod token;
 mod user;
 

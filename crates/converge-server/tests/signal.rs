@@ -142,7 +142,7 @@ async fn signal_round_trip() {
     let (status, _) = send(
         &app,
         "POST",
-        "/api/v1/signals/receipts",
+        "/api/v1/receipts",
         Some(json!({ "session": "sess-1", "harness": "codex", "signal_ids": [id] })),
     )
     .await;
@@ -165,7 +165,7 @@ async fn signal_round_trip() {
             let (status, got) = send(
                 &app,
                 "POST",
-                "/api/v1/signals/claim",
+                "/api/v1/claims",
                 Some(json!({ "session": session, "harness": "codex", "limit": 3 })),
             )
             .await;
@@ -196,7 +196,7 @@ async fn signal_round_trip() {
     let (status, _) = send(
         &app,
         "POST",
-        "/api/v1/signals/claim",
+        "/api/v1/claims",
         Some(json!({ "session": " " })),
     )
     .await;
@@ -254,7 +254,7 @@ async fn signal_round_trip() {
             let (status, got) = send(
                 &app,
                 "POST",
-                "/api/v1/signals/claim",
+                "/api/v1/claims",
                 Some(json!({
                     "session": session, "harness": "claude",
                     "project": project, "limit": 3,

@@ -6,8 +6,8 @@ use converge_server::app;
 use converge_server::auth;
 use converge_server::auth::Sessions;
 use converge_storage::{
-    DecisionEdit, DecisionFilter, DecisionId, DecisionStatus, GroupKind, Identity, NewDecision,
-    NewGroup, NewProject, Pagination, StoreError,
+    DecisionFilter, DecisionId, DecisionStatus, GroupKind, Identity, NewDecision, NewGroup,
+    NewProject, Pagination, StoreError,
 };
 use converge_storage::{Tokens, Users};
 use converge_storage_postgres::PgStorage;
@@ -212,9 +212,7 @@ async fn round_trip() {
         )
         .await
         .unwrap();
-    api.decision_edit(b, &[DecisionEdit::AddEvidence(messages[1])])
-        .await
-        .unwrap();
+    api.decision_anchor(b, messages[1]).await.unwrap();
     let sources = api.decision_sources(b).await.unwrap().unwrap();
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].session.id, sid);
@@ -232,10 +230,16 @@ async fn round_trip() {
         1
     );
 
-    // The edit batch, then the feed sees the change.
-    api.decision_edit(b, &[DecisionEdit::SetContext(Some("ctx".into()))])
-        .await
-        .unwrap();
+    // A merge patch on one field, then the feed sees the change.
+    api.decision_patch(
+        b,
+        &converge_client::DecisionPatch {
+            context: Some(Some("ctx".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let feed = api
         .group_decisions(group, &DecisionFilter::default(), &Pagination::default())
         .await
@@ -290,8 +294,14 @@ async fn errors_map_back_to_the_domain() {
             .is_none()
     );
     assert!(matches!(
-        api.decision_edit(DecisionId::new(), &[DecisionEdit::SetTitle("x".into())])
-            .await,
+        api.decision_patch(
+            DecisionId::new(),
+            &converge_client::DecisionPatch {
+                title: Some("x".into()),
+                ..Default::default()
+            },
+        )
+        .await,
         Err(StoreError::NotFound)
     ));
 

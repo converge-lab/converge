@@ -129,7 +129,7 @@ pub fn edit_group(id: String, name: String, desc: String, action: ActionState) {
     let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
-        use converge_client::{GroupEdit, GroupId};
+        use converge_client::{GroupId, GroupPatch};
         let Ok(gid) = id.parse::<GroupId>() else {
             // "Impossible" (ids come from the dataset), but a silent Save is
             // worse than a strange toast if it ever happens.
@@ -139,12 +139,12 @@ pub fn edit_group(id: String, name: String, desc: String, action: ActionState) {
             );
             return;
         };
-        let edits = vec![
-            GroupEdit::SetName(name.clone()),
-            GroupEdit::SetDescription(description.clone()),
-        ];
+        let patch = GroupPatch {
+            name: Some(name.clone()),
+            description: Some(description.clone()),
+        };
         leptos::task::spawn_local(async move {
-            match crate::store::client().group_edit(gid, &edits).await {
+            match crate::store::client().group_patch(gid, &patch).await {
                 Ok(()) => {
                     action.finish();
                     data::edit_group_local(store, &id, name, description);
@@ -174,7 +174,7 @@ pub fn edit_project(id: String, name: String, desc: String, action: ActionState)
     let description = (!desc.trim().is_empty()).then(|| desc.clone());
     #[cfg(feature = "api")]
     {
-        use converge_client::{ProjectEdit, ProjectId};
+        use converge_client::{ProjectId, ProjectPatch};
         let Ok(pid) = id.parse::<ProjectId>() else {
             action.fail(
                 "Couldn't save project",
@@ -182,12 +182,13 @@ pub fn edit_project(id: String, name: String, desc: String, action: ActionState)
             );
             return;
         };
-        let edits = vec![
-            ProjectEdit::SetName(name.clone()),
-            ProjectEdit::SetDescription(description.clone()),
-        ];
+        let patch = ProjectPatch {
+            name: Some(name.clone()),
+            description: Some(description.clone()),
+            ..Default::default()
+        };
         leptos::task::spawn_local(async move {
-            match crate::store::client().project_edit(pid, &edits).await {
+            match crate::store::client().project_patch(pid, &patch).await {
                 Ok(()) => {
                     action.finish();
                     data::edit_project_local(store, &id, name, description);
@@ -219,7 +220,7 @@ pub fn set_project_archives(id: String, keep: bool, action: ActionState) {
     };
     #[cfg(feature = "api")]
     {
-        use converge_client::{ProjectEdit, ProjectId};
+        use converge_client::{ProjectId, ProjectPatch};
         let Ok(pid) = id.parse::<ProjectId>() else {
             action.fail(
                 "Couldn't change what this project keeps",
@@ -227,9 +228,12 @@ pub fn set_project_archives(id: String, keep: bool, action: ActionState) {
             );
             return;
         };
-        let edits = vec![ProjectEdit::SetArchiveTranscripts(keep)];
+        let patch = ProjectPatch {
+            archive_transcripts: Some(keep),
+            ..Default::default()
+        };
         leptos::task::spawn_local(async move {
-            match crate::store::client().project_edit(pid, &edits).await {
+            match crate::store::client().project_patch(pid, &patch).await {
                 Ok(()) => {
                     action.finish();
                     data::set_proj_archives_local(store, &id, keep);

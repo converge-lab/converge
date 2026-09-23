@@ -352,7 +352,7 @@ async fn ask_guardrails() {
     let (status, body) = send(
         &app,
         "POST",
-        "/api/v1/expert/ask",
+        "/api/v1/expert/questions",
         Some(json!({ "group_id": group, "question": "what do we know?" })),
     )
     .await;
@@ -362,7 +362,7 @@ async fn ask_guardrails() {
     let (status, _) = send(
         &app,
         "POST",
-        "/api/v1/expert/ask",
+        "/api/v1/expert/questions",
         Some(json!({ "group_id": ghost, "question": "hello?" })),
     )
     .await;

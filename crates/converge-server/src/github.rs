@@ -7,7 +7,7 @@
 //! so both work, and a deployment with neither simply never asks.
 //!
 //! What this does *not* do is decide anything about an anchor. It
-//! fetches a blob at a commit; the comparison lives in [`verify`],
+//! fetches a blob at a commit; the comparison lives in [`verdict`],
 //! where it can be tested without a network.
 
 use std::collections::HashMap;

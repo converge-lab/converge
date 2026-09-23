@@ -62,7 +62,7 @@ export default async function checkUiErrors(page) {
   const dismiss = async () => { const close=page.locator('.cv-toast__close'); while(await close.count()) await close.first().click(); };
   page.on('pageerror',onError);
   await page.unrouteAll({behavior:'ignoreErrors'});
-  await page.route(origin+'/api/v1/**', async route => {
+  const handler = async route => {
     const url = route.request().url();
     const path = url.split('?')[0];
     const method = route.request().method();
@@ -105,7 +105,11 @@ export default async function checkUiErrors(page) {
       return reply(pageOf([decision]));
     }
     return reply(pageOf([]));
-  });
+  };
+  // The credential exchange sits at /auth/session now, outside the
+  // versioned API, so one glob no longer covers everything the app calls.
+  await page.route(origin+'/api/v1/**', handler);
+  await page.route(origin+'/auth/**', handler);
   try {
     await page.goto('about:blank');
     await group();
@@ -374,17 +378,17 @@ export default async function checkUiErrors(page) {
     await go('#/pair');
     const code=page.getByPlaceholder('XXXX-XXXX');
     await code.fill('ABCD-EFGH');
-    plan('GET','/device/ABCD-EFGH',{status:404});
+    plan('GET','/devices/ABCD-EFGH',{status:404});
     await button('Look up').click();
     await hasAlert('No pending request');
-    plan('GET','/device/ABCD-EFGH',internal);
+    plan('GET','/devices/ABCD-EFGH',internal);
     await button('Look up').click();
     await hasAlert("Couldn't look up pairing code");
     assert(await code.inputValue()==='ABCD-EFGH','Lookup failure lost code');
-    plan('GET','/device/ABCD-EFGH',json(200,{user_code:'ABCD-EFGH',client_name:'Fixture CLI',expires_at:now}));
+    plan('GET','/devices/ABCD-EFGH',json(200,{user_code:'ABCD-EFGH',client_name:'Fixture CLI',expires_at:now}));
     await button('Look up').click();
     await button('Approve').waitFor();
-    let finishPair=delayed('POST','/device/ABCD-EFGH',internal);
+    let finishPair=delayed('POST','/devices/ABCD-EFGH',internal);
     await button('Approve').click();
     await page.getByRole('status').filter({hasText:'Contacting Converge…'}).waitFor();
     assert(await button('Approve').isDisabled() && await button('Deny').isDisabled(),'Pair decision permits duplicates');
@@ -392,7 +396,7 @@ export default async function checkUiErrors(page) {
     await hasAlert("Couldn't complete device pairing");
     assert(await button('Approve').isEnabled(),'Pair failure cannot be retried');
     checks.push('pairing distinguishes missing code, lookup failure and approval failure, and allows retry');
-    finishPair=delayed('POST','/device/ABCD-EFGH',internal);
+    finishPair=delayed('POST','/devices/ABCD-EFGH',internal);
     await button('Deny').click();
     await page.getByRole('status').filter({hasText:'Contacting Converge…'}).waitFor();
     await go('#/search');

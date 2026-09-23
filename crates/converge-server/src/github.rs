@@ -18,7 +18,7 @@ use converge_storage::{CodeAnchor, Repository, Scope, Storage};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use reqwest::StatusCode;
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::config;
 
@@ -282,6 +282,41 @@ pub fn verdict(anchor: &CodeAnchor, blob: Option<&str>) -> Result<(), String> {
     } else {
         Err("the lines at that commit are not the ones cited".into())
     }
+}
+
+/// How many anchors one pass asks about. Small: each is a request to
+/// GitHub, and a backlog drains over several passes rather than in a
+/// burst that spends a rate limit.
+const ANCHORS_PER_SWEEP: u32 = 25;
+
+/// Start checking anchors against their repositories, if this
+/// deployment can read one. Returns at once; the loop is a background
+/// task and nothing waits on it.
+///
+/// Called from [`crate::app`] rather than from a binary's `main`,
+/// because there is more than one binary — the open server and the
+/// hosted one — and the hosted one silently shipped without this when
+/// it lived in a `main`.
+pub fn start<S: Storage + Clone + Send + Sync + 'static>(store: S, cfg: &config::Github) {
+    let Some(github) = Github::new(cfg) else {
+        info!("github not configured — code anchors stay unchecked");
+        return;
+    };
+    info!("github configured — anchors will be checked against their repositories");
+    let every = Duration::from_secs(cfg.sweep_secs.max(5));
+    tokio::spawn(async move {
+        loop {
+            let swept = sweep(&store, &github, ANCHORS_PER_SWEEP).await;
+            if swept.asked() > 0 {
+                info!(
+                    matched = swept.matched,
+                    mismatched = swept.mismatched,
+                    "checked code anchors"
+                );
+            }
+            tokio::time::sleep(every).await;
+        }
+    });
 }
 
 /// Ask the repository about anchors nobody has asked about yet.

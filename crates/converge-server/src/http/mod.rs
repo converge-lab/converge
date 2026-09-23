@@ -59,7 +59,11 @@ pub fn app<S: Storage + 'static>(
     public: Option<String>,
     web: Option<&Path>,
     expert: crate::expert::Expert<S>,
+    github: &crate::config::Github,
 ) -> Router {
+    // Anchors are checked against their repositories from here, so a
+    // second binary composing this router cannot forget to start it.
+    crate::github::start(store.clone(), github);
     let issuer = oauth::Issuer {
         store: store.clone(),
         sessions: sessions.clone(),

@@ -57,6 +57,7 @@ async fn client() -> (ContainerAsync<Postgres>, Client) {
                 None,
                 None,
                 expert,
+                &Default::default(),
             ),
         )
         .await

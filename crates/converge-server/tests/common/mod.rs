@@ -72,6 +72,8 @@ pub async fn hosted(public: Option<&str>) -> (ContainerAsync<Postgres>, PgStorag
             public.map(str::to_string),
             None,
             expert,
+            // No App and no token: the tests never reach out.
+            &Default::default(),
         ),
     )
 }

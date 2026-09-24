@@ -126,6 +126,7 @@ async fn server(
         None,
         None,
         expert,
+        &Default::default(),
     );
     (node, app)
 }

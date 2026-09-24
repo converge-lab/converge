@@ -39,6 +39,7 @@ async fn healthz() {
         None,
         None,
         expert(&store),
+        &Default::default(),
     )
     .oneshot(Request::get("/api/v1/healthz").body(Body::empty()).unwrap())
     .await
@@ -55,6 +56,7 @@ async fn healthz() {
         None,
         None,
         expert(&gated),
+        &Default::default(),
     );
     for (uri, token) in [
         ("/api/v1/groups", None),
@@ -89,6 +91,7 @@ async fn healthz() {
         None,
         Some(&dist),
         expert(&store),
+        &Default::default(),
     );
     for uri in ["/", "/anything-else"] {
         let response = web

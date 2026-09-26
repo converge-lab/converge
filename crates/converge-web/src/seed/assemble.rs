@@ -150,6 +150,7 @@ pub fn assemble(seed: &Seed) -> Assembled {
                 related_to: related_to.remove(d.id.as_str()).unwrap_or_default(),
                 related_by: related_by.remove(d.id.as_str()).unwrap_or_default(),
                 code_evidence: Vec::new(),
+                amendments: Vec::new(),
                 captured_at: d.captured_at.clone(),
             }
         })

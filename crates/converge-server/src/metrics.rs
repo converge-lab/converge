@@ -198,6 +198,7 @@ pub fn tool_label(name: &str) -> &'static str {
         "session_ensure" => "session_ensure",
         "message_add" => "message_add",
         "decision_add" => "decision_add",
+        "decision_edit" => "decision_edit",
         "decision_get" => "decision_get",
         "decision_list" => "decision_list",
         "decision_search" => "decision_search",

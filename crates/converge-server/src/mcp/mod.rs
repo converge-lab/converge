@@ -180,6 +180,67 @@ pub struct DecisionGet {
     pub decision_id: String,
 }
 
+/// What `decision_edit` may change: the decision's edges, and a dated note
+/// added to it. Its own words — title, summary, context, consequences,
+/// status — are not here on purpose: a decision is a record, and what it
+/// said stays what it said. What changed goes in `amend`.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct DecisionEditIn {
+    /// The decision to edit.
+    pub decision_id: String,
+    /// Decisions this one replaces.
+    #[serde(default)]
+    pub supersedes: Vec<String>,
+    /// Supersessions to withdraw.
+    #[serde(default)]
+    pub remove_supersedes: Vec<String>,
+    /// Decisions worth reading beside this one, each with why.
+    #[serde(default)]
+    pub related: Vec<RelatedIn>,
+    /// Cross-references to withdraw, by decision id.
+    #[serde(default)]
+    pub remove_related: Vec<String>,
+    /// Recorded turns (message ids) this decision is grounded in.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// Message anchors to withdraw.
+    #[serde(default)]
+    pub remove_evidence: Vec<String>,
+    /// Committed code ranges this decision is grounded in. The full form;
+    /// a hook completes a bare `path:lines` from the working tree's HEAD.
+    #[serde(default)]
+    pub code_evidence: Vec<CodeAnchorIn>,
+    /// Code anchors to withdraw, by their key.
+    #[serde(default)]
+    pub remove_code_evidence: Vec<CodeKeyIn>,
+    /// A dated note saying what changed about this decision and why,
+    /// signed by you. Append-only: it can be added, never edited or
+    /// removed. Use it when a signal is confirmed, when the code the
+    /// decision describes has moved on, or when a condition it set was
+    /// knowingly dropped.
+    #[serde(default)]
+    pub amend: Option<String>,
+}
+
+/// A cross-reference on the wire.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct RelatedIn {
+    /// The decision worth reading beside this one.
+    pub to: String,
+    /// Why the pair is worth reading together.
+    #[serde(default)]
+    pub why: Option<String>,
+}
+
+/// A code anchor's key: what identifies it without its excerpt.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct CodeKeyIn {
+    pub commit: String,
+    pub path: String,
+    /// `[start, end]`, as cited.
+    pub lines: (u32, u32),
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct DecisionList {
     /// Narrow to one project.
@@ -896,10 +957,113 @@ impl<S: Storage + 'static> Memory<S> {
                 "decision_id": id,
                 "similar": similar,
                 "note": "existing decisions in this project overlap this one — \
-                         if it replaces one of them, `decision_edit` it with \
-                         `supersedes`; surface the overlap to the user",
+                         surface the overlap to the user; if this one replaces \
+                         one of them, call `decision_edit` on this decision with \
+                         `supersedes` naming it",
             }))
         }
+    }
+
+    #[tool(description = "Change a decision's edges, or add a dated note to it: \
+        supersede decisions it replaces, cross-reference related ones, cite \
+        recorded turns or committed code, withdraw any of those, and `amend` \
+        with what changed and why. A decision's own words are never rewritten \
+        here — what it said stays on the record, and what was learned since \
+        goes in the amendment, signed by you. All the edge changes apply \
+        together or not at all.")]
+    async fn decision_edit(
+        &self,
+        Parameters(req): Parameters<DecisionEditIn>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let id: DecisionId = parse_id(&req.decision_id, "decision_id")?;
+        let ids = |raw: &[String], field: &str| {
+            raw.iter()
+                .map(|s| parse_id::<DecisionId>(s, field))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let mut edits: Vec<converge_storage::DecisionEdit> = Vec::new();
+        for other in ids(&req.supersedes, "supersedes")? {
+            edits.push(converge_storage::DecisionEdit::AddSupersedes(other));
+        }
+        for other in ids(&req.remove_supersedes, "remove_supersedes")? {
+            edits.push(converge_storage::DecisionEdit::RemoveSupersedes(other));
+        }
+        for related in &req.related {
+            edits.push(converge_storage::DecisionEdit::AddRelated {
+                to: parse_id(&related.to, "related.to")?,
+                why: related.why.clone(),
+            });
+        }
+        for other in ids(&req.remove_related, "remove_related")? {
+            edits.push(converge_storage::DecisionEdit::RemoveRelated(other));
+        }
+        for m in &req.evidence {
+            edits.push(converge_storage::DecisionEdit::AddEvidence(parse_id(
+                m, "evidence",
+            )?));
+        }
+        for m in &req.remove_evidence {
+            edits.push(converge_storage::DecisionEdit::RemoveEvidence(parse_id(
+                m,
+                "remove_evidence",
+            )?));
+        }
+        for a in req.code_evidence {
+            let anchor = CodeAnchor {
+                commit: a.commit,
+                path: a.path,
+                lines: a.lines,
+                excerpt: a.excerpt,
+                digest: a.digest,
+                verified_at: None,
+                mismatch: None,
+            };
+            anchor.validate().map_err(map_err)?;
+            edits.push(converge_storage::DecisionEdit::AddCodeEvidence(anchor));
+        }
+        for key in req.remove_code_evidence {
+            edits.push(converge_storage::DecisionEdit::RemoveCodeEvidence {
+                commit: key.commit,
+                path: key.path,
+                lines: key.lines,
+            });
+        }
+        let amend = req.amend.filter(|a| !a.trim().is_empty());
+        if edits.is_empty() && amend.is_none() {
+            return Err(McpError::invalid_params(
+                "nothing to change: name an edge to add or withdraw, or `amend` \
+                 with what changed and why",
+                None,
+            ));
+        }
+
+        let author = self.caller(&context).await?;
+        let scope = match author {
+            Author::UserViaAgent { user, .. } | Author::User(user) => Scope::User(user),
+            Author::Agent(_) => Scope::System,
+        };
+        let applied = edits.len();
+        // Edges first, as one transaction: if any of them is refused,
+        // nothing changed and no note claims otherwise.
+        if !edits.is_empty() {
+            self.store
+                .decision_edit(scope, id, edits)
+                .await
+                .map_err(map_err)?;
+        }
+        let amended = amend.is_some();
+        if let Some(text) = amend {
+            self.store
+                .decision_amend(scope, id, text, author)
+                .await
+                .map_err(map_err)?;
+        }
+        json_result(&serde_json::json!({
+            "decision_id": id,
+            "edges_changed": applied,
+            "amended": amended,
+        }))
     }
 
     #[tool(description = "Get a decision by id: the full ADR, its authors, \

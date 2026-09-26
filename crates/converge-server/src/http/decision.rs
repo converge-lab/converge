@@ -51,6 +51,9 @@ pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
             "/api/v1/decisions/{id}/code-evidence",
             post(cite::<S>).delete(uncite::<S>),
         )
+        // Append-only: there is no item to address, so no PUT and no
+        // DELETE. A later amendment is how an earlier one is corrected.
+        .route("/api/v1/decisions/{id}/amendments", post(amend::<S>))
         .route("/api/v1/projects/{id}/decisions", get(by_project::<S>))
         .route("/api/v1/groups/{id}/decisions", get(by_group::<S>))
 }
@@ -336,6 +339,31 @@ async fn anchor<S: Storage>(
     Path((id, message)): Path<(DecisionId, MessageId)>,
 ) -> Result<StatusCode> {
     one(&store, &caller, id, DecisionEdit::AddEvidence(message)).await
+}
+
+/// What changed, in the caller's words.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AmendmentIn {
+    text: String,
+}
+
+/// Add a dated note to a decision, signed by the caller.
+async fn amend<S: Storage>(
+    State((store, _)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<DecisionId>,
+    Json(amendment): Json<AmendmentIn>,
+) -> Result<StatusCode> {
+    store
+        .decision_amend(
+            Scope::User(caller.user),
+            id,
+            amendment.text,
+            Author::User(caller.user),
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The key of a code anchor, as a query for the delete.

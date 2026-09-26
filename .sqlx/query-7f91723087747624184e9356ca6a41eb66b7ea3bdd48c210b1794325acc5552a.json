@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select decision_id, body, author_user, author_agent, captured_at\n             from decision_amendments\n             where decision_id = any($1)\n             order by captured_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "decision_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "author_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "author_agent",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "captured_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "7f91723087747624184e9356ca6a41eb66b7ea3bdd48c210b1794325acc5552a"
+}

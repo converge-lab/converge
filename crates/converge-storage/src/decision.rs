@@ -153,6 +153,21 @@ pub struct Decision {
     /// Code evidence anchors — the other kind (a set, like `evidence`).
     #[serde(default)]
     pub code_evidence: Vec<CodeAnchor>,
+    /// What was learned after it was recorded, oldest first. Appended,
+    /// never rewritten: the decision above stays what it said.
+    #[serde(default)]
+    pub amendments: Vec<Amendment>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub captured_at: OffsetDateTime,
+}
+
+/// A dated note added to a decision after it was recorded, signed by
+/// whoever added it. There is no editing one and no removing one: a
+/// later amendment is how an earlier one is corrected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Amendment {
+    pub body: String,
+    pub author: Author,
     #[serde(with = "time::serde::rfc3339")]
     pub captured_at: OffsetDateTime,
 }
@@ -328,6 +343,18 @@ pub trait Decisions {
         session: &str,
         harness: Option<&str>,
         ids: &[DecisionId],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Add a dated note to a decision, signed by `by`. Append-only: there
+    /// is no editing or removing one, so what a decision said and what
+    /// was learned about it later both stay on the record. A blank note
+    /// is `Invalid`; a decision the scope cannot see is `NotFound`.
+    fn decision_amend(
+        &self,
+        scope: Scope,
+        decision: DecisionId,
+        body: String,
+        by: Author,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// Code anchors nobody has asked the repository about: no stamp and

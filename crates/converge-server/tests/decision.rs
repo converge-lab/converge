@@ -514,3 +514,46 @@ async fn receipts_over_rest_cover_both_kinds() {
     let (_, page) = send(&app, "GET", "/api/v1/decisions", None).await;
     assert_eq!(page["items"].as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn amendments_over_rest_are_append_only() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let id = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "t", "summary": "s" }),
+    )
+    .await;
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        Some(json!({ "text": "the gate was dropped on purpose" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, got) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(
+        got["amendments"][0]["body"], "the gate was dropped on purpose",
+        "{got}"
+    );
+    assert!(got["amendments"][0]["author"]["user"].is_string(), "{got}");
+
+    // Blank says nothing; there is no item to rewrite or remove.
+    let (status, _) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        Some(json!({ "text": "  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}

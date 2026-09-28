@@ -20,13 +20,13 @@ use error::db_err;
 use std::collections::HashMap;
 
 use converge_storage::{
-    Agent, AgentId, Agents, Author, CodeAnchor, Decision, DecisionEdit, DecisionFilter, DecisionId,
-    DecisionStatus, Decisions, DeviceClaim, DeviceGrant, Devices, Edges, Group, GroupEdit, GroupId,
-    Groups, Identity, Member, Memberships, Message, MessageId, Messages, NewAgent, NewDecision,
-    NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal, Pagination, Project,
-    ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Scope, Session, SessionFilter,
-    SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus, Signals, Source, StoreError,
-    Token, TokenId, Tokens, Unchecked, User, UserId, Users,
+    Agent, AgentId, Agents, Amendment, Author, CodeAnchor, Decision, DecisionEdit, DecisionFilter,
+    DecisionId, DecisionStatus, Decisions, DeviceClaim, DeviceGrant, Devices, Edges, Group,
+    GroupEdit, GroupId, Groups, Identity, Member, Memberships, Message, MessageId, Messages,
+    NewAgent, NewDecision, NewDeviceGrant, NewGroup, NewMessage, NewProject, NewSession, NewSignal,
+    Pagination, Project, ProjectEdit, ProjectFilter, ProjectId, Projects, Related, Scope, Session,
+    SessionFilter, SessionId, Sessions, Signal, SignalFilter, SignalId, SignalStatus, Signals,
+    Source, StoreError, Token, TokenId, Tokens, Unchecked, User, UserId, Users,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -193,6 +193,36 @@ impl PgStorage {
 
     /// Authors for a set of decisions — one query, grouped by decision.
     /// Ordering is stable (arbitrary but deterministic).
+    /// Amendments for a set of decisions — one query, grouped, oldest
+    /// first within each.
+    async fn amendments(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<Amendment>>, StoreError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "select decision_id, body, author_user, author_agent, captured_at
+             from decision_amendments
+             where decision_id = any($1)
+             order by captured_at, id",
+            ids,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let mut amendments: HashMap<Uuid, Vec<Amendment>> = HashMap::new();
+        for row in rows {
+            amendments
+                .entry(row.decision_id)
+                .or_default()
+                .push(Amendment {
+                    body: row.body,
+                    author: wire::author(row.author_user, row.author_agent)?,
+                    captured_at: row.captured_at,
+                });
+        }
+        Ok(amendments)
+    }
+
     async fn authors(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<Author>>, StoreError> {
         if ids.is_empty() {
             return Ok(HashMap::new());
@@ -1364,6 +1394,11 @@ impl Decisions for PgStorage {
             .await?
             .remove(&uuid)
             .unwrap_or_default();
+        decision.amendments = self
+            .amendments(&[uuid])
+            .await?
+            .remove(&uuid)
+            .unwrap_or_default();
         Ok(Some(decision))
     }
 
@@ -1422,11 +1457,13 @@ impl Decisions for PgStorage {
         let mut authors = self.authors(&ids).await?;
         let mut evidence = self.evidence(&ids).await?;
         let mut code = self.code_evidence(&ids).await?;
+        let mut amendments = self.amendments(&ids).await?;
         for decision in &mut decisions {
             let uuid = Uuid::from(decision.id.ulid());
             decision.authors = authors.remove(&uuid).unwrap_or_default();
             decision.evidence = evidence.remove(&uuid).unwrap_or_default();
             decision.code_evidence = code.remove(&uuid).unwrap_or_default();
+            decision.amendments = amendments.remove(&uuid).unwrap_or_default();
         }
         Ok(decisions)
     }
@@ -1509,11 +1546,13 @@ impl Decisions for PgStorage {
         let mut authors = self.authors(&ids).await?;
         let mut evidence = self.evidence(&ids).await?;
         let mut code = self.code_evidence(&ids).await?;
+        let mut amendments = self.amendments(&ids).await?;
         for decision in &mut decisions {
             let uuid = Uuid::from(decision.id.ulid());
             decision.authors = authors.remove(&uuid).unwrap_or_default();
             decision.evidence = evidence.remove(&uuid).unwrap_or_default();
             decision.code_evidence = code.remove(&uuid).unwrap_or_default();
+            decision.amendments = amendments.remove(&uuid).unwrap_or_default();
         }
         Ok(decisions)
     }
@@ -1586,6 +1625,43 @@ impl Decisions for PgStorage {
             .map_err(db_err)?;
         }
         tx.commit().await.map_err(db_err)
+    }
+
+    async fn decision_amend(
+        &self,
+        scope: Scope,
+        decision: DecisionId,
+        body: String,
+        by: Author,
+    ) -> Result<(), StoreError> {
+        let body = body.trim().to_owned();
+        if body.is_empty() {
+            return Err(StoreError::Invalid(
+                "an amendment says what changed — it cannot be blank".into(),
+            ));
+        }
+        let (user, agent) = wire::split(&by);
+        // The visibility gate and the write in one statement: an
+        // invisible decision inserts nothing and reads as NotFound.
+        let written = sqlx::query_scalar!(
+            r#"insert into decision_amendments (id, decision_id, body, author_user, author_agent)
+               select $1, d.id, $3, $4, $5
+               from decisions d
+               join projects p on p.id = d.project_id
+               where d.id = $2
+                 and ($6::uuid is null or group_visible(p.group_id, $6))
+               returning id"#,
+            Uuid::from(ulid::Ulid::new()),
+            Uuid::from(decision.ulid()),
+            body,
+            user,
+            agent,
+            viewer(scope),
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        written.map(|_| ()).ok_or(StoreError::NotFound)
     }
 
     async fn code_anchors_unchecked(&self, limit: u32) -> Result<Vec<Unchecked>, StoreError> {

@@ -59,6 +59,15 @@ pub struct CodeRef {
     pub link: Option<String>,
 }
 
+/// An amendment, resolved for rendering.
+#[derive(Clone)]
+pub struct AmendmentView {
+    pub body: String,
+    pub author: Author,
+    /// ISO-8601 UTC; rendered via `when()`.
+    pub at: String,
+}
+
 /// Where an anchor's lines can be read, built from the project's
 /// canonical repository name. Only `github.com` has a URL shape we
 /// know; any other host gets no link rather than a guess that as
@@ -128,6 +137,8 @@ pub struct Dec {
     pub sources: Vec<Src>,
     /// Code anchors, in path then line order.
     pub code: Vec<CodeRef>,
+    /// Dated, signed notes added after the decision was recorded.
+    pub amendments: Vec<AmendmentView>,
 }
 
 /// A cross-project signal.
@@ -409,6 +420,15 @@ pub fn build_dataset(a: Assembled) -> Dataset {
                             (None, None) => Checked::Unasked,
                         },
                         link: cited_at(repo_of.get(d.project_id.as_str()).copied(), c),
+                    })
+                    .collect(),
+                amendments: d
+                    .amendments
+                    .iter()
+                    .map(|am| AmendmentView {
+                        body: am.body.clone(),
+                        author: resolve_author(&am.author, &users, &a.user_colors, &agents),
+                        at: am.captured_at.clone(),
                     })
                     .collect(),
                 supersedes: d.supersedes.clone(),

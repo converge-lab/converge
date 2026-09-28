@@ -136,6 +136,18 @@ pub struct Decision {
     /// cited lines. Immutable; the repository is the project's.
     #[serde(default)]
     pub code_evidence: Vec<CodeAnchorRef>,
+    /// What was learned after it was recorded, oldest first. Appended,
+    /// never rewritten.
+    #[serde(default)]
+    pub amendments: Vec<AmendmentRef>,
+    pub captured_at: String,
+}
+
+/// A dated note added to a decision after it was recorded.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AmendmentRef {
+    pub body: String,
+    pub author: AuthorRef,
     pub captured_at: String,
 }
 

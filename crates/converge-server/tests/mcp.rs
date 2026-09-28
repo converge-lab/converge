@@ -94,6 +94,7 @@ async fn tool_round_trip() {
         names,
         [
             "decision_add",
+            "decision_edit",
             "decision_get",
             "decision_list",
             "decision_search",
@@ -791,4 +792,122 @@ async fn a_decision_can_carry_its_own_exchange() {
             .as_str()
             .unwrap_or_default();
     assert!(refusal.contains("conversation"), "{orphan}");
+}
+
+/// The agent's way to carry out what a signal recommends: edges and a
+/// signed, dated note — never a rewrite of what the decision said.
+#[tokio::test]
+async fn decision_edit_changes_edges_and_amends_but_never_rewrites() {
+    let (_pg, _store, app) = server().await;
+    let (_, group) = send(
+        &app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let (_, project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group["id"], "name": "p", "description": null })),
+    )
+    .await;
+    let project = project["id"].as_str().unwrap().to_owned();
+    let said = anchor(&app, &project, "we keep the old path for now").await;
+    let add = |title: &'static str, said: String| {
+        let app = app.clone();
+        let project = project.clone();
+        async move {
+            call(
+                &app,
+                "decision_add",
+                json!({ "project_id": project, "title": title, "summary": "s", "evidence": [said] }),
+            )
+            .await["decision_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let old = add("Keep the old path", said.clone()).await;
+    let new = add("Move to the new path", said.clone()).await;
+
+    // One call: the new decision replaces the old, cites a turn, and says
+    // why in a note it signs.
+    let done = call(
+        &app,
+        "decision_edit",
+        json!({
+            "decision_id": new,
+            "supersedes": [old],
+            "related": [{ "to": old, "why": "the reasoning that led here" }],
+            "amend": "Replaces the old-path decision once the migration landed.",
+        }),
+    )
+    .await;
+    assert_eq!(done["edges_changed"], 2, "{done}");
+    assert_eq!(done["amended"], true);
+
+    let got = call(&app, "decision_get", json!({ "decision_id": new })).await;
+    assert_eq!(
+        got["edges"]["supersedes"][0].as_str().unwrap(),
+        old,
+        "{got}"
+    );
+    let amendment = &got["decision"]["amendments"][0];
+    assert_eq!(
+        amendment["body"],
+        "Replaces the old-path decision once the migration landed."
+    );
+    // Signed: the deployment user through the calling agent.
+    assert!(
+        amendment["author"]["user_via_agent"]["user"].is_string(),
+        "{got}"
+    );
+    // What the decision said is untouched.
+    assert_eq!(got["decision"]["title"], "Move to the new path");
+    let old_now = call(&app, "decision_get", json!({ "decision_id": old })).await;
+    assert_eq!(old_now["decision"]["status"], "superseded");
+
+    // Field rewrites are not offered: an unknown field is ignored rather
+    // than applied, and a call that names nothing to change is refused.
+    let refused = rpc(
+        &app,
+        "tools/call",
+        json!({ "name": "decision_edit", "arguments": {
+            "decision_id": new, "title": "rewritten",
+        }}),
+    )
+    .await;
+    let said = refused["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+        + refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+    assert!(said.contains("nothing to change"), "{refused}");
+    let still = call(&app, "decision_get", json!({ "decision_id": new })).await;
+    assert_eq!(still["decision"]["title"], "Move to the new path");
+
+    // If one edge is refused, none apply, and no note claims otherwise.
+    let bad = rpc(
+        &app,
+        "tools/call",
+        json!({ "name": "decision_edit", "arguments": {
+            "decision_id": new,
+            "remove_supersedes": [old],
+            "supersedes": [new],
+            "amend": "should not be written",
+        }}),
+    )
+    .await;
+    assert!(
+        bad["error"].is_object() || bad["result"]["isError"].as_bool().unwrap_or(false),
+        "{bad}"
+    );
+    let after = call(&app, "decision_get", json!({ "decision_id": new })).await;
+    assert_eq!(after["edges"]["supersedes"][0].as_str().unwrap(), old);
+    assert_eq!(after["decision"]["amendments"].as_array().unwrap().len(), 1);
 }

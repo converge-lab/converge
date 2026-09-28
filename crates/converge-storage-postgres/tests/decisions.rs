@@ -1026,3 +1026,107 @@ async fn unchecked_anchors_come_back_with_their_repository() {
         .unwrap();
     assert!(store.code_anchors_unchecked(10).await.unwrap().is_empty());
 }
+
+/// What was learned after a decision was recorded goes beside it, signed
+/// and dated, and never into it.
+#[tokio::test]
+async fn amendments_are_appended_signed_and_never_rewrite() {
+    use converge_storage::{AgentKind, Agents, NewAgent};
+    let (_pg, store) = store().await;
+    let (_, project, me) = seed_project(&store).await;
+    let id = store
+        .decision_add(Scope::System, decision(project, me, "the decision"))
+        .await
+        .unwrap();
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Tool,
+            name: "mcp".into(),
+        })
+        .await
+        .unwrap();
+
+    // A person, then a person through an agent: both kept, oldest first,
+    // each with its own author.
+    store
+        .decision_amend(
+            Scope::User(me),
+            id,
+            "  the gate was dropped deliberately  ".into(),
+            Author::User(me),
+        )
+        .await
+        .unwrap();
+    store
+        .decision_amend(
+            Scope::User(me),
+            id,
+            "the lock this described was removed".into(),
+            Author::UserViaAgent { user: me, agent },
+        )
+        .await
+        .unwrap();
+    let got = store
+        .decision_get(Scope::System, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.amendments.len(), 2);
+    // Trimmed on the way in; what it said is otherwise kept as written.
+    assert_eq!(got.amendments[0].body, "the gate was dropped deliberately");
+    assert_eq!(got.amendments[0].author, Author::User(me));
+    assert_eq!(
+        got.amendments[1].author,
+        Author::UserViaAgent { user: me, agent }
+    );
+    assert!(got.amendments[0].captured_at <= got.amendments[1].captured_at);
+    // The decision itself is untouched.
+    assert_eq!(got.title, "the decision");
+
+    // Lists carry them too.
+    let listed = store
+        .decision_list(Scope::System, Default::default(), Pagination::default())
+        .await
+        .unwrap();
+    assert_eq!(listed[0].amendments.len(), 2);
+
+    // A blank note says nothing, and a decision nobody can see is not
+    // there to amend.
+    assert!(matches!(
+        store
+            .decision_amend(Scope::User(me), id, "   ".into(), Author::User(me))
+            .await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store
+            .decision_amend(
+                Scope::User(me),
+                converge_storage::DecisionId::new(),
+                "x".into(),
+                Author::User(me)
+            )
+            .await,
+        Err(StoreError::NotFound)
+    ));
+    let outsider = store
+        .user_login(Identity {
+            provider: "local".into(),
+            subject: "outsider".into(),
+            handle: "outsider".into(),
+            name: "Outsider".into(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .decision_amend(
+                Scope::User(outsider),
+                id,
+                "not yours to amend".into(),
+                Author::User(outsider)
+            )
+            .await,
+        Err(StoreError::NotFound)
+    ));
+}

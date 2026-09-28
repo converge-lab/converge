@@ -410,6 +410,17 @@ impl Client {
         .await
     }
 
+    /// Add a dated note to a decision, signed by the caller. Append-only:
+    /// a later amendment is how an earlier one is corrected.
+    pub async fn decision_amend(&self, id: DecisionId, text: &str) -> Result<(), StoreError> {
+        #[derive(Serialize)]
+        struct Amendment<'a> {
+            text: &'a str,
+        }
+        self.submit(&format!("decisions/{id}/amendments"), &Amendment { text })
+            .await
+    }
+
     /// The one-hop graph neighbourhood, both directions.
     pub async fn decision_edges(&self, id: DecisionId) -> Result<Option<Edges>, StoreError> {
         self.fetch(&format!("decisions/{id}/edges")).await

@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into decision_amendments (id, decision_id, body, author_user, author_agent)\n               select $1, d.id, $3, $4, $5\n               from decisions d\n               join projects p on p.id = d.project_id\n               where d.id = $2\n                 and ($6::uuid is null or group_visible(p.group_id, $6))\n               returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bccfa6fe273d23f7dcc9e4356919ac5a045d367a5b3c475c1202610e059e00f2"
+}

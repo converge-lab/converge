@@ -649,6 +649,15 @@ mod api {
                     mismatch: c.mismatch.clone(),
                 })
                 .collect(),
+            amendments: d
+                .amendments
+                .iter()
+                .map(|a| wire::AmendmentRef {
+                    body: a.body.clone(),
+                    author: author(&a.author),
+                    captured_at: rfc3339(a.captured_at),
+                })
+                .collect(),
             captured_at: rfc3339(d.captured_at),
         }
     }

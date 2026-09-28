@@ -62,6 +62,7 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
     // conversion, so there is no fallback here anymore.
     let context_md: Option<String> = d.context.clone();
     let consequences: Option<String> = d.consequences.clone();
+    let amendments: Vec<data::AmendmentView> = d.amendments.clone();
 
     let alternatives: Vec<Alternative> = d
         .alts
@@ -229,6 +230,38 @@ pub fn DecisionDetail(go: Callback<Route>, id: String) -> impl IntoView {
                                 <div class="cv-detail__section">
                                     <div class="cv-mb-11"><SectionLabel text="consequences" icon=Glyph::Consequence /></div>
                                     <div class="cv-detail__prose"><Markdown source=c /></div>
+                                </div>
+                            }
+                        })}
+
+                    // What was learned after the decision was recorded, in the
+                    // order it was learned. Signed and dated, never edited: the
+                    // sections above stay what the decision said.
+                    {(!amendments.is_empty())
+                        .then(|| {
+                            view! {
+                                <div class="cv-detail__section">
+                                    <div class="cv-mb-11"><SectionLabel text="amendments" icon=Glyph::Edit /></div>
+                                    <div class="cv-stack8">
+                                        {amendments
+                                            .into_iter()
+                                            .map(|am| {
+                                                let color = am.author.color();
+                                                let when = crate::when::when(&am.at);
+                                                view! {
+                                                    <div class="cv-row cv-gap-10">
+                                                        <Avatar initial=am.author.initial.clone() color=color size=22 />
+                                                        <div class="cv-minw-0">
+                                                            <div class="cv-fs-xs cv-fg-faint">
+                                                                {am.author.name.clone()}" · "{when}
+                                                            </div>
+                                                            <div class="cv-detail__prose"><Markdown source=am.body /></div>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </div>
                                 </div>
                             }
                         })}

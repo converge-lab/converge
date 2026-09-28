@@ -474,6 +474,7 @@ impl TryFrom<DecisionRow> for Decision {
             authors: Vec::new(),
             evidence: Vec::new(),
             code_evidence: Vec::new(),
+            amendments: Vec::new(),
             captured_at: r.captured_at,
         })
     }

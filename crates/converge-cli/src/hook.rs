@@ -940,12 +940,14 @@ pub async fn ctx(kind: Kind) -> Result<()> {
     // line and the call goes through unchanged — the server then asks
     // for what is missing.
     let mut notes: Vec<String> = Vec::new();
-    if payload
-        .tool_name
-        .as_deref()
-        .is_some_and(|tool| tool.ends_with("decision_add"))
-    {
-        if let Ok(State::Bound { .. }) = marker::find(&payload.cwd) {
+    let tool = payload.tool_name.as_deref().unwrap_or_default();
+    // Recording cites the exchange; editing does not — an edit is made
+    // later, about a decision already grounded, and its reason goes in
+    // the amendment. Both cite code the same way.
+    let recording = tool.ends_with("decision_add");
+    let editing = tool.ends_with("decision_edit");
+    if recording || editing {
+        if recording && let Ok(State::Bound { .. }) = marker::find(&payload.cwd) {
             match exchange(kind, &payload) {
                 Some(exchange) => cite(&mut merged, &exchange),
                 None => notes

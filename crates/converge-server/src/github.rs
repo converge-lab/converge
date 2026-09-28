@@ -46,27 +46,32 @@ pub struct Github {
 }
 
 impl Github {
-    /// A client, or `None` when this deployment has nothing to prove
-    /// who it is with — which is not an error, just an integration that
-    /// is off.
-    pub fn new(cfg: &config::Github) -> Option<Self> {
+    /// A client; `Ok(None)` when this deployment has nothing to prove who
+    /// it is with, which is an integration that is off, not an error.
+    ///
+    /// `Err` is the other case, and the one that must not be mistaken for
+    /// it: an App *is* configured and its key cannot be used. Reporting
+    /// that as "not configured" is how an unreadable key once went
+    /// unnoticed in production.
+    pub fn new(cfg: &config::Github) -> Result<Option<Self>, String> {
         let auth = match (cfg.app_id, cfg.private_key.as_deref(), cfg.token.as_deref()) {
             (Some(id), Some(key), _) => Auth::App {
                 id,
                 key: Box::new(signing_key(key)?),
             },
             (_, _, Some(token)) => Auth::Token(token.to_owned()),
-            _ => return None,
+            _ => return Ok(None),
         };
-        Some(Self {
-            http: reqwest::Client::builder()
-                .user_agent("converge")
-                .build()
-                .ok()?,
+        let http = reqwest::Client::builder()
+            .user_agent("converge")
+            .build()
+            .map_err(|e| format!("cannot build an HTTP client: {e}"))?;
+        Ok(Some(Self {
+            http,
             api: cfg.api.trim_end_matches('/').to_owned(),
             auth,
             tokens: Mutex::new(HashMap::new()),
-        })
+        }))
     }
 
     /// The file at that commit, as text. `None` means the repository
@@ -209,13 +214,18 @@ impl std::fmt::Display for Error {
 /// The key as configured: the PEM itself, or a path to it. A path is
 /// what an operator wants on a host; the PEM itself is what an
 /// environment variable can carry.
-fn signing_key(configured: &str) -> Option<EncodingKey> {
+fn signing_key(configured: &str) -> Result<EncodingKey, String> {
     let pem = if configured.trim_start().starts_with("-----BEGIN") {
         configured.to_owned()
     } else {
-        std::fs::read_to_string(configured.trim()).ok()?
+        let path = configured.trim();
+        // The reason matters here more than anywhere: a key that exists
+        // but belongs to the wrong user reads exactly like a missing one
+        // unless the error says which.
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?
     };
-    EncodingKey::from_rsa_pem(pem.as_bytes()).ok()
+    EncodingKey::from_rsa_pem(pem.as_bytes())
+        .map_err(|e| format!("the key is not an RSA private key in PEM form: {e}"))
 }
 
 /// The App proving it is itself: RS256 over its id, backdated a minute
@@ -298,9 +308,16 @@ const ANCHORS_PER_SWEEP: u32 = 25;
 /// hosted one — and the hosted one silently shipped without this when
 /// it lived in a `main`.
 pub fn start<S: Storage + Clone + Send + Sync + 'static>(store: S, cfg: &config::Github) {
-    let Some(github) = Github::new(cfg) else {
-        info!("github not configured — code anchors stay unchecked");
-        return;
+    let github = match Github::new(cfg) {
+        Ok(Some(github)) => github,
+        Ok(None) => {
+            info!("github not configured — code anchors stay unchecked");
+            return;
+        }
+        Err(why) => {
+            warn!(%why, "github App configured but unusable — code anchors stay unchecked");
+            return;
+        }
     };
     info!("github configured — anchors will be checked against their repositories");
     let every = Duration::from_secs(cfg.sweep_secs.max(5));
@@ -437,21 +454,44 @@ mod tests {
 
     #[test]
     fn a_deployment_with_nothing_to_prove_itself_with_has_no_client() {
-        assert!(Github::new(&config::Github::default()).is_none());
+        assert!(matches!(Github::new(&config::Github::default()), Ok(None)));
         // Half an App is no App; the token alone still reads.
-        assert!(
+        assert!(matches!(
             Github::new(&config::Github {
                 app_id: Some(1),
                 ..Default::default()
-            })
-            .is_none()
-        );
-        assert!(
+            }),
+            Ok(None)
+        ));
+        assert!(matches!(
             Github::new(&config::Github {
                 token: Some("ghp_x".into()),
                 ..Default::default()
-            })
-            .is_some()
+            }),
+            Ok(Some(_))
+        ));
+    }
+
+    /// An App whose key cannot be used is not an App that is absent, and
+    /// the difference has to reach the log with its reason.
+    #[test]
+    fn an_unusable_key_says_why_instead_of_looking_absent() {
+        let with_key = |key: &str| config::Github {
+            app_id: Some(1),
+            private_key: Some(key.into()),
+            ..Default::default()
+        };
+        let unreadable = Github::new(&with_key("/nonexistent/github-app.pem"))
+            .err()
+            .expect("a missing key file is an error, not an absent App");
+        assert!(
+            unreadable.contains("cannot read /nonexistent/github-app.pem"),
+            "{unreadable}"
         );
+
+        let garbled = Github::new(&with_key("-----BEGIN RSA PRIVATE KEY-----\nnot a key\n"))
+            .err()
+            .expect("a key that is not a key is an error");
+        assert!(garbled.contains("not an RSA private key"), "{garbled}");
     }
 }

@@ -24,6 +24,7 @@ mod onboard;
 mod pair;
 mod project_log;
 mod project_settings;
+mod prompts;
 mod route;
 mod search;
 mod seed;
@@ -54,6 +55,7 @@ use onboard::Onboarding;
 use pair::Pair;
 use project_log::ProjectLog;
 use project_settings::ProjectSettings;
+use prompts::ProjectPrompts;
 use route::current_route;
 use search::Search;
 use settings::Settings;
@@ -368,6 +370,7 @@ fn App() -> impl IntoView {
                         Route::ProjectSettings(id) => {
                             view! { <ProjectSettings pid=id /> }.into_any()
                         }
+                        Route::ProjectPrompts(id) => view! { <ProjectPrompts pid=id /> }.into_any(),
                         Route::Search => view! { <Search go=go /> }.into_any(),
                         Route::Expert => view! { <Expert /> }.into_any(),
                         Route::Settings => view! { <Settings /> }.into_any(),
@@ -910,7 +913,7 @@ fn TopBar(
             {move || {
                 track_data(store);
                 match route.get() {
-                    Route::ProjectSettings(id) => {
+                    Route::ProjectSettings(id) | Route::ProjectPrompts(id) => {
                         let name = data::proj_name(&id);
                         Some(
                             view! {

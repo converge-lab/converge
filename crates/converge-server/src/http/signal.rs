@@ -13,9 +13,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use converge_storage::{
     Author, DecisionId, NewSignal, Page, Pagination, ProjectId, Scope, Signal, SignalFilter,
-    SignalId, SignalStatus, Storage, StoreError,
+    SignalId, SignalStatus, Storage, StoreError, Tier,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::error::Result;
@@ -86,6 +86,22 @@ struct Claim {
     /// into one prompt.
     #[serde(default)]
     limit: Option<u32>,
+    /// The lowest tier worth showing now. Lower ones are consumed all
+    /// the same: they stay in the session-start listing and in
+    /// `signal_list`, and are not offered to this session again.
+    #[serde(default)]
+    floor: Option<Tier>,
+}
+
+/// What a claim handed over, and the frame that puts it in front of the
+/// model — absent when nothing is worth showing.
+#[derive(Serialize)]
+struct Claimed {
+    signals: Vec<Signal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<String>,
 }
 
 const CLAIM_DEFAULT: u32 = 3;
@@ -103,7 +119,7 @@ async fn claim<S: Storage>(
     State(store): State<S>,
     Extension(caller): Extension<Caller>,
     Json(claim): Json<Claim>,
-) -> Result<Json<Vec<Signal>>> {
+) -> Result<Json<Claimed>> {
     let limit = claim.limit.unwrap_or(CLAIM_DEFAULT).min(CLAIM_CAP);
     let signals = store
         .signal_claim(
@@ -114,8 +130,15 @@ async fn claim<S: Storage>(
             limit,
         )
         .await?;
+    let floor = claim.floor.unwrap_or(Tier::Watch);
+    let signals: Vec<Signal> = signals.into_iter().filter(|s| s.tier >= floor).collect();
     crate::metrics::delivered("poll", &signals);
-    Ok(Json(signals))
+    let (context, line) = crate::context::signals(&signals).unzip();
+    Ok(Json(Claimed {
+        signals,
+        context,
+        line,
+    }))
 }
 
 /// The resolution: a verdict and who judged it.

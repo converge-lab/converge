@@ -25,6 +25,8 @@ pub enum Route {
     GroupSettings,
     /// One project's settings, by project id.
     ProjectSettings(String),
+    /// What a model working in this project is handed, by project id.
+    ProjectPrompts(String),
     Search,
     Expert,
     Settings,
@@ -40,7 +42,7 @@ pub enum Route {
 impl Route {
     pub(crate) fn project_target(&self) -> Option<&str> {
         match self {
-            Self::Project(id) | Self::ProjectSettings(id) => Some(id),
+            Self::Project(id) | Self::ProjectSettings(id) | Self::ProjectPrompts(id) => Some(id),
             _ => None,
         }
     }
@@ -75,6 +77,7 @@ impl Route {
                 let id = parts.next().unwrap_or("").to_string();
                 match parts.next() {
                     Some("settings") => Route::ProjectSettings(id),
+                    Some("prompts") => Route::ProjectPrompts(id),
                     _ => Route::Project(id),
                 }
             }
@@ -103,6 +106,7 @@ impl Route {
             Route::Project(id) => format!("#/project/{id}"),
             Route::GroupSettings => "#/group/settings".into(),
             Route::ProjectSettings(id) => format!("#/project/{id}/settings"),
+            Route::ProjectPrompts(id) => format!("#/project/{id}/prompts"),
             Route::Search => "#/search".into(),
             Route::Expert => "#/expert".into(),
             Route::Settings => "#/settings".into(),
@@ -122,6 +126,7 @@ impl Route {
             Route::Project(id) => id.clone(),
             Route::GroupSettings => "Settings".into(),
             Route::ProjectSettings(_) => "Settings".into(),
+            Route::ProjectPrompts(_) => "What agents see".into(),
             Route::Search => "Search".into(),
             Route::Expert => "Expert model".into(),
             Route::Settings => "Settings".into(),

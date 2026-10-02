@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use super::error::Result;
 use crate::auth::Caller;
-use crate::expert::Expert;
+use crate::expert::{Expert, Preview};
 
 /// Decision routes carry the expert beside the store: `add` fires the
 /// signal-detection pass post-commit (the write never waits on it).
@@ -54,6 +54,7 @@ pub fn routes<S: Storage + 'static>() -> Router<(S, Expert<S>)> {
         // Append-only: there is no item to address, so no PUT and no
         // DELETE. A later amendment is how an earlier one is corrected.
         .route("/api/v1/decisions/{id}/amendments", post(amend::<S>))
+        .route("/api/v1/decisions/{id}/prompt", get(prompt::<S>))
         .route("/api/v1/projects/{id}/decisions", get(by_project::<S>))
         .route("/api/v1/groups/{id}/decisions", get(by_group::<S>))
 }
@@ -189,6 +190,16 @@ async fn fetch<S: Storage>(
             .await?
             .ok_or(StoreError::NotFound)?,
     ))
+}
+
+/// What the signal expert would be handed for this decision — its
+/// system prompt and the user message — without calling the model.
+async fn prompt<S: Storage + 'static>(
+    State((_, expert)): State<(S, Expert<S>)>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<DecisionId>,
+) -> Result<Json<Preview>> {
+    Ok(Json(expert.preview(caller.user, id).await?))
 }
 
 /// A decision's own fields. Absent leaves a field alone; `null` clears

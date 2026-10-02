@@ -23,6 +23,7 @@ axum-extra.workspace = true
 reqwest.workspace = true
 url.workspace = true
 rmcp.workspace = true
+minijinja.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 config.workspace = true

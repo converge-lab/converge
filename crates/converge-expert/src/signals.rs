@@ -68,7 +68,7 @@ pub struct Draft {
 
 /// The system prompt. Contract-like: the model acts on it, so it changes
 /// carefully — and the golden-fixture test pins its behavior.
-const PROMPT: &str = "You are the Converge signal expert.\n\
+pub const PROMPT: &str = "You are the Converge signal expert.\n\
 \n\
 The user message is JSON. `decision` is a newly recorded decision (with \
 its project name and graph edges: `supersedes`/`related_to` outgoing, \

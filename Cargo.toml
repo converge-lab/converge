@@ -90,6 +90,8 @@ tower-http = { version = "0.6", features = ["fs"] }
 
 # MCP server (the /mcp endpoint) — stateless streamable-HTTP.
 rmcp = { version = "1", features = ["server", "transport-streamable-http-server"] }
+# Injected context: wording lives in templates the preview can swap.
+minijinja = "2"
 
 # Auth: token minting + hashing, session JWTs, cookie extraction.
 rand = "0.9"

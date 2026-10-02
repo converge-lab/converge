@@ -170,7 +170,8 @@ async fn signal_round_trip() {
             )
             .await;
             assert_eq!(status, 200, "{got}");
-            got.as_array()
+            got["signals"]
+                .as_array()
                 .unwrap()
                 .iter()
                 .map(|s| s["id"].as_str().unwrap().to_string())
@@ -191,8 +192,18 @@ async fn signal_round_trip() {
     )
     .await;
     let third = third["id"].as_str().unwrap().to_string();
-    assert_eq!(claim("sess-1").await, vec![third]);
+    // Below the floor: consumed all the same, and nothing to frame.
+    let (status, got) = send(
+        &app,
+        "POST",
+        "/api/v1/claims",
+        Some(json!({ "session": "sess-1", "harness": "codex", "floor": "conflict" })),
+    )
+    .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got, json!({ "signals": [] }));
     assert_eq!(claim("sess-1").await, Vec::<String>::new());
+    let _ = third;
     let (status, _) = send(
         &app,
         "POST",
@@ -262,7 +273,8 @@ async fn signal_round_trip() {
             )
             .await;
             assert_eq!(status, 200, "{got}");
-            got.as_array()
+            got["signals"]
+                .as_array()
                 .unwrap()
                 .iter()
                 .map(|s| s["id"].as_str().unwrap().to_string())
@@ -290,9 +302,24 @@ async fn signal_round_trip() {
         claim_in("sess-c", projects[2].clone()).await,
         Vec::<String>::new()
     );
-    assert_eq!(
-        claim_in("sess-a", projects[0].clone()).await,
-        vec![fourth.clone()]
+    // What arrives comes framed: the words the model reads, and the
+    // line the person sees.
+    let (status, got) = send(
+        &app,
+        "POST",
+        "/api/v1/claims",
+        Some(json!({ "session": "sess-a", "harness": "claude", "project": projects[0] })),
+    )
+    .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got["signals"][0]["id"], json!(fourth));
+    assert_eq!(got["line"], "Converge: 1 new signal (1 conflict)");
+    let context = got["context"].as_str().unwrap();
+    assert!(
+        context.contains(&format!(
+            "- [conflict/divergence] a and b disagree ({fourth})"
+        )),
+        "{context}"
     );
     // b's project is the other end of a signal raised over in c's:
     // its own session hears it, because reach is either end.
@@ -311,4 +338,91 @@ async fn signal_round_trip() {
     .await;
     let fifth = fifth["id"].as_str().unwrap().to_string();
     assert_eq!(claim_in("sess-b", projects[1].clone()).await, vec![fifth]);
+
+    // A session start's block, rendered for the caller: a read, so the
+    // preview can ask for it with no session to receipt.
+    let (status, got) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{}/context", projects[0]),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{got}");
+    let context = got["context"].as_str().unwrap();
+    assert!(
+        context.starts_with("## Converge memory — project \"server-a\""),
+        "{context}"
+    );
+    assert!(context.contains("\n- a [accepted]"), "{context}");
+    assert_eq!(got["decisions"], json!([a]));
+    assert!(got["signals"].as_array().unwrap().contains(&json!(fourth)));
+    assert!(
+        got["line"]
+            .as_str()
+            .unwrap()
+            .starts_with("Converge: \"server-a\"")
+    );
+    let ghost = converge_storage::ProjectId::new();
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{ghost}/context"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    // The preview: the same block, the per-prompt frame as it would read
+    // now, and what an MCP client is told. Looking claims nothing.
+    let (status, got) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{}/prompts", projects[0]),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got["session"]["context"].as_str().unwrap(), context);
+    let frame = got["signals"]["context"].as_str().unwrap();
+    assert!(frame.contains("a and b disagree"), "{frame}");
+    let mcp = &got["mcp"];
+    assert!(
+        mcp["instructions"]
+            .as_str()
+            .unwrap()
+            .starts_with("Converge: shared decision memory.")
+    );
+    assert!(
+        mcp["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "decision_add" && t["inputSchema"].is_object()),
+        "{mcp}"
+    );
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{ghost}/prompts"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    // The expert's side: its prompt and what it would be handed.
+    let (status, got) = send(&app, "GET", &format!("/api/v1/decisions/{a}/prompt"), None).await;
+    assert_eq!(status, 200, "{got}");
+    let system = got["system"].as_str().unwrap();
+    assert!(system.starts_with("You are the Converge signal expert."));
+    assert!(got.get("user").is_some(), "{got}");
+    let ghost = converge_storage::DecisionId::new();
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{ghost}/prompt"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
 }

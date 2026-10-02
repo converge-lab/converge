@@ -1168,6 +1168,9 @@
   margin: 0 0 0.625rem;
 }
 .cv-md-pre code { font-family: var(--cv-font-mono); font-size: 0.78125rem; color: var(--cv-text); }
+/* A rendered prompt: long prose lines wrap rather than scroll — the text is
+   read, not aligned. */
+.cv-prompt code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Responsive ---------------------------------------------------------------
    Two breakpoints: <=1023 (tablet) collapses the shell to one column and turns

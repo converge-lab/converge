@@ -23,6 +23,7 @@ pub use converge_storage::{
 use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 /// A Converge API client, addressed at the server's origin
@@ -100,6 +101,48 @@ pub struct Context {
     pub line: String,
     pub decisions: Vec<DecisionId>,
     pub signals: Vec<SignalId>,
+}
+
+/// Everything a model working in a project is handed, rendered for this
+/// user: the session-start block, the per-prompt frame as it would read
+/// now (none when nothing is open), and what an MCP client is told.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Prompts {
+    pub session: Context,
+    pub signals: Option<Frame>,
+    pub mcp: Catalogue,
+}
+
+/// A frame and the line shown beside it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Frame {
+    pub context: String,
+    pub line: String,
+}
+
+/// The MCP server's instructions and its tools.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Catalogue {
+    pub instructions: String,
+    pub tools: Vec<ToolText>,
+}
+
+/// One tool as a model reads it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolText {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "inputSchema")]
+    pub input_schema: Value,
+}
+
+/// What the signal expert would be handed for a decision; `user` is
+/// `None` when retrieval found nothing and no pass would run.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExpertPrompt {
+    pub system: String,
+    pub user: Option<Value>,
 }
 
 /// What a claim handed over, and its frame when there is anything to show.
@@ -237,6 +280,20 @@ impl Client {
     /// server for this user; `None` when the project is not visible.
     pub async fn project_context(&self, id: ProjectId) -> Result<Option<Context>, StoreError> {
         self.fetch(&format!("projects/{id}/context")).await
+    }
+
+    /// Everything a model in `project` is handed, for the preview. A
+    /// read: nothing is claimed or receipted.
+    pub async fn project_prompts(&self, id: ProjectId) -> Result<Option<Prompts>, StoreError> {
+        self.fetch(&format!("projects/{id}/prompts")).await
+    }
+
+    /// What the signal expert would be handed for `decision`.
+    pub async fn decision_prompt(
+        &self,
+        decision: DecisionId,
+    ) -> Result<Option<ExpertPrompt>, StoreError> {
+        self.fetch(&format!("decisions/{decision}/prompt")).await
     }
 
     pub async fn project_list(

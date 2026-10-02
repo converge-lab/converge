@@ -156,6 +156,29 @@ pub async fn session<S: Storage>(
     }))
 }
 
+/// How many signals one prompt is handed — the poll's own cap.
+const SAMPLE: u32 = 3;
+
+/// The per-prompt frame as it would read now, built from the project's
+/// newest open signals and shown oldest first, as a claim hands them
+/// over. Nothing is claimed or receipted.
+pub async fn sample<S: Storage>(
+    store: &S,
+    user: UserId,
+    project: ProjectId,
+) -> Result<Option<(String, String)>, StoreError> {
+    let open = SignalFilter {
+        project: Some(project),
+        status: Some(SignalStatus::Proposed),
+        ..Default::default()
+    };
+    let mut newest = store
+        .signal_list(Scope::User(user), open, page(SAMPLE))
+        .await?;
+    newest.reverse();
+    Ok(signals(&newest))
+}
+
 /// The block and its visible line. This listing is deliberately
 /// unfiltered by receipts: it is the one place every open signal shows,
 /// whatever a poll handed out or dropped.

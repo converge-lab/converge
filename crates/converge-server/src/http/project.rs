@@ -10,11 +10,13 @@ use converge_storage::{
     GroupId, NewProject, Page, Pagination, Project, ProjectEdit, ProjectFilter, ProjectId,
     Repository, Scope, Storage, StoreError,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::error::Result;
 use crate::auth::Caller;
 use crate::context::Session;
+use crate::mcp::Catalogue;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -24,6 +26,7 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
             get(fetch::<S>).patch(edit::<S>).delete(remove::<S>),
         )
         .route("/api/v1/projects/{id}/context", get(context::<S>))
+        .route("/api/v1/projects/{id}/prompts", get(prompts::<S>))
         .route("/api/v1/groups/{id}/projects", get(by_group::<S>))
 }
 
@@ -102,6 +105,43 @@ async fn context<S: Storage>(
             .await?
             .ok_or(StoreError::NotFound)?,
     ))
+}
+
+/// A frame and the line beside it.
+#[derive(Serialize)]
+struct Frame {
+    context: String,
+    line: String,
+}
+
+/// Everything a model working in this project is handed, for the
+/// preview: the session-start block, the per-prompt frame as it would
+/// read now, and what every MCP client is told.
+#[derive(Serialize)]
+struct Prompts {
+    session: Session,
+    signals: Option<Frame>,
+    mcp: Catalogue,
+}
+
+/// A read with no side effects: nothing is receipted or claimed, so
+/// looking does not change what a session will be shown.
+async fn prompts<S: Storage + 'static>(
+    State(store): State<S>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<ProjectId>,
+) -> Result<Json<Prompts>> {
+    let session = crate::context::session(&store, caller.user, id)
+        .await?
+        .ok_or(StoreError::NotFound)?;
+    let signals = crate::context::sample(&store, caller.user, id)
+        .await?
+        .map(|(context, line)| Frame { context, line });
+    Ok(Json(Prompts {
+        session,
+        signals,
+        mcp: crate::mcp::catalogue::<S>(),
+    }))
 }
 
 /// A project's own fields. Absent leaves one alone; `null` clears a

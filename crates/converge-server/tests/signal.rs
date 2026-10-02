@@ -372,4 +372,57 @@ async fn signal_round_trip() {
     )
     .await;
     assert_eq!(status, 404);
+
+    // The preview: the same block, the per-prompt frame as it would read
+    // now, and what an MCP client is told. Looking claims nothing.
+    let (status, got) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{}/prompts", projects[0]),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got["session"]["context"].as_str().unwrap(), context);
+    let frame = got["signals"]["context"].as_str().unwrap();
+    assert!(frame.contains("a and b disagree"), "{frame}");
+    let mcp = &got["mcp"];
+    assert!(
+        mcp["instructions"]
+            .as_str()
+            .unwrap()
+            .starts_with("Converge: shared decision memory.")
+    );
+    assert!(
+        mcp["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "decision_add" && t["inputSchema"].is_object()),
+        "{mcp}"
+    );
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{ghost}/prompts"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    // The expert's side: its prompt and what it would be handed.
+    let (status, got) = send(&app, "GET", &format!("/api/v1/decisions/{a}/prompt"), None).await;
+    assert_eq!(status, 200, "{got}");
+    let system = got["system"].as_str().unwrap();
+    assert!(system.starts_with("You are the Converge signal expert."));
+    assert!(got.get("user").is_some(), "{got}");
+    let ghost = converge_storage::DecisionId::new();
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{ghost}/prompt"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
 }

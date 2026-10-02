@@ -159,7 +159,8 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
                         menu_open
                             .get()
                             .then(|| {
-                                let (pid, pid2, pid3, pid4) = (
+                                let (pid, pid2, pid3, pid4, pid5) = (
+                                    menu_pid.clone(),
                                     menu_pid.clone(),
                                     menu_pid.clone(),
                                     menu_pid.clone(),
@@ -185,6 +186,14 @@ pub fn ProjectLog(go: Callback<Route>, pid: String) -> impl IntoView {
                                                 on_click=Callback::new(move |_| {
                                                     set_menu_open.set(false);
                                                     go.run(Route::ProjectSettings(pid.clone()));
+                                                })
+                                            />
+                                            <MenuItem
+                                                icon=Glyph::Expert
+                                                label="What agents see"
+                                                on_click=Callback::new(move |_| {
+                                                    set_menu_open.set(false);
+                                                    go.run(Route::ProjectPrompts(pid5.clone()));
                                                 })
                                             />
                                             <MenuItem

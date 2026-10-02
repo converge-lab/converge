@@ -24,13 +24,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use converge_expert::signals::{Entry, Request, discover};
+use converge_expert::signals::{Entry, PROMPT, Request, discover};
 use converge_expert::{Client, Registry, Turn};
 use converge_storage::{
     AgentId, Author, Decision, DecisionFilter, DecisionId, GroupId, NewSignal, Pagination, Scope,
-    Signal, SignalFilter, SignalStatus, Storage, StoreError, Tier,
+    Signal, SignalFilter, SignalStatus, Storage, StoreError, Tier, UserId,
 };
 use futures::Stream;
+use serde::Serialize;
+use serde_json::Value;
 use tracing::{debug, info, warn};
 
 /// Retrieval breadth: how many cross-project candidates the judgment
@@ -144,6 +146,14 @@ pub struct TimingReport {
 }
 
 /// Nearest-rank percentile of a sorted sample; `None` when empty.
+/// A detection pass as the model would see it. `user` is `None` when
+/// retrieval found no candidates: no pass would run.
+#[derive(Debug, Serialize)]
+pub struct Preview {
+    pub system: &'static str,
+    pub user: Option<Value>,
+}
+
 fn percentile(sorted: &[u64], p: u64) -> Option<u64> {
     if sorted.is_empty() {
         return None;
@@ -299,13 +309,10 @@ impl<S: Storage + 'static> Expert<S> {
         result
     }
 
-    /// The pass itself; `model_ms` is filled once the model has answered.
-    async fn pass(
-        &self,
-        id: DecisionId,
-        client: &Client,
-        model_ms: &mut Option<u64>,
-    ) -> Result<usize, StoreError> {
+    /// What the model is handed for `id`: the decision, the candidates
+    /// retrieved for it and the signals already touching them. `None`
+    /// when nothing was retrieved — no pass runs then.
+    async fn request(&self, id: DecisionId) -> Result<Option<Request>, StoreError> {
         let subject = self
             .store
             .decision_get(Scope::System, id)
@@ -322,7 +329,7 @@ impl<S: Storage + 'static> Expert<S> {
 
         let candidates = self.retrieve(&subject, group).await?;
         if candidates.is_empty() {
-            return Ok(0);
+            return Ok(None);
         }
         let mut signals = self.touching(id).await?;
         for candidate in &candidates {
@@ -341,6 +348,37 @@ impl<S: Storage + 'static> Expert<S> {
                 entries
             },
             signals,
+        };
+        Ok(Some(request))
+    }
+
+    /// What a detection pass for `id` would send — the system prompt and
+    /// the user message — without calling the model. Only for a caller
+    /// who can see the decision; the candidates never leave its group.
+    pub async fn preview(&self, user: UserId, id: DecisionId) -> Result<Preview, StoreError> {
+        self.store
+            .decision_get(Scope::User(user), id)
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        let request = self.request(id).await?;
+        Ok(Preview {
+            system: PROMPT,
+            user: request
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| StoreError::Backend(format!("unserializable request: {e}")))?,
+        })
+    }
+
+    /// The pass itself; `model_ms` is filled once the model has answered.
+    async fn pass(
+        &self,
+        id: DecisionId,
+        client: &Client,
+        model_ms: &mut Option<u64>,
+    ) -> Result<usize, StoreError> {
+        let Some(request) = self.request(id).await? else {
+            return Ok(0);
         };
 
         let model_started = Instant::now();

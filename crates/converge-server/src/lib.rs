@@ -12,6 +12,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod context;
 pub mod expert;
 pub mod github;
 pub mod http;

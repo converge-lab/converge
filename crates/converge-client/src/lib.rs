@@ -21,8 +21,8 @@ pub use converge_storage::{
     StoreError, Tier, Token, TokenId, User, UserId,
 };
 use reqwest::{Response, StatusCode};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// A Converge API client, addressed at the server's origin
@@ -89,6 +89,27 @@ pub struct DecisionPatch {
     pub consequences: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alternatives: Option<Vec<Alternative>>,
+}
+
+/// A session start's block, rendered by the server: the words the model
+/// reads, the line the person sees, and the ids it listed — what the
+/// session receipts once the block is shown.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Context {
+    pub context: String,
+    pub line: String,
+    pub decisions: Vec<DecisionId>,
+    pub signals: Vec<SignalId>,
+}
+
+/// What a claim handed over, and its frame when there is anything to show.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Claimed {
+    pub signals: Vec<Signal>,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub line: Option<String>,
 }
 
 /// What `session_ensure` answers: the session, where a sender resumes,
@@ -210,6 +231,12 @@ impl Client {
 
     pub async fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
         self.fetch(&format!("projects/{id}")).await
+    }
+
+    /// What a session starting in `project` is shown, rendered by the
+    /// server for this user; `None` when the project is not visible.
+    pub async fn project_context(&self, id: ProjectId) -> Result<Option<Context>, StoreError> {
+        self.fetch(&format!("projects/{id}/context")).await
     }
 
     pub async fn project_list(
@@ -564,23 +591,26 @@ impl Client {
         .await
     }
 
-    /// What `session` has not been shown: proposed signals visible to
-    /// this user and newer than the session's watermark, oldest first,
-    /// at most `limit`, with the watermark advanced past them. A
-    /// session's first claim seeds the watermark and returns nothing.
+    /// What `session` has not been shown: proposed signals touching
+    /// `project`, recorded after the session began, oldest first, at most
+    /// `limit`, receipted as they go. Those below `floor` are consumed
+    /// but not returned. A session's first claim opens its row and
+    /// returns nothing.
     pub async fn signal_claim(
         &self,
         session: &str,
         harness: Option<&str>,
         project: Option<ProjectId>,
         limit: u32,
-    ) -> Result<Vec<Signal>, StoreError> {
+        floor: Tier,
+    ) -> Result<Claimed, StoreError> {
         #[derive(Serialize)]
         struct Claim<'a> {
             session: &'a str,
             harness: Option<&'a str>,
             project: Option<ProjectId>,
             limit: u32,
+            floor: Tier,
         }
         self.post(
             "claims",
@@ -589,6 +619,7 @@ impl Client {
                 harness,
                 project,
                 limit,
+                floor,
             },
         )
         .await

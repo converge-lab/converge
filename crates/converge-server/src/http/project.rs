@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::error::Result;
 use crate::auth::Caller;
+use crate::context::Session;
 
 pub fn routes<S: Storage + 'static>() -> Router<S> {
     Router::new()
@@ -22,6 +23,7 @@ pub fn routes<S: Storage + 'static>() -> Router<S> {
             "/api/v1/projects/{id}",
             get(fetch::<S>).patch(edit::<S>).delete(remove::<S>),
         )
+        .route("/api/v1/projects/{id}/context", get(context::<S>))
         .route("/api/v1/groups/{id}/projects", get(by_group::<S>))
 }
 
@@ -81,6 +83,22 @@ async fn fetch<S: Storage>(
     Ok(Json(
         store
             .project_get(Scope::User(caller.user), id)
+            .await?
+            .ok_or(StoreError::NotFound)?,
+    ))
+}
+
+/// What a session starting in this project is shown, rendered for the
+/// caller: the block, its visible line, and the ids it listed. A read —
+/// the session-start hook receipts those ids itself, and the preview
+/// renders the same thing without a session to receipt for.
+async fn context<S: Storage>(
+    State(store): State<S>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<ProjectId>,
+) -> Result<Json<Session>> {
+    Ok(Json(
+        crate::context::session(&store, caller.user, id)
             .await?
             .ok_or(StoreError::NotFound)?,
     ))

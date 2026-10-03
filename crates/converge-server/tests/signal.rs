@@ -391,7 +391,7 @@ async fn signal_round_trip() {
         mcp["instructions"]
             .as_str()
             .unwrap()
-            .starts_with("Converge: shared decision memory.")
+            .starts_with("Converge is shared decision memory")
     );
     assert!(
         mcp["tools"]

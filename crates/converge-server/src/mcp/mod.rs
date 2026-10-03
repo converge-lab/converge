@@ -75,17 +75,13 @@ pub fn service<S: Storage + 'static>(
     )
 }
 
-/// What every MCP client is told on connect, before any tool is called.
-const INSTRUCTIONS: &str = "Converge: shared decision memory. Call `project_list` to \
-     find project ids, `decision_add` after a design decision \
-     lands (set `supersedes` when it replaces one), and \
-     `decision_list`/`decision_get` before re-deciding \
-     something that may already be settled. Decisions are \
-     verifiable, so `decision_add` requires evidence: message ids \
-     from `message_add` (`session_ensure` this conversation once, \
-     record the exchanges as they happen) or committed code as \
-     `code_evidence`. A converge hook fills both in where one is \
-     installed.";
+/// What every MCP client is told on connect, before any tool is called:
+/// what Converge is and how to work with it. The one place for general
+/// guidance — it reaches every client, hooks or not, and is said once
+/// per connection rather than carried in every request.
+fn instructions() -> &'static str {
+    include_str!("../../templates/instructions.md").trim_end()
+}
 
 /// What an MCP client is shown: the instructions and every tool, with
 /// the description and input schema the model reads.
@@ -97,7 +93,7 @@ pub struct Catalogue {
 
 pub fn catalogue<S: Storage + 'static>() -> Catalogue {
     Catalogue {
-        instructions: INSTRUCTIONS,
+        instructions: instructions(),
         tools: Memory::<S>::tool_router().list_all(),
     }
 }
@@ -1380,7 +1376,7 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = Implementation::from_build_env();
-        info.instructions = Some(INSTRUCTIONS.into());
+        info.instructions = Some(instructions().into());
         info
     }
 

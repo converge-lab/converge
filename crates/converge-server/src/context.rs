@@ -325,8 +325,8 @@ mod tests {
                 "## Converge memory — project \"p\" ({p})\n\
                  This working tree is bound to converge project `{p}`; project memory is \
                  active. No decisions are recorded yet — use `decision_add` when a design \
-                 decision lands, and record the conversation (`session_ensure` + \
-                 `message_add`) so decisions can cite their evidence.",
+                 decision lands. A hook attaches the exchange that decided it, and \
+                 completes a bare `path:lines` into a code citation.",
                 p = project()
             )
         );
@@ -353,8 +353,10 @@ mod tests {
                 "## Converge memory — project \"p\" ({p})\n\
                  This working tree is bound to converge project `{p}`; project memory is \
                  active. Decisions below are in force — `decision_get` for the full record \
-                 before re-deciding a settled topic; `decision_add` (with \
-                 `supersedes`/`evidence`) when a new decision lands.\n\
+                 before re-deciding a settled topic; `decision_add` (with `supersedes` \
+                 when it replaces one) when a new decision lands. A hook attaches the \
+                 exchange that decided it, and completes a bare `path:lines` into a code \
+                 citation.\n\
                  \n\
                  Decisions (← NEW = not shown to you before, in any session):\n\
                  - settled today [accepted] ← NEW\n\
@@ -422,6 +424,38 @@ mod tests {
         let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- [")).collect();
         assert!(
             lines[0].contains(" lo ") && lines[1].contains(" hi ") && lines[2].contains(" mid ")
+        );
+    }
+
+    /// Past 10,000 characters Claude Code 2.1.288 stops inlining a hook's
+    /// context — it saves it to a file and shows a 2 KB preview — and Codex
+    /// 0.155.1 does the same past 2,500 estimated tokens (bytes / 4). A
+    /// full index with long titles must stay well inside both.
+    #[test]
+    fn a_full_block_stays_inline() {
+        let title = "x".repeat(100);
+        let decisions = (0..DECISIONS)
+            .map(|_| Recorded {
+                id: DecisionId::new(),
+                title: title.clone(),
+                status: "superseded".into(),
+                new: true,
+            })
+            .collect();
+        let signals = (0..SIGNALS)
+            .map(|_| Open {
+                id: SignalId::new(),
+                tier: Tier::Coordinate,
+                kind: "scope_narrowing".into(),
+                title: title.clone(),
+                new: true,
+            })
+            .collect();
+        let (block, _) = session_block(project(), &title, decisions, signals);
+        assert!(
+            block.len() <= 8_000,
+            "a full block is {} bytes",
+            block.len()
         );
     }
 

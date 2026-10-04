@@ -1515,3 +1515,52 @@ mod metric_labels {
         }
     }
 }
+
+/// What harnesses do to the text a server sends, measured on 2026-10-04
+/// against the request each one actually built: Claude Code 2.1.288 cuts
+/// the instructions and every tool description at 2,048 UTF-16 units;
+/// Cursor 3.22.12 shows the first 200 characters of each in its tool
+/// catalog and cuts a `user-<server>-<tool>` name past 64; Codex 0.155.1
+/// and opencode 1.18.31 send both whole. Past a cut the text is simply
+/// gone, so the budgets below keep a margin under the tightest one.
+#[cfg(test)]
+mod budgets {
+    use super::{Memory, instructions};
+    use converge_storage_postgres::PgStorage;
+
+    const CLAUDE_CODE_CUT: usize = 2_048;
+    /// Room for an edit before a clause falls off the end.
+    const MARGIN: usize = 248;
+    const CURSOR_NAME: usize = 64;
+
+    fn units(text: &str) -> usize {
+        text.encode_utf16().count()
+    }
+
+    #[test]
+    fn the_instructions_fit_with_room_to_spare() {
+        let n = units(instructions());
+        assert!(
+            n <= CLAUDE_CODE_CUT - MARGIN,
+            "instructions are {n} units; Claude Code cuts at {CLAUDE_CODE_CUT}"
+        );
+    }
+
+    #[test]
+    fn every_tool_fits_every_harness() {
+        for tool in Memory::<PgStorage>::tool_router().list_all() {
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                units(description) <= CLAUDE_CODE_CUT - MARGIN,
+                "{}: description is {} units",
+                tool.name,
+                units(description)
+            );
+            let shown = format!("user-converge-{}", tool.name);
+            assert!(
+                shown.len() <= CURSOR_NAME,
+                "{shown} is longer than Cursor's {CURSOR_NAME}"
+            );
+        }
+    }
+}

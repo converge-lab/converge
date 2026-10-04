@@ -1,8 +1,8 @@
 ## Converge memory — project "{{ project.name }}" ({{ project.id }})
 {% if not decisions %}
-This working tree is bound to converge project `{{ project.id }}`; project memory is active. No decisions are recorded yet — use `decision_add` when a design decision lands. A hook attaches the exchange that decided it, and completes a bare `path:lines` into a code citation.
+This working tree is bound to converge project `{{ project.id }}`. No decisions are recorded yet; when the user settles something others will need to know, `decision_add` keeps it for the team. A hook attaches the exchange that decided it, and completes a bare `path:lines` into a code citation.
 {% else %}
-This working tree is bound to converge project `{{ project.id }}`; project memory is active. Decisions below are in force — `decision_get` for the full record before re-deciding a settled topic; `decision_add` (with `supersedes` when it replaces one) when a new decision lands. A hook attaches the exchange that decided it, and completes a bare `path:lines` into a code citation.
+This working tree is bound to converge project `{{ project.id }}`. The decisions below are the team's answers so far: `decision_get` shows why one was made, worth reading before going against it, and `decision_add` (with `supersedes` if it replaces one) keeps what the user settles next. A hook attaches the exchange that decided it, and completes a bare `path:lines` into a code citation.
 
 Decisions{% if new_decisions %} (← NEW = not shown to you before, in any session){% endif %}:
 {% for d in decisions %}
@@ -12,7 +12,7 @@ Decisions{% if new_decisions %} (← NEW = not shown to you before, in any sessi
 {% endif %}
 {% if signals %}
 
-Proposed signals (unjudged observations touching this project{% if new_signals %}; ← NEW = not shown to you before, in any session{% endif %} — raise conflict-tier ones with the user proactively; `signal_list` for the full record, then `signal_resolve` with THEIR verdict, never your own):
+Proposed signals (observations about this project's decisions that nobody has judged yet{% if new_signals %}; ← NEW = not shown to you before, in any session{% endif %}). A conflict means two decisions can't both stand, so it is worth raising with the user before building on either. Whether a signal holds is their call, recorded with `signal_resolve`; `signal_list` has the full text:
 {% for s in signals %}
 - [{{ s.tier }}/{{ s.kind }}] {{ s.title }} ({{ s.id }}){% if s.new %} ← NEW{% endif %}
 

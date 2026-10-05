@@ -151,6 +151,11 @@ fn body(pid: String) -> impl IntoView {
             Some(Err(e)) => view! { <div class="cv-flash">{e}</div> }.into_any(),
             Some(Ok(p)) => view! {
                 {section(
+                    "Always",
+                    "What every agent is told when it connects, hooks or not: what Converge is and how to work with it.",
+                    block(p.mcp.instructions).into_any(),
+                )}
+                {section(
                     "Session start",
                     "Injected once when a session opens in a working tree bound to this project.",
                     view! { {line(p.session.line)} {block(p.session.context)} }.into_any(),
@@ -177,9 +182,8 @@ fn body(pid: String) -> impl IntoView {
         // Last: the longest, and the same for every project.
         {move || prompts.get().and_then(Result::ok).map(|p| section(
             "Tools",
-            "What every MCP client is told on connect, and each tool's description and input.",
+            "Each tool's description and input, as the model reads them.",
             view! {
-                {block(p.mcp.instructions)}
                 {p.mcp.tools.into_iter().map(|t| view! {
                     <details class="cv-col cv-gap-6">
                         <summary class="cv-mono cv-pointer">{t.name}</summary>

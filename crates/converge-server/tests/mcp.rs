@@ -77,7 +77,7 @@ async fn tool_round_trip() {
         init["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("project_list"),
+            .contains("decision_search"),
         "{init}"
     );
 

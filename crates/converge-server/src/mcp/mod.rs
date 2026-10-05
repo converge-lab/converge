@@ -75,17 +75,13 @@ pub fn service<S: Storage + 'static>(
     )
 }
 
-/// What every MCP client is told on connect, before any tool is called.
-const INSTRUCTIONS: &str = "Converge: shared decision memory. Call `project_list` to \
-     find project ids, `decision_add` after a design decision \
-     lands (set `supersedes` when it replaces one), and \
-     `decision_list`/`decision_get` before re-deciding \
-     something that may already be settled. Decisions are \
-     verifiable, so `decision_add` requires evidence: message ids \
-     from `message_add` (`session_ensure` this conversation once, \
-     record the exchanges as they happen) or committed code as \
-     `code_evidence`. A converge hook fills both in where one is \
-     installed.";
+/// What every MCP client is told on connect, before any tool is called:
+/// what Converge is and how to work with it. The one place for general
+/// guidance — it reaches every client, hooks or not, and is said once
+/// per connection rather than carried in every request.
+fn instructions() -> &'static str {
+    include_str!("../../templates/instructions.md").trim_end()
+}
 
 /// What an MCP client is shown: the instructions and every tool, with
 /// the description and input schema the model reads.
@@ -97,7 +93,7 @@ pub struct Catalogue {
 
 pub fn catalogue<S: Storage + 'static>() -> Catalogue {
     Catalogue {
-        instructions: INSTRUCTIONS,
+        instructions: instructions(),
         tools: Memory::<S>::tool_router().list_all(),
     }
 }
@@ -437,8 +433,9 @@ impl<S: Storage + 'static> Memory<S> {
         }
     }
 
-    #[tool(description = "The full map of groups and their projects (names and \
-        ids). Call this first to find the project_id the other tools need.")]
+    #[tool(description = "Every group you can see and the projects in it, with \
+        their ids. Decisions belong to a project, so this is where the \
+        `project_id` the other tools ask for comes from.")]
     async fn project_list(
         &self,
         Parameters(_req): Parameters<ProjectList>,
@@ -477,10 +474,11 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&map)
     }
 
-    #[tool(description = "Match this working tree to converge projects, \
-        best candidate first (a client-side hook injects cwd + git remote). \
-        Present the candidates to the user, then call `project_bind` with \
-        their pick — or `project_dismiss` if they decline.")]
+    #[tool(description = "Finds the converge projects this working tree most \
+        likely belongs to, best first, from the directory and git remote a client \
+        hook adds. Which one is the user's choice — it decides who sees what gets \
+        recorded here — so show them the candidates, then `project_bind` their \
+        pick, or `project_dismiss` if they decline.")]
     // When a transport with elicitation support exists, this tool renders
     // the picker server-side and returns the outcome directly (the POC's
     // pick flow) — a capability-adaptive behavior, not a separate tool.
@@ -578,11 +576,11 @@ impl<S: Storage + 'static> Memory<S> {
         }))
     }
 
-    #[tool(description = "Create a group — the visibility boundary projects \
-        live in (members of a group see everything inside it). kind: \
-        `shared` (others can be invited) or `personal` (only you) — ask \
-        the user, never assume. Answers {group_id, name}; pass the id as \
-        `group_id` to `project_bind` when creating a project in it.")]
+    #[tool(description = "Creates a group: the boundary of who can see what. \
+        Every member sees every project and decision inside it, so whether it is \
+        `shared` (others can be invited) or `personal` (only you) is the user's \
+        call. Answers {group_id, name}; pass the id as `group_id` to \
+        `project_bind` to create a project in it.")]
     async fn group_add(
         &self,
         Parameters(req): Parameters<GroupAdd>,
@@ -620,10 +618,11 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&serde_json::json!({ "group_id": id, "name": req.name }))
     }
 
-    #[tool(description = "Link the working tree to a converge project: pass \
-        `project_id` for an existing one, or `name` to create it. Answers \
-        {project_id, name}; a client-side hook writes the local `.converge` \
-        marker from that — do NOT write the file yourself.")]
+    #[tool(description = "Links this working tree to a converge project — an \
+        existing one by `project_id`, or a new one by `name` — so the team's \
+        decisions come with every session here. Answers {project_id, name}; a \
+        client hook writes the `.converge` marker at the repository root from that \
+        answer, so there is no file for you to write.")]
     async fn project_bind(
         &self,
         Parameters(req): Parameters<ProjectBind>,
@@ -712,9 +711,10 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&serde_json::json!({ "project_id": id, "name": name }))
     }
 
-    #[tool(description = "The user declined to link this repo. scope=session \
-        = skip for now (nothing persists); scope=repo = don't ask again (a \
-        client-side hook writes the opt-out marker).")]
+    #[tool(description = "Records that the user doesn't want this repository \
+        linked, so they are not asked again for nothing: scope=session skips it \
+        for now (nothing persists); scope=repo stops asking for good (a client \
+        hook writes an opt-out marker).")]
     async fn project_dismiss(
         &self,
         Parameters(req): Parameters<ProjectDismiss>,
@@ -730,10 +730,12 @@ impl<S: Storage + 'static> Memory<S> {
         }
     }
 
-    #[tool(description = "Ensure the conversation you're working in exists as \
-        a session — call once, early, with a stable external reference (your \
-        own session id). Idempotent: the same kind+external always returns the \
-        same session_id, which message_add and decision evidence need.")]
+    #[tool(description = "Registers the conversation you are in as a session, \
+        so its turns can be recorded and cited as a decision's evidence. Call it \
+        once, early, with a stable reference of your own (your session id); the \
+        same kind and reference always return the same session_id. Not needed when \
+        `decision_add` carries `evidence_turns` with `conversation`, or a hook \
+        records for you.")]
     async fn session_ensure(
         &self,
         Parameters(req): Parameters<SessionEnsure>,
@@ -771,10 +773,9 @@ impl<S: Storage + 'static> Memory<S> {
         }))
     }
 
-    #[tool(description = "Append messages to a session's stream, in order — \
-        record the conversation as it happens. Returns the new message ids; \
-        pass them as `evidence` on decision_add to anchor the exact lines \
-        that decided it.")]
+    #[tool(description = "Records turns of the conversation, in order, so the \
+        lines that decided something stay on record and a decision can cite them. \
+        Returns the new message ids, which go in `decision_add`'s `evidence`.")]
     async fn message_add(
         &self,
         Parameters(req): Parameters<MessageAdd>,
@@ -818,9 +819,11 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&serde_json::json!({ "message_ids": ids }))
     }
 
-    #[tool(description = "Record a decision (ADR): what was decided, why, what \
-        was rejected. Set `supersedes` when it replaces earlier decisions. \
-        Authorship and timestamps are recorded server-side — never send them.")]
+    #[tool(description = "Records a design decision the user has settled — \
+        what was decided, why, and what was rejected — so teammates and later \
+        sessions build on it instead of deciding again. Name what it replaces in \
+        `supersedes`. Evidence is required, so a reader can check the decision \
+        rather than trust it; the server stamps who and when.")]
     async fn decision_add(
         &self,
         Parameters(req): Parameters<DecisionAdd>,
@@ -991,13 +994,12 @@ impl<S: Storage + 'static> Memory<S> {
         }
     }
 
-    #[tool(description = "Change a decision's edges, or add a dated note to it: \
-        supersede decisions it replaces, cross-reference related ones, cite \
-        recorded turns or committed code, withdraw any of those, and `amend` \
-        with what changed and why. A decision's own words are never rewritten \
-        here — what it said stays on the record, and what was learned since \
-        goes in the amendment, signed by you. All the edge changes apply \
-        together or not at all.")]
+    #[tool(description = "Updates what surrounds a decision without rewriting \
+        it: supersede what it replaces, link related decisions, cite recorded \
+        turns or committed code, withdraw any of those, or `amend` with what \
+        changed since and why. Its words stay as recorded because others may have \
+        built on them; the amendment is dated and signed by you. Edge changes \
+        apply together or not at all.")]
     async fn decision_edit(
         &self,
         Parameters(req): Parameters<DecisionEditIn>,
@@ -1093,8 +1095,10 @@ impl<S: Storage + 'static> Memory<S> {
         }))
     }
 
-    #[tool(description = "Get a decision by id: the full ADR, its authors, \
-        and its graph edges (supersession chain, cross-references).")]
+    #[tool(description = "One decision in full — context, consequences, \
+        rejected alternatives, evidence, amendments and authors — with what it \
+        supersedes and relates to. Worth reading before acting on or arguing with \
+        a decision: the title alone rarely carries why it was made.")]
     async fn decision_get(
         &self,
         Parameters(req): Parameters<DecisionGet>,
@@ -1117,8 +1121,10 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&serde_json::json!({ "decision": decision, "edges": edges }))
     }
 
-    #[tool(description = "List decisions, newest first. Filter by project, \
-        group, or status; `superseded` matches the derived status.")]
+    #[tool(description = "Decisions newest first, filtered by project, group \
+        or status — for browsing what a project has settled. `superseded` matches \
+        decisions something newer replaced. To find a topic, `decision_search` is \
+        quicker.")]
     async fn decision_list(
         &self,
         Parameters(req): Parameters<DecisionList>,
@@ -1169,11 +1175,10 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&items)
     }
 
-    #[tool(description = "Full-text search over decisions, best match \
-        first (title weighs over summary over body). Websearch syntax: \
-        bare words AND, `or`, `-` excludes, \"quoted phrases\". Use this \
-        before decision_list when looking for a topic rather than \
-        browsing.")]
+    #[tool(description = "Finds earlier decisions on a topic, best match \
+        first, so a question the team already settled is not decided again. Title \
+        weighs over summary over body. Websearch syntax: bare words AND, `or`, `-` \
+        excludes, \"quoted phrases\".")]
     async fn decision_search(
         &self,
         Parameters(req): Parameters<DecisionSearch>,
@@ -1213,11 +1218,11 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&items)
     }
 
-    #[tool(description = "List signals — observations that one decision \
-        affects others (tier: watch < coordinate < conflict; status: \
-        proposed = awaiting judgment). project_id/decision_id match either \
-        end. Surface proposed signals to the user, then `signal_resolve` \
-        with their verdict.")]
+    #[tool(description = "Signals: an expert model's observations that one \
+        decision affects others — a conflict, a dependency, drift. They often \
+        involve someone else's work, so they are for the user to judge. Tier says \
+        how urgent (watch < coordinate < conflict); `proposed` means nobody has \
+        judged it yet. project_id/decision_id match either end.")]
     async fn signal_list(
         &self,
         Parameters(req): Parameters<SignalList>,
@@ -1275,10 +1280,10 @@ impl<S: Storage + 'static> Memory<S> {
         json_result(&items)
     }
 
-    #[tool(description = "Resolve a signal with the user's verdict: \
-        `confirmed` (the observation holds — act on it) or `dismissed` \
-        (wrong or not worth acting on — it will not be raised again). \
-        Ask the user before resolving; never judge on their behalf.")]
+    #[tool(description = "Records the user's verdict on a signal: `confirmed` \
+        (it holds and is worth acting on) or `dismissed` (wrong or not worth it; \
+        it will not be raised again). The verdict speaks for the team about their \
+        work, so it is the user's to give — ask, then record what they said.")]
     async fn signal_resolve(
         &self,
         Parameters(req): Parameters<SignalResolve>,
@@ -1380,7 +1385,7 @@ impl<S: Storage + 'static> ServerHandler for Memory<S> {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = Implementation::from_build_env();
-        info.instructions = Some(INSTRUCTIONS.into());
+        info.instructions = Some(instructions().into());
         info
     }
 
@@ -1515,6 +1520,55 @@ mod metric_labels {
                 tool.name,
                 "tool {} is not in metrics::tool_label",
                 tool.name
+            );
+        }
+    }
+}
+
+/// What harnesses do to the text a server sends, measured on 2026-10-04
+/// against the request each one actually built: Claude Code 2.1.288 cuts
+/// the instructions and every tool description at 2,048 UTF-16 units;
+/// Cursor 3.22.12 shows the first 200 characters of each in its tool
+/// catalog and cuts a `user-<server>-<tool>` name past 64; Codex 0.155.1
+/// and opencode 1.18.31 send both whole. Past a cut the text is simply
+/// gone, so the budgets below keep a margin under the tightest one.
+#[cfg(test)]
+mod budgets {
+    use super::{Memory, instructions};
+    use converge_storage_postgres::PgStorage;
+
+    const CLAUDE_CODE_CUT: usize = 2_048;
+    /// Room for an edit before a clause falls off the end.
+    const MARGIN: usize = 248;
+    const CURSOR_NAME: usize = 64;
+
+    fn units(text: &str) -> usize {
+        text.encode_utf16().count()
+    }
+
+    #[test]
+    fn the_instructions_fit_with_room_to_spare() {
+        let n = units(instructions());
+        assert!(
+            n <= CLAUDE_CODE_CUT - MARGIN,
+            "instructions are {n} units; Claude Code cuts at {CLAUDE_CODE_CUT}"
+        );
+    }
+
+    #[test]
+    fn every_tool_fits_every_harness() {
+        for tool in Memory::<PgStorage>::tool_router().list_all() {
+            let description = tool.description.as_deref().unwrap_or_default();
+            assert!(
+                units(description) <= CLAUDE_CODE_CUT - MARGIN,
+                "{}: description is {} units",
+                tool.name,
+                units(description)
+            );
+            let shown = format!("user-converge-{}", tool.name);
+            assert!(
+                shown.len() <= CURSOR_NAME,
+                "{shown} is longer than Cursor's {CURSOR_NAME}"
             );
         }
     }

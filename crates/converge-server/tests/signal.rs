@@ -391,7 +391,7 @@ async fn signal_round_trip() {
         mcp["instructions"]
             .as_str()
             .unwrap()
-            .starts_with("Converge keeps a team's design decisions")
+            .starts_with("Converge stores the decision history")
     );
     assert!(
         mcp["tools"]

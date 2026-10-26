@@ -414,7 +414,7 @@ async fn signal_round_trip() {
     let (status, got) = send(&app, "GET", &format!("/api/v1/decisions/{a}/prompt"), None).await;
     assert_eq!(status, 200, "{got}");
     let system = got["system"].as_str().unwrap();
-    assert!(system.starts_with("You are the Converge signal expert."));
+    assert!(system.starts_with("You are Converge Expert."));
     assert!(got.get("user").is_some(), "{got}");
     let ghost = converge_storage::DecisionId::new();
     let (status, _) = send(

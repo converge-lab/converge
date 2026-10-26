@@ -107,8 +107,6 @@ async fn detection_writes_stamped_signals_once() {
     let (addr, seen) = stub(json!({
         "signals": [{
             "targets": [target],
-            "kind": "contract_divergence",
-            "tier": "conflict",
             "title": "SSE payload contract divergence",
             "text": "full payloads contradict the ids-only contract",
             "consequence": "the cache strategy breaks",

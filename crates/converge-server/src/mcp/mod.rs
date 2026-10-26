@@ -113,8 +113,13 @@ pub struct Memory<S> {
 pub struct DecisionAdd {
     /// The project this decision belongs to (see `project_list`).
     pub project_id: String,
-    /// Short title that states the main choice and helps readers understand
-    /// when the decision applies — the line shown in lists.
+    /// The line that readers see in lists, often without the rest of the
+    /// decision. State the main choice and when it applies, not only the
+    /// topic. For example, write "Use Postgres for the job queue", not
+    /// "Job queue storage". Name the components, APIs, or technologies that
+    /// the decision is about: search and Converge Expert find related
+    /// decisions by these words. Use fewer than 12 words. You cannot change
+    /// the title after you record the decision.
     pub title: String,
     /// One-paragraph summary of what was decided.
     #[serde(default)]

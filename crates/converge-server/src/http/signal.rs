@@ -86,11 +86,6 @@ struct Claim {
     /// into one prompt.
     #[serde(default)]
     limit: Option<u32>,
-    /// The lowest tier worth showing now. Lower ones are consumed all
-    /// the same: they stay in the session-start listing and in
-    /// `signal_list`, and are not offered to this session again.
-    #[serde(default)]
-    floor: Option<Tier>,
 }
 
 /// What a claim handed over, and the frame that puts it in front of the
@@ -130,8 +125,13 @@ async fn claim<S: Storage>(
             limit,
         )
         .await?;
-    let floor = claim.floor.unwrap_or(Tier::Watch);
-    let signals: Vec<Signal> = signals.into_iter().filter(|s| s.tier >= floor).collect();
+    // Only conflicts reach a prompt. Anything below is consumed all the
+    // same: it stays in `signal_list` and is not offered to this session
+    // again. A `floor` that older clients still send changes nothing.
+    let signals: Vec<Signal> = signals
+        .into_iter()
+        .filter(|s| s.tier == Tier::Conflict)
+        .collect();
     crate::metrics::delivered("poll", &signals);
     let (context, line) = crate::context::signals(&signals).unzip();
     Ok(Json(Claimed {

@@ -192,12 +192,13 @@ async fn signal_round_trip() {
     )
     .await;
     let third = third["id"].as_str().unwrap().to_string();
-    // Below the floor: consumed all the same, and nothing to frame.
+    // Not a conflict: consumed all the same, and nothing to frame — even
+    // for an older client that still asks for a lower floor.
     let (status, got) = send(
         &app,
         "POST",
         "/api/v1/claims",
-        Some(json!({ "session": "sess-1", "harness": "codex", "floor": "conflict" })),
+        Some(json!({ "session": "sess-1", "harness": "codex", "floor": "watch" })),
     )
     .await;
     assert_eq!(status, 200, "{got}");
@@ -313,12 +314,10 @@ async fn signal_round_trip() {
     .await;
     assert_eq!(status, 200, "{got}");
     assert_eq!(got["signals"][0]["id"], json!(fourth));
-    assert_eq!(got["line"], "Converge: 1 new signal (1 conflict)");
+    assert_eq!(got["line"], "Converge: 1 new conflict");
     let context = got["context"].as_str().unwrap();
     assert!(
-        context.contains(&format!(
-            "- [conflict/divergence] a and b disagree ({fourth})"
-        )),
+        context.contains(&format!("- a and b disagree ({fourth})")),
         "{context}"
     );
     // b's project is the other end of a signal raised over in c's:
@@ -329,7 +328,7 @@ async fn signal_round_trip() {
         "POST",
         "/api/v1/signals",
         Some(json!({
-            "source": c, "targets": [b], "kind": "dependency", "tier": "watch",
+            "source": c, "targets": [b], "kind": "dependency", "tier": "conflict",
             "title": "b leans on c", "text": "c's shape decides b's",
             "consequence": null, "recommendation": null,
             "produced_by": { "user": user },
@@ -356,7 +355,10 @@ async fn signal_round_trip() {
     );
     assert!(context.contains("\n- a [accepted]"), "{context}");
     assert_eq!(got["decisions"], json!([a]));
-    assert!(got["signals"].as_array().unwrap().contains(&json!(fourth)));
+    let listed = got["signals"].as_array().unwrap();
+    assert!(listed.contains(&json!(fourth)));
+    // A watch raised before conflicts were all there is stays out.
+    assert!(!listed.contains(&json!(second)), "{got}");
     assert!(
         got["line"]
             .as_str()

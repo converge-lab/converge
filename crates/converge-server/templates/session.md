@@ -12,9 +12,9 @@ Decisions{% if new_decisions %} (← NEW = not shown to you before, in any sessi
 {% endif %}
 {% if signals %}
 
-Proposed signals (observations about this project's decisions that nobody has judged yet{% if new_signals %}; ← NEW = not shown to you before, in any session{% endif %}). A conflict means two decisions can't both stand, so it is worth raising with the user before building on either. Whether a signal holds is their call, recorded with `signal_resolve`; `signal_list` has the full text:
+Open conflicts (nobody has judged them yet{% if new_signals %}; ← NEW = not shown to you before, in any session{% endif %}). In a conflict, a decision breaks a contract that earlier decisions created, and the decisions cannot both apply. It is worth raising with the user before building on either. Whether a conflict is real is their call, recorded with `signal_resolve`; `signal_list` has the full text:
 {% for s in signals %}
-- [{{ s.tier }}/{{ s.kind }}] {{ s.title }} ({{ s.id }}){% if s.new %} ← NEW{% endif %}
+- {{ s.title }} ({{ s.id }}){% if s.new %} ← NEW{% endif %}
 
 {% endfor %}
 {% endif %}

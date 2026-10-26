@@ -69,8 +69,6 @@ struct Recorded {
 #[derive(Debug, Clone, Serialize)]
 struct Open {
     id: SignalId,
-    tier: Tier,
-    kind: String,
     title: String,
     /// The server holds no receipt for it from this user.
     new: bool,
@@ -101,9 +99,12 @@ pub async fn session<S: Storage>(
         project: Some(project),
         ..Default::default()
     };
+    // Conflicts only: the expert raises nothing else, and what it raised
+    // below that before is no longer worth a session's attention.
     let open = SignalFilter {
         project: Some(project),
         status: Some(SignalStatus::Proposed),
+        tier: Some(Tier::Conflict),
         ..Default::default()
     };
     let (all, unseen, listed, fresh) = tokio::try_join!(
@@ -142,8 +143,6 @@ pub async fn session<S: Storage>(
         .map(|s| Open {
             new: fresh.contains(&s.id),
             id: s.id,
-            tier: s.tier,
-            kind: s.kind,
             title: s.title,
         })
         .collect();
@@ -170,6 +169,7 @@ pub async fn sample<S: Storage>(
     let open = SignalFilter {
         project: Some(project),
         status: Some(SignalStatus::Proposed),
+        tier: Some(Tier::Conflict),
         ..Default::default()
     };
     let mut newest = store
@@ -180,7 +180,7 @@ pub async fn sample<S: Storage>(
 }
 
 /// The block and its visible line. This listing is deliberately
-/// unfiltered by receipts: it is the one place every open signal shows,
+/// unfiltered by receipts: it is the one place every open conflict shows,
 /// whatever a poll handed out or dropped.
 fn session_block(
     project: ProjectId,
@@ -190,7 +190,6 @@ fn session_block(
 ) -> (String, String) {
     let new_decisions = decisions.iter().filter(|d| d.new).count();
     let new_signals = signals.iter().filter(|s| s.new).count();
-    let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
     // The list limits cap what we can count; say "N+" at the cap
     // instead of understating a bigger corpus as exactly N.
     let counted = |n: usize, cap: u32| {
@@ -200,30 +199,20 @@ fn session_block(
             n.to_string()
         }
     };
-    let mut detail = Vec::new();
-    if new_signals > 0 {
-        detail.push(format!("{new_signals} new"));
-    }
-    if conflicts > 0 {
-        detail.push(format!("{conflicts} conflict"));
-    }
+    let fresh = |n: usize| match n {
+        0 => String::new(),
+        n => format!(" ({n} new)"),
+    };
     let line = format!(
-        "Converge: \"{name}\" — {} decision(s){}, {} open signal(s){} ✓",
+        "Converge: \"{name}\" — {} decision(s){}, {} open conflict(s){} ✓",
         counted(decisions.len(), DECISIONS),
-        match new_decisions {
-            0 => String::new(),
-            n => format!(" ({n} new)"),
-        },
+        fresh(new_decisions),
         counted(signals.len(), SIGNALS),
-        match detail.is_empty() {
-            true => String::new(),
-            false => format!(" ({})", detail.join(", ")),
-        },
+        fresh(new_signals),
     );
-    // What is new to this reader leads, newest first within each half;
-    // among signals a conflict leads within that.
+    // What is new to this reader leads, newest first within each half.
     decisions.sort_by_key(|d| (Reverse(d.new), Reverse(d.id)));
-    signals.sort_by_key(|s| (Reverse(s.new), Reverse(s.tier), Reverse(s.id)));
+    signals.sort_by_key(|s| (Reverse(s.new), Reverse(s.id)));
     let context = render(
         "session.md",
         context! {
@@ -243,11 +232,15 @@ struct Arrived<'a> {
     id: SignalId,
     source: DecisionId,
     targets: &'a [DecisionId],
-    tier: Tier,
-    kind: &'a str,
     title: &'a str,
     text: &'a str,
+    consequence: Option<&'a str>,
     recommendation: Option<&'a str>,
+}
+
+/// An optional field as the frame shows it: trimmed, and absent if blank.
+fn note(field: &Option<String>) -> Option<&str> {
+    field.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// The per-prompt frame: what arrived, framed so the model reads it as
@@ -261,14 +254,9 @@ pub fn signals(signals: &[Signal]) -> Option<(String, String)> {
         return None;
     }
     let n = signals.len();
-    let conflicts = signals.iter().filter(|s| s.tier == Tier::Conflict).count();
     let line = format!(
-        "Converge: {n} new signal{}{}",
-        if n == 1 { "" } else { "s" },
-        match conflicts {
-            0 => String::new(),
-            c => format!(" ({c} conflict)"),
-        }
+        "Converge: {n} new conflict{}",
+        if n == 1 { "" } else { "s" }
     );
     let arrived: Vec<Arrived> = signals
         .iter()
@@ -276,18 +264,13 @@ pub fn signals(signals: &[Signal]) -> Option<(String, String)> {
             id: s.id,
             source: s.source,
             targets: &s.targets,
-            tier: s.tier,
-            kind: &s.kind,
             title: &s.title,
             text: s.text.trim(),
-            recommendation: s
-                .recommendation
-                .as_deref()
-                .map(str::trim)
-                .filter(|r| !r.is_empty()),
+            consequence: note(&s.consequence),
+            recommendation: note(&s.recommendation),
         })
         .collect();
-    let context = render("signals.md", context! { signals => arrived, conflicts });
+    let context = render("signals.md", context! { signals => arrived });
     Some((context, line))
 }
 
@@ -297,11 +280,9 @@ mod tests {
     use converge_storage::Author;
     use time::OffsetDateTime;
 
-    fn open(id: &str, tier: Tier, title: &str, new: bool) -> Open {
+    fn open(id: &str, title: &str, new: bool) -> Open {
         Open {
             id: id.parse().unwrap(),
-            tier,
-            kind: "dependency".into(),
             title: title.into(),
             new,
         }
@@ -320,6 +301,16 @@ mod tests {
         "01J00000000000000000000000".parse().unwrap()
     }
 
+    /// The listed conflicts, in order: the lines under their header.
+    fn conflict_lines(block: &str) -> Vec<&str> {
+        block
+            .split_once("Open conflicts")
+            .map_or("", |(_, rest)| rest)
+            .lines()
+            .filter(|l| l.starts_with("- "))
+            .collect()
+    }
+
     #[test]
     fn an_empty_project_says_how_to_start() {
         let (block, line) = session_block(project(), "p", vec![], vec![]);
@@ -334,7 +325,10 @@ mod tests {
                 p = project()
             )
         );
-        assert_eq!(line, "Converge: \"p\" — 0 decision(s), 0 open signal(s) ✓");
+        assert_eq!(
+            line,
+            "Converge: \"p\" — 0 decision(s), 0 open conflict(s) ✓"
+        );
     }
 
     #[test]
@@ -343,12 +337,7 @@ mod tests {
             recorded("01J0000000000000000000000A", "settled last week", false),
             recorded("01J0000000000000000000000B", "settled today", true),
         ];
-        let signals = vec![open(
-            "01J00000000000000000000003",
-            Tier::Conflict,
-            "hi",
-            true,
-        )];
+        let signals = vec![open("01J00000000000000000000003", "hi", true)];
         let (block, _) = session_block(project(), "p", decisions, signals);
         let p = project();
         assert_eq!(
@@ -366,12 +355,13 @@ mod tests {
                  - settled today [accepted] (01J0000000000000000000000B) ← NEW\n\
                  - settled last week [accepted] (01J0000000000000000000000A)\n\
                  \n\
-                 Proposed signals (observations about this project's decisions that nobody \
-                 has judged yet; ← NEW = not shown to you before, in any session). A \
-                 conflict means two decisions can't both stand, so it is worth raising with \
-                 the user before building on either. Whether a signal holds is their call, \
-                 recorded with `signal_resolve`; `signal_list` has the full text:\n\
-                 - [conflict/dependency] hi (01J00000000000000000000003) ← NEW"
+                 Open conflicts (nobody has judged them yet; ← NEW = not shown to you \
+                 before, in any session). In a conflict, a decision breaks a contract that \
+                 earlier decisions created, and the decisions cannot both apply. It is worth \
+                 raising with the user before building on either. Whether a conflict is real \
+                 is their call, recorded with `signal_resolve`; `signal_list` has the full \
+                 text:\n\
+                 - hi (01J00000000000000000000003) ← NEW"
             )
         );
     }
@@ -385,7 +375,7 @@ mod tests {
         let (_, line) = session_block(project(), "p", decisions.clone(), vec![]);
         assert_eq!(
             line,
-            "Converge: \"p\" — 2 decision(s) (1 new), 0 open signal(s) ✓"
+            "Converge: \"p\" — 2 decision(s) (1 new), 0 open conflict(s) ✓"
         );
         // Nothing new: no mark, no legend, no parenthetical.
         let seen = decisions
@@ -394,11 +384,15 @@ mod tests {
             .collect();
         let (block, line) = session_block(project(), "p", seen, vec![]);
         assert!(!block.contains("NEW"), "{block}");
-        assert_eq!(line, "Converge: \"p\" — 2 decision(s), 0 open signal(s) ✓");
+        assert_eq!(
+            line,
+            "Converge: \"p\" — 2 decision(s), 0 open conflict(s) ✓"
+        );
 
-        let lo = open("01J00000000000000000000001", Tier::Conflict, "lo", false);
-        let mid = open("01J00000000000000000000002", Tier::Watch, "mid", false);
-        let hi = open("01J00000000000000000000003", Tier::Coordinate, "hi", true);
+        // The oldest conflict is the one never shown: it leads anyway.
+        let lo = open("01J00000000000000000000001", "lo", true);
+        let mid = open("01J00000000000000000000002", "mid", false);
+        let hi = open("01J00000000000000000000003", "hi", false);
         let one = vec![recorded("01J0000000000000000000000A", "one", false)];
         let (block, line) = session_block(
             project(),
@@ -406,29 +400,28 @@ mod tests {
             one.clone(),
             vec![lo.clone(), mid.clone(), hi.clone()],
         );
-        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- [")).collect();
         assert_eq!(
-            lines,
+            conflict_lines(&block),
             [
-                format!("- [coordinate/dependency] hi ({}) ← NEW", hi.id),
-                format!("- [conflict/dependency] lo ({})", lo.id),
-                format!("- [watch/dependency] mid ({})", mid.id),
+                format!("- lo ({}) ← NEW", lo.id),
+                format!("- hi ({})", hi.id),
+                format!("- mid ({})", mid.id),
             ]
         );
         assert_eq!(
             line,
-            "Converge: \"p\" — 1 decision(s), 3 open signal(s) (1 new, 1 conflict) ✓"
+            "Converge: \"p\" — 1 decision(s), 3 open conflict(s) (1 new) ✓"
         );
-        // Everything receipted: the order is tier, then newest.
+        // Everything receipted: newest first.
         let seen = [lo, mid, hi]
             .into_iter()
             .map(|s| Open { new: false, ..s })
             .collect();
         let (block, _) = session_block(project(), "p", one, seen);
         assert!(!block.contains("NEW"), "{block}");
-        let lines: Vec<&str> = block.lines().filter(|l| l.starts_with("- [")).collect();
+        let lines = conflict_lines(&block);
         assert!(
-            lines[0].contains(" lo ") && lines[1].contains(" hi ") && lines[2].contains(" mid ")
+            lines[0].contains(" hi ") && lines[1].contains(" mid ") && lines[2].contains(" lo ")
         );
     }
 
@@ -450,8 +443,6 @@ mod tests {
         let signals = (0..SIGNALS)
             .map(|_| Open {
                 id: SignalId::new(),
-                tier: Tier::Coordinate,
-                kind: "scope_narrowing".into(),
                 title: title.clone(),
                 new: true,
             })
@@ -464,18 +455,23 @@ mod tests {
         );
     }
 
-    fn arrived(id: &str, tier: Tier, title: &str, recommendation: Option<&str>) -> Signal {
+    fn arrived(
+        id: &str,
+        title: &str,
+        consequence: Option<&str>,
+        recommendation: Option<&str>,
+    ) -> Signal {
         let decision = |s: &str| s.parse::<DecisionId>().unwrap();
         Signal {
             id: id.parse().unwrap(),
             source: decision("01J00000000000000000000000"),
             targets: vec![decision("01J00000000000000000000001")],
-            kind: "dependency".into(),
-            tier,
+            kind: "broken_contract".into(),
+            tier: Tier::Conflict,
             status: SignalStatus::Proposed,
             title: title.into(),
             text: format!("{title} bears on the other one.\n"),
-            consequence: None,
+            consequence: consequence.map(str::to_owned),
             recommendation: recommendation.map(str::to_owned),
             produced_by: Author::User("01J00000000000000000000002".parse().unwrap()),
             resolved_by: None,
@@ -486,37 +482,39 @@ mod tests {
     #[test]
     fn the_frame_says_what_arrived_and_whose_words_they_are() {
         assert!(signals(&[]).is_none());
-        let one = arrived("01J00000000000000000000003", Tier::Coordinate, "one", None);
+        let one = arrived("01J00000000000000000000003", "one", None, None);
         let (context, line) = signals(std::slice::from_ref(&one)).unwrap();
-        assert_eq!(line, "Converge: 1 new signal");
+        assert_eq!(line, "Converge: 1 new conflict");
         assert_eq!(
             context,
-            "Converge: 1 signal raised since your last prompt — an expert model's \
-             observations about decisions in this project, some possibly from other \
-             people's sessions. They are information for the user, who decides whether \
-             each holds.\n\
-             - [coordinate/dependency] one (01J00000000000000000000003): one bears on the \
-             other one.\n  \
-             Decision 01J00000000000000000000000 affects 01J00000000000000000000001\n\
-             The user will want to hear about these; `decision_get` and `signal_list` \
-             hold the full record, and `signal_resolve` records the user's verdict once \
-             they give it."
+            "Converge: 1 new conflict since your last prompt. In a conflict, a decision \
+             breaks a contract that earlier decisions created, and the decisions cannot \
+             both apply. Converge Expert found these conflicts, and some of the decisions \
+             can come from other people's sessions. The user decides whether each conflict \
+             is real, so it is worth raising with them before building on either \
+             decision.\n\
+             - one (01J00000000000000000000003)\n  \
+             one bears on the other one.\n  \
+             Decision 01J00000000000000000000000 breaks the contract of \
+             01J00000000000000000000001.\n\
+             `decision_get` and `signal_list` hold the full record, and `signal_resolve` \
+             records the user's verdict once they give it."
         );
 
         let two = arrived(
             "01J00000000000000000000004",
-            Tier::Conflict,
             "two",
+            Some(" billing loses the currency "),
             Some(" talk to billing "),
         );
         let (context, line) = signals(&[one, two]).unwrap();
-        assert_eq!(line, "Converge: 2 new signals (1 conflict)");
+        assert_eq!(line, "Converge: 2 new conflicts");
         assert!(
-            context.starts_with("Converge: 2 signals raised"),
+            context.starts_with("Converge: 2 new conflicts since"),
             "{context}"
         );
         assert!(
-            context.contains("worth raising before building on either"),
+            context.contains("\n  Consequence: billing loses the currency\n"),
             "{context}"
         );
         assert!(

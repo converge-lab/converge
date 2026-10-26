@@ -6,7 +6,7 @@ This working tree is bound to converge project `{{ project.id }}`. The decisions
 
 Decisions{% if new_decisions %} (← NEW = not shown to you before, in any session){% endif %}:
 {% for d in decisions %}
-- {{ d.title }} [{{ d.status }}]{% if d.new %} ← NEW{% endif %}
+- {{ d.title }} [{{ d.status }}] ({{ d.id }}){% if d.new %} ← NEW{% endif %}
 
 {% endfor %}
 {% endif %}

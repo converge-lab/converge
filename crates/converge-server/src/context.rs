@@ -241,6 +241,8 @@ fn session_block(
 #[derive(Serialize)]
 struct Arrived<'a> {
     id: SignalId,
+    source: DecisionId,
+    targets: &'a [DecisionId],
     tier: Tier,
     kind: &'a str,
     title: &'a str,
@@ -272,6 +274,8 @@ pub fn signals(signals: &[Signal]) -> Option<(String, String)> {
         .iter()
         .map(|s| Arrived {
             id: s.id,
+            source: s.source,
+            targets: &s.targets,
             tier: s.tier,
             kind: &s.kind,
             title: &s.title,
@@ -359,8 +363,8 @@ mod tests {
                  citation.\n\
                  \n\
                  Decisions (← NEW = not shown to you before, in any session):\n\
-                 - settled today [accepted] ← NEW\n\
-                 - settled last week [accepted]\n\
+                 - settled today [accepted] (01J0000000000000000000000B) ← NEW\n\
+                 - settled last week [accepted] (01J0000000000000000000000A)\n\
                  \n\
                  Proposed signals (observations about this project's decisions that nobody \
                  has judged yet; ← NEW = not shown to you before, in any session). A \
@@ -492,7 +496,8 @@ mod tests {
              people's sessions. They are information for the user, who decides whether \
              each holds.\n\
              - [coordinate/dependency] one (01J00000000000000000000003): one bears on the \
-             other one.\n\
+             other one.\n  \
+             Decision 01J00000000000000000000000 affects 01J00000000000000000000001\n\
              The user will want to hear about these; `decision_get` and `signal_list` \
              hold the full record, and `signal_resolve` records the user's verdict once \
              they give it."

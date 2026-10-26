@@ -1235,6 +1235,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .as_deref()
                 .map(|s| parse_id::<ProjectId>(s, "project_id"))
                 .transpose()?,
+            group: None,
             decision: req
                 .decision_id
                 .as_deref()

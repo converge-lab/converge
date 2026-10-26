@@ -4,18 +4,19 @@
 //!
 //! This is a pure function over a [`Client`]: no storage,
 //! no side effects. The caller (the server's production pass) retrieves
-//! the candidates (full-text similarity + graph neighbourhood, under a
-//! token budget), runs [`discover`], stamps authorship, and writes the
-//! drafts through `signal_add` — which enforces the don't-re-raise rule,
-//! so the model needs the existing signals only for judgment ("has this
-//! relationship materially changed?"), never for dedup.
+//! the candidates (the closest full-text matches to the decision's own
+//! words, within its group), runs [`discover`], stamps authorship, and
+//! writes the drafts through `signal_add` — which enforces the
+//! don't-re-raise rule, so the model needs the existing signals only for
+//! judgment ("has this relationship materially changed?"), never for
+//! dedup.
 //!
 //! The contract deliberately carries *retrieved* state, not the whole
 //! group: E1 is triage over candidates (the cascade decision); a small
 //! deployment's retrieval may well return everything, but the shape
 //! never promises completeness.
 
-use converge_storage::{Decision, DecisionId, Edges, Signal, Tier};
+use converge_storage::{Decision, DecisionId, DecisionStatus, Edges, Signal, Tier};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -173,8 +174,9 @@ fn schema() -> Value {
 
 /// Run the job: one schema-constrained model call, then validation. The
 /// model's output is *drafts*, not writes — invalid targets (unknown,
-/// self, unparseable) are dropped rather than trusted, and a draft with
-/// no surviving targets disappears. An empty result is a success.
+/// self, unparseable, rejected or superseded) are dropped rather than
+/// trusted, and a draft with no surviving targets disappears. An empty
+/// result is a success.
 pub async fn discover(client: &Client, request: &Request) -> Result<Vec<Draft>, Error> {
     let user = serde_json::to_string(request)
         .map_err(|e| Error::Shape(format!("unserializable request: {e}")))?;
@@ -185,7 +187,19 @@ pub async fn discover(client: &Client, request: &Request) -> Result<Vec<Draft>, 
 }
 
 fn validate(reply: Reply, request: &Request) -> Vec<Draft> {
-    let known: Vec<DecisionId> = request.candidates.iter().map(|c| c.decision.id).collect();
+    // The prompt rules out targets that no longer stand; a draft that
+    // names one anyway loses it here.
+    let targetable: Vec<DecisionId> = request
+        .candidates
+        .iter()
+        .filter(|c| {
+            !matches!(
+                c.decision.status,
+                DecisionStatus::Rejected | DecisionStatus::Superseded
+            )
+        })
+        .map(|c| c.decision.id)
+        .collect();
     let source = request.decision.decision.id;
     reply
         .signals
@@ -195,7 +209,7 @@ fn validate(reply: Reply, request: &Request) -> Vec<Draft> {
                 .targets
                 .iter()
                 .filter_map(|t| t.parse().ok())
-                .filter(|t| *t != source && known.contains(t))
+                .filter(|t| *t != source && targetable.contains(t))
                 .collect();
             targets.sort_unstable_by_key(|t| t.ulid());
             targets.dedup();
@@ -219,7 +233,7 @@ fn validate(reply: Reply, request: &Request) -> Vec<Draft> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use converge_storage::{DecisionStatus, ProjectId};
+    use converge_storage::ProjectId;
     use time::OffsetDateTime;
 
     fn entry(id: DecisionId, project: &str, title: &str) -> Entry {
@@ -260,9 +274,20 @@ mod tests {
     fn validation_drops_what_cannot_be_trusted() {
         let source = DecisionId::new();
         let known = DecisionId::new();
+        let rejected = DecisionId::new();
+        let superseded = DecisionId::new();
+        let gone = |id, status| {
+            let mut e = entry(id, "billing", "old");
+            e.decision.status = status;
+            e
+        };
         let request = Request {
             decision: entry(source, "server", "new"),
-            candidates: vec![entry(known, "billing", "old")],
+            candidates: vec![
+                entry(known, "billing", "old"),
+                gone(rejected, DecisionStatus::Rejected),
+                gone(superseded, DecisionStatus::Superseded),
+            ],
             signals: vec![],
         };
 
@@ -285,6 +310,11 @@ mod tests {
                     ),
                     // No surviving targets → the draft disappears.
                     raw(vec![source.to_string()], "dependency"),
+                    // A candidate that no longer stands is no target.
+                    raw(
+                        vec![rejected.to_string(), superseded.to_string()],
+                        "dependency",
+                    ),
                     // Blank kind → gone.
                     raw(vec![known.to_string()], "  "),
                 ],

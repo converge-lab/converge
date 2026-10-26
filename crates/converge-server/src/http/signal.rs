@@ -41,8 +41,8 @@ async fn add<S: Storage>(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-/// List, narrowed by `?project=&decision=&status=&tier=` (project and
-/// decision match either end), paged by `?limit=&cursor=`.
+/// List, narrowed by `?project=&group=&decision=&status=&tier=` (project
+/// and decision match either end), paged by `?limit=&cursor=`.
 async fn list<S: Storage>(
     State(store): State<S>,
     Extension(caller): Extension<Caller>,

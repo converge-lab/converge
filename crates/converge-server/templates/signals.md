@@ -2,6 +2,7 @@ Converge: {{ signals|length }} signal{% if signals|length != 1 %}s{% endif %} ra
 
 {% for s in signals %}
 - [{{ s.tier }}/{{ s.kind }}] {{ s.title }} ({{ s.id }}): {{ s.text }}
+  Decision {{ s.source }} affects {{ s.targets|join(", ") }}
 {% if s.recommendation %}
   Recommendation: {{ s.recommendation }}
 {% endif %}

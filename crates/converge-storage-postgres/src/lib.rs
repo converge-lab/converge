@@ -2109,9 +2109,9 @@ impl Signals for PgStorage {
         let status = filter.status.map(PgSignalStatus::from);
         let tier = filter.tier.map(PgTier::from);
         // Project and decision filters match either end: the source
-        // decision's project, or any target's. Visibility needs only the
-        // source's group — targets are same-group by construction. The
-        // order flips with `since`: newest first is a listing, oldest
+        // decision's project, or any target's. The group filter and
+        // visibility need only the source's group — targets are
+        // same-group by construction. The order flips with `since`: newest first is a listing, oldest
         // first is a reader catching up — the `case` keys the sort on the
         // id only when there is no `since`, so the tie-break `asc` rules.
         let mut signals = sqlx::query_as!(
@@ -2138,6 +2138,10 @@ impl Signals for PgStorage {
                  and ($9::uuid is null
                       or not exists (select 1 from signal_receipts r
                                      where r.signal_id = s.id and r.user_id = $9))
+                 and ($10::uuid is null
+                      or exists (select 1 from decisions d
+                                 join projects p on p.id = d.project_id
+                                 where d.id = s.source and p.group_id = $10))
                  and ($7::uuid is null
                       or group_visible((select p.group_id from decisions d
                                         join projects p on p.id = d.project_id
@@ -2153,6 +2157,7 @@ impl Signals for PgStorage {
             viewer(scope),
             filter.since.map(|s| Uuid::from(s.ulid())),
             if filter.unseen { viewer(scope) } else { None },
+            filter.group.map(|g| Uuid::from(g.ulid())),
         )
         .fetch_all(&self.pool)
         .await

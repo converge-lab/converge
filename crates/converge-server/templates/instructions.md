@@ -25,6 +25,8 @@ Simple mechanical changes usually do not need a separate record. If their purpos
 
 Record a decision once the choice is made and the reasons are still available in the conversation. Use the ADR format: record the goal, the circumstances that affected the choice, and the trade-offs you accepted. Aim for about 80% compliance with ASD-STE100. This helps users read and understand your records. For a temporary decision, state the conditions for reviewing it or ending its use.
 
+Each record must have evidence, so that a reader can check the decision and not only trust it. The evidence is the exchange in which you and the user made the decision (`evidence_turns` with `conversation`) or committed code (`code_evidence`). Where a converge hook is installed, it attaches the exchange for you.
+
 Other project members may already rely on a decision in their work. Keep its original meaning in the existing record. If the decision needs to change, create a new decision with `supersedes`. If the decision still applies, add clarifications or new information with an `amend` through `decision_edit`.
 
 Signals are observations, and the affected decision is often someone else's. The user decides whether a signal is valid. Show the signal to the user and explain the conflict before you continue work. Record the user's verdict with `signal_resolve`.

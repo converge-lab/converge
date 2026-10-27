@@ -13,7 +13,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::post;
-use converge_expert::signals::{Request, discover};
+use converge_expert::signals::{KIND, Request, discover};
 use converge_expert::{Client, Endpoint};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -87,8 +87,6 @@ async fn the_job_constrains_the_wire_and_validates_the_reply() {
     let (addr, seen) = stub(json!({
         "signals": [{
             "targets": [EXPECTED_TARGET, bogus],
-            "kind": "Contract Divergence",
-            "tier": "conflict",
             "title": "full payloads contradict the SSE contract",
             "text": "the cache update consumes fields SSE no longer carries",
             "consequence": "boards render stale data",
@@ -101,7 +99,8 @@ async fn the_job_constrains_the_wire_and_validates_the_reply() {
     assert_eq!(drafts.len(), 1);
     assert_eq!(drafts[0].targets.len(), 1, "the bogus target is dropped");
     assert_eq!(drafts[0].targets[0].to_string(), EXPECTED_TARGET);
-    assert_eq!(drafts[0].kind, "contract_divergence");
+    assert_eq!(drafts[0].kind, KIND);
+    assert_eq!(drafts[0].tier, converge_storage::Tier::Conflict);
 
     // The request rode structured output: the schema on the wire, with
     // the fixture JSON as the user turn — and NO temperature: Claude 5
@@ -120,6 +119,9 @@ async fn the_job_constrains_the_wire_and_validates_the_reply() {
     );
     let schema = &seen["response_format"]["json_schema"]["schema"];
     assert_eq!(schema["properties"]["signals"]["type"], "array");
+    // Every draft is a conflict: the model no longer picks a tier or kind.
+    let fields = &schema["properties"]["signals"]["items"]["properties"];
+    assert!(fields.get("tier").is_none() && fields.get("kind").is_none());
     let user = seen["messages"][1]["content"].as_str().unwrap();
     assert!(user.contains(EXPECTED_TARGET) && user.contains("web-app"));
 }

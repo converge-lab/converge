@@ -382,6 +382,58 @@ async fn list_filters_match_either_end() {
 }
 
 #[tokio::test]
+async fn the_group_filter_keeps_to_one_group() {
+    let (_pg, store) = store().await;
+    let me = user(&store).await;
+    // Both groups are visible to the reader, so only the filter can keep
+    // one group's signals out of a listing for the other.
+    let g1 = group(&store, me).await;
+    let g2 = group(&store, me).await;
+    let p1 = project_in(&store, g1).await;
+    let p2 = project_in(&store, g2).await;
+    let a = decision(&store, p1, "a").await;
+    let b = decision(&store, p1, "b").await;
+    let c = decision(&store, p2, "c").await;
+    let d = decision(&store, p2, "d").await;
+    let s1 = store
+        .signal_add(
+            Scope::System,
+            signal(a, vec![b], "dependency", Tier::Watch, me),
+        )
+        .await
+        .unwrap();
+    let s2 = store
+        .signal_add(
+            Scope::System,
+            signal(c, vec![d], "dependency", Tier::Watch, me),
+        )
+        .await
+        .unwrap();
+
+    let list = |group: GroupId| {
+        let store = store.clone();
+        async move {
+            store
+                .signal_list(
+                    Scope::User(me),
+                    SignalFilter {
+                        group: Some(group),
+                        ..Default::default()
+                    },
+                    Pagination::default(),
+                )
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(list(g1).await, vec![s1]);
+    assert_eq!(list(g2).await, vec![s2]);
+}
+
+#[tokio::test]
 async fn since_pages_forward_oldest_first() {
     let (_pg, store) = store().await;
     let me = user(&store).await;

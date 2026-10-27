@@ -113,7 +113,13 @@ pub struct Memory<S> {
 pub struct DecisionAdd {
     /// The project this decision belongs to (see `project_list`).
     pub project_id: String,
-    /// Short, imperative title — the line shown in lists.
+    /// The line that readers see in lists, often without the rest of the
+    /// decision. State the main choice and when it applies, not only the
+    /// topic. For example, write "Use Postgres for the job queue", not
+    /// "Job queue storage". Name the components, APIs, or technologies that
+    /// the decision is about: search and Converge Expert find related
+    /// decisions by these words. Use fewer than 12 words. You cannot change
+    /// the title after you record the decision.
     pub title: String,
     /// One-paragraph summary of what was decided.
     #[serde(default)]
@@ -1234,6 +1240,7 @@ impl<S: Storage + 'static> Memory<S> {
                 .as_deref()
                 .map(|s| parse_id::<ProjectId>(s, "project_id"))
                 .transpose()?,
+            group: None,
             decision: req
                 .decision_id
                 .as_deref()
@@ -1525,19 +1532,21 @@ mod metric_labels {
     }
 }
 
-/// What harnesses do to the text a server sends, measured on 2026-10-04
-/// against the request each one actually built: Claude Code 2.1.288 cuts
-/// the instructions and every tool description at 2,048 UTF-16 units;
-/// Cursor 3.22.12 shows the first 200 characters of each in its tool
-/// catalog and cuts a `user-<server>-<tool>` name past 64; Codex 0.155.1
-/// and opencode 1.18.31 send both whole. Past a cut the text is simply
-/// gone, so the budgets below keep a margin under the tightest one.
+/// What harnesses do to the text a server sends. Claude Code 2.1.310 cuts
+/// the instructions and every tool description at 4,096 UTF-16 units, and
+/// lets a description run to 16,384 once tool search loads the tool (read
+/// from its bundle on 2026-10-26; 2.1.288 cut both at 2,048). Measured on
+/// 2026-10-04 against the request each one actually built: Cursor 3.22.12
+/// shows the first 200 characters of each in its tool catalog and cuts a
+/// `user-<server>-<tool>` name past 64; Codex 0.155.1 and opencode 1.18.31
+/// send both whole. Past a cut the text is simply gone, so the budgets
+/// below keep a margin under the tightest one.
 #[cfg(test)]
 mod budgets {
     use super::{Memory, instructions};
     use converge_storage_postgres::PgStorage;
 
-    const CLAUDE_CODE_CUT: usize = 2_048;
+    const CLAUDE_CODE_CUT: usize = 4_096;
     /// Room for an edit before a clause falls off the end.
     const MARGIN: usize = 248;
     const CURSOR_NAME: usize = 64;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where ($1::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $1)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $1))\n                 and ($2::uuid is null\n                      or s.source = $2\n                      or exists (select 1 from signal_targets t\n                                 where t.signal_id = s.id and t.target = $2))\n                 and ($3::signal_status is null or s.status = $3)\n                 and ($4::signal_tier is null or s.tier = $4)\n                 and ($6::uuid is null or s.id < $6)\n                 and ($8::uuid is null or s.id > $8)\n                 and ($9::uuid is null\n                      or not exists (select 1 from signal_receipts r\n                                     where r.signal_id = s.id and r.user_id = $9))\n                 and ($7::uuid is null\n                      or group_visible((select p.group_id from decisions d\n                                        join projects p on p.id = d.project_id\n                                        where d.id = s.source), $7))\n               order by case when $8::uuid is null then s.id end desc, s.id asc\n               limit $5",
+  "query": "select s.id, s.source, s.kind, s.tier as \"tier: _\", s.status as \"status: _\",\n                      s.title, s.text, s.consequence, s.recommendation,\n                      s.produced_user, s.produced_agent, s.resolved_user, s.resolved_agent,\n                      s.captured_at\n               from signals s\n               where ($1::uuid is null\n                      or exists (select 1 from decisions d\n                                 where d.id = s.source and d.project_id = $1)\n                      or exists (select 1 from signal_targets t\n                                 join decisions d on d.id = t.target\n                                 where t.signal_id = s.id and d.project_id = $1))\n                 and ($2::uuid is null\n                      or s.source = $2\n                      or exists (select 1 from signal_targets t\n                                 where t.signal_id = s.id and t.target = $2))\n                 and ($3::signal_status is null or s.status = $3)\n                 and ($4::signal_tier is null or s.tier = $4)\n                 and ($6::uuid is null or s.id < $6)\n                 and ($8::uuid is null or s.id > $8)\n                 and ($9::uuid is null\n                      or not exists (select 1 from signal_receipts r\n                                     where r.signal_id = s.id and r.user_id = $9))\n                 and ($10::uuid is null\n                      or exists (select 1 from decisions d\n                                 join projects p on p.id = d.project_id\n                                 where d.id = s.source and p.group_id = $10))\n                 and ($7::uuid is null\n                      or group_visible((select p.group_id from decisions d\n                                        join projects p on p.id = d.project_id\n                                        where d.id = s.source), $7))\n               order by case when $8::uuid is null then s.id end desc, s.id asc\n               limit $5",
   "describe": {
     "columns": [
       {
@@ -128,6 +128,7 @@
         "Uuid",
         "Uuid",
         "Uuid",
+        "Uuid",
         "Uuid"
       ]
     },
@@ -148,5 +149,5 @@
       false
     ]
   },
-  "hash": "edccc6b79200f8132399af156f046e6b834cf6a7af8065c2b97a25bed4c914fc"
+  "hash": "d1c7f59c4aa72d60d85cd8ea33200416b91a90768f48c9c48ba5666e5249582f"
 }

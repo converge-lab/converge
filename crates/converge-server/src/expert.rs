@@ -634,6 +634,7 @@ impl<S: Storage + 'static> Expert<S> {
             .signal_list(
                 scope,
                 SignalFilter {
+                    group: Some(group),
                     status: Some(SignalStatus::Proposed),
                     ..Default::default()
                 },
@@ -689,9 +690,7 @@ impl<S: Storage + 'static> Expert<S> {
 
     /// Deterministic retrieval: an OR-query of the subject's content
     /// words over the full-text index, **within the subject's group**,
-    /// minus the subject itself and its own project (the judgment is
-    /// cross-project by contract — same-project hits would waste
-    /// candidate slots).
+    /// minus the subject itself.
     async fn retrieve(
         &self,
         subject: &Decision,

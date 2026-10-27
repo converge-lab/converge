@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::decision::Author;
-use crate::ids::{DecisionId, ProjectId, SignalId};
+use crate::ids::{DecisionId, GroupId, ProjectId, SignalId};
 use crate::{Pagination, Scope, StoreError};
 
 /// The response tier — how urgently the affected side should react; the
@@ -104,6 +104,9 @@ pub struct SignalFilter {
     /// Signals touching this project on either end (its decisions as
     /// source or target).
     pub project: Option<ProjectId>,
+    /// Signals in this group: its source decision's, which is every
+    /// target's too — targets are same-group by construction.
+    pub group: Option<GroupId>,
     /// Signals touching this decision on either end.
     pub decision: Option<DecisionId>,
     pub status: Option<SignalStatus>,

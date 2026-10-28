@@ -1,8 +1,8 @@
-# Converge
+# Staw
 
 Decision memory for teams and their agents.
 
-Converge captures the decisions a team makes — ADR-style records with
+Staw captures the decisions a team makes — ADR-style records with
 context, alternatives, and consequences — where the work happens, and keeps
 them as a living graph: decisions supersede earlier ones, cross-reference
 each other, and stay comparable long after the conversation that produced
@@ -14,7 +14,7 @@ and one REST API under them both.
 
 ```sh
 docker compose up --build
-docker compose exec converge converge-server token mint   # prints your bearer token
+docker compose exec staw staw-server token mint   # prints your bearer token
 ```
 
 (`token list` / `token revoke <id>` manage tokens from the host; `--user
@@ -30,7 +30,7 @@ your terminal (never to logs, where collectors would keep it). Then:
 - **MCP** (Claude Code shown; any MCP client works):
 
   ```sh
-  claude mcp add --transport http converge http://127.0.0.1:8080/mcp \
+  claude mcp add --transport http staw http://127.0.0.1:8080/mcp \
     --header "Authorization: Bearer cvg_..."
   ```
 
@@ -47,22 +47,22 @@ your terminal (never to logs, where collectors would keep it). Then:
   evidence ingest (`session_ensure`, `message_add`), and project mapping
   (`project_match`/`project_bind`/`project_dismiss`).
 
-- **Claude Code integration** (`converge-cli`): one command wires it all —
+- **Claude Code integration** (`staw-cli`): one command wires it all —
 
   ```sh
-  curl -fsSL https://raw.githubusercontent.com/converge-lab/converge/main/install.sh | sh
-  converge init    # credentials → hooks → MCP registration, once per machine
+  curl -fsSL https://raw.githubusercontent.com/staw-ai/staw/main/install.sh | sh
+  staw init    # credentials → hooks → MCP registration, once per machine
   ```
 
-  (The binary lands in `~/.converge/bin` with a `~/.local/bin` symlink;
+  (The binary lands in `~/.staw/bin` with a `~/.local/bin` symlink;
   releases are checksum-manifested and minisign-signed. Building from
-  source works too: `cargo install --path crates/converge-cli`.)
+  source works too: `cargo install --path crates/staw-cli`.)
 
   After that, opening any repository in Claude Code suggests a project
   binding in-session (the human answers in conversation; hooks write the
-  committed `.converge` marker), session transcripts sync into the
+  committed `.staw` marker), session transcripts sync into the
   evidence layer automatically, and every session starts with the
-  project's decision index injected. `converge project init` is the
+  project's decision index injected. `staw project init` is the
   manual fallback for binding from the terminal.
 
 - **REST**: `GET`/`POST` `/api/v1/{groups,projects,decisions,users,agents}`
@@ -76,7 +76,7 @@ your terminal (never to logs, where collectors would keep it). Then:
 > endpoints, and the static assets requires a credential — a bearer token
 > (agents, CLI) or the session cookie (browser). The compose file
 > publishes the port on the host loopback only — a sane default until you
-> put TLS in front. Set `CONVERGE_AUTH__SESSION_SECRET` to keep browser
+> put TLS in front. Set `STAW_AUTH__SESSION_SECRET` to keep browser
 > sessions across restarts.
 
 ### Identity-provider sign-in (optional)
@@ -92,7 +92,7 @@ provider = "github"        # or any name for a generic issuer ("keycloak", …)
 # issuer = "https://sso.example.com/realms/main"   # generic providers only
 client_id = "…"
 client_secret = "…"
-public_url = "https://converge.example.com"  # register {public_url}/auth/callback
+public_url = "https://staw.example.com"  # register {public_url}/auth/callback
 allowed = ["singulared"]   # optional handle allowlist; absent = the IdP decides
 ```
 
@@ -125,27 +125,27 @@ cargo xtask db              # just the dev Postgres: boots, migrates, prints DAT
 cargo xtask prepare         # regenerate .sqlx/ after changing queries or schema
 cargo xtask prepare --check # verify .sqlx/ is current (CI)
 
-# the web app, live-reloading against a locally running converge-server:
+# the web app, live-reloading against a locally running staw-server:
 rustup target add wasm32-unknown-unknown && cargo install trunk
-cd crates/converge-web && trunk serve --features api   # http://127.0.0.1:8081
+cd crates/staw-web && trunk serve --features api   # http://127.0.0.1:8081
 ```
 
-Configuration is layered per key — `/etc/converge/config.toml` ←
-`$XDG_CONFIG_HOME/converge/config.toml` ← `./converge.toml` ←
-`$CONVERGE_CONFIG` ← `CONVERGE_*` env (nested keys use `__`, e.g.
-`CONVERGE_LOG__FILTER`, `CONVERGE_WEB__ASSETS`). The only required setting
+Configuration is layered per key — `/etc/staw/config.toml` ←
+`$XDG_CONFIG_HOME/staw/config.toml` ← `./staw.toml` ←
+`$STAW_CONFIG` ← `STAW_*` env (nested keys use `__`, e.g.
+`STAW_LOG__FILTER`, `STAW_WEB__ASSETS`). The only required setting
 is `database_url`.
 
 ## Workspace
 
 | Crate | What it is |
 |---|---|
-| `converge-storage` | The domain model (groups → projects → decisions, the decision graph, users/agents) and the per-resource `Storage` traits the product is written against. |
-| `converge-storage-postgres` | The PostgreSQL backend — compile-time-checked queries over the schema in `migrations/`. |
-| `converge-server` | The product binary: REST under `/api/v1`, the stateless `/mcp` endpoint, and same-origin serving of the web bundle. |
-| `converge-client` | Typed HTTP client over the same domain types — compiles natively (the future CLI) and to wasm (the web UI). |
-| `converge-ui` | The component library (Leptos): design tokens, atoms, molecules. |
-| `converge-web` | The web app (Leptos CSR → wasm), composed from `converge-ui`, talking to the API through `converge-client`. |
+| `staw-storage` | The domain model (groups → projects → decisions, the decision graph, users/agents) and the per-resource `Storage` traits the product is written against. |
+| `staw-storage-postgres` | The PostgreSQL backend — compile-time-checked queries over the schema in `migrations/`. |
+| `staw-server` | The product binary: REST under `/api/v1`, the stateless `/mcp` endpoint, and same-origin serving of the web bundle. |
+| `staw-client` | Typed HTTP client over the same domain types — compiles natively (the future CLI) and to wasm (the web UI). |
+| `staw-ui` | The component library (Leptos): design tokens, atoms, molecules. |
+| `staw-web` | The web app (Leptos CSR → wasm), composed from `staw-ui`, talking to the API through `staw-client`. |
 | `xtask` | Dev tooling (`cargo xtask …`): a throwaway dev Postgres and sqlx offline-cache generation. |
 
 ## Design, in one paragraph
@@ -163,4 +163,4 @@ natural key (`ensure`), never scan-then-create.
 ## License
 
 [MIT](LICENSE). Vendored fonts (Geist, Geist Mono) are under the SIL Open
-Font License — see `crates/converge-ui/style/fonts/OFL.txt`.
+Font License — see `crates/staw-ui/style/fonts/OFL.txt`.

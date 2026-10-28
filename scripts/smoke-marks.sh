@@ -9,8 +9,8 @@
 set -eu
 BASE=${1:?server url}; TOKEN=${2:?bearer token}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cargo build -q -p converge-cli --manifest-path "$ROOT/Cargo.toml"
-CONVERGE="$ROOT/target/debug/converge"
+cargo build -q -p staw-cli --manifest-path "$ROOT/Cargo.toml"
+STAW="$ROOT/target/debug/staw"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
 RUN="$(date +%s)-$$"   # sessions are keyed by external id, globally
 
@@ -22,12 +22,12 @@ PID=$(api POST /projects "{\"group_id\":\"$GID\",\"name\":\"marks-p\"}" | id)
 decision() { api POST /decisions "{\"project_id\":\"$PID\",\"status\":\"accepted\",\"title\":\"$1\",\"summary\":\"s\",\"context\":null,\"consequences\":null}" > /dev/null; }
 decision "first decision"; decision "second decision"
 
-mkdir -p "$S/home/.config/converge" "$S/state" "$S/repo"
-printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/converge/cli.toml"
-printf 'project_id = "%s"\n' "$PID" > "$S/repo/.converge"
+mkdir -p "$S/home/.config/staw" "$S/state" "$S/repo"
+printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/staw/cli.toml"
+printf 'project_id = "%s"\n' "$PID" > "$S/repo/.staw"
 export HOME="$S/home" XDG_CONFIG_HOME="$S/home/.config" XDG_STATE_HOME="$S/state"
 
-start() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionStart"}' "$S/repo" "$1" | "$CONVERGE" hook inject --harness claude; }
+start() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionStart"}' "$S/repo" "$1" | "$STAW" hook inject --harness claude; }
 # The titles the block marked new, so a step can say what it expected.
 show() { python3 -c "
 import json,sys
@@ -53,7 +53,7 @@ i=1; while [ "$i" -le 120 ]; do
 EOF
   i=$((i + 1))
 done
-sync_now() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$CONVERGE" hook sync --harness claude; }
+sync_now() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$STAW" hook sync --harness claude; }
 recorded() { api GET "/sessions?project=$PID" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d

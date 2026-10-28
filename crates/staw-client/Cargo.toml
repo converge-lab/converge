@@ -1,0 +1,35 @@
+[package]
+name = "staw-client"
+description = "Typed HTTP client for the Staw API — native and WebAssembly."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+staw-storage.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Leptos's server_fn uses wasm-streams 0.5. reqwest 0.12's stream
+# uses 0.4; linking both exports the same JS symbols twice. Align the
+# browser transport while keeping native clients on their existing version.
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream"] }
+# ulid/uuid (via staw-storage) pull getrandom, which refuses
+# wasm32-unknown-unknown unless the browser backend is opted into.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+axum.workspace = true
+staw-expert.workspace = true
+staw-server.workspace = true
+staw-storage-postgres.workspace = true
+testcontainers-modules.workspace = true
+tokio.workspace = true
+ulid.workspace = true

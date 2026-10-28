@@ -1,45 +1,45 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/converge-cli",
-    "crates/converge-client",
-    "crates/converge-expert",
-    "crates/converge-e2e",
-    "crates/converge-server",
-    "crates/converge-storage",
-    "crates/converge-storage-postgres",
-    "crates/converge-ui",
-    "crates/converge-web",
+    "crates/staw-cli",
+    "crates/staw-client",
+    "crates/staw-expert",
+    "crates/staw-e2e",
+    "crates/staw-server",
+    "crates/staw-storage",
+    "crates/staw-storage-postgres",
+    "crates/staw-ui",
+    "crates/staw-web",
     "crates/xtask",
 ]
 # xtask (dev tooling: testcontainers dev DB + sqlx offline-cache generation) is
 # a member so `cargo xtask` / `-p xtask` resolve it, but it's out of the default
 # set so a bare `cargo check`/`build`/`test` never compiles its Docker deps.
-# The wasm crates (converge-ui, converge-web) are likewise out of the default
+# The wasm crates (staw-ui, staw-web) are likewise out of the default
 # set — build them with `-p` / trunk; CI checks them on wasm32.
 default-members = [
-    "crates/converge-cli",
-    "crates/converge-client",
-    "crates/converge-expert",
-    "crates/converge-server",
-    "crates/converge-storage",
-    "crates/converge-storage-postgres",
+    "crates/staw-cli",
+    "crates/staw-client",
+    "crates/staw-expert",
+    "crates/staw-server",
+    "crates/staw-storage",
+    "crates/staw-storage-postgres",
 ]
 
 [workspace.package]
-version = "0.1.35"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
-repository = "https://github.com/converge-lab/converge"
+repository = "https://github.com/staw-ai/staw"
 
 [workspace.dependencies]
-converge-expert = { path = "crates/converge-expert" }
-converge-storage = { path = "crates/converge-storage" }
-converge-storage-postgres = { path = "crates/converge-storage-postgres" }
-converge-server = { path = "crates/converge-server" }
-converge-ui = { path = "crates/converge-ui" }
-converge-client = { path = "crates/converge-client" }
+staw-expert = { path = "crates/staw-expert" }
+staw-storage = { path = "crates/staw-storage" }
+staw-storage-postgres = { path = "crates/staw-storage-postgres" }
+staw-server = { path = "crates/staw-server" }
+staw-ui = { path = "crates/staw-ui" }
+staw-client = { path = "crates/staw-client" }
 
 # Web UI (Leptos CSR → wasm)
 leptos = { version = "0.8", features = ["csr"] }
@@ -62,11 +62,11 @@ reqwest = { version = "0.13", default-features = false, features = [
     "stream",
 ] }
 url = "2"
-# Interactive prompts for `converge init` (TTY only — piped stdin gets
+# Interactive prompts for `staw init` (TTY only — piped stdin gets
 # the plain fallback, which scripts and the e2e harness rely on).
 dialoguer = "0.11"
 # Multi-provider model client (Anthropic / OpenAI-compat / ollama, one API):
-# the wire layer under converge-expert — the expert layer keeps its own
+# the wire layer under staw-expert — the expert layer keeps its own
 # routing and policy, genai keeps the per-provider protocol churn.
 genai = "0.6"
 # Stream combinators for the expert's token streams (genai already
@@ -135,7 +135,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-# preserve_order: converge edits config files other tools own (opencode's
+# preserve_order: staw edits config files other tools own (opencode's
 # opencode.json). Alphabetising someone's hand-maintained config on the way
 # through is not an acceptable side effect of registering an MCP server.
 serde_json = { version = "1", features = ["preserve_order"] }

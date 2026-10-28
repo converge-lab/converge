@@ -1,4 +1,4 @@
-//! Dev tooling for the Converge workspace.
+//! Dev tooling for the Staw workspace.
 //!
 //! Owns the local Postgres lifecycle via testcontainers, so there's no
 //! committed compose file and no standing database to manage. Run via the
@@ -20,7 +20,7 @@ use testcontainers_modules::testcontainers::{ContainerAsync, ImageExt};
 const PG_TAG: &str = "16-alpine";
 
 #[derive(Parser)]
-#[command(about = "Converge dev tooling", long_about = None)]
+#[command(about = "Staw dev tooling", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -75,13 +75,13 @@ async fn dev(web: bool) -> Result<()> {
     let assets = if web {
         let status = Command::new("trunk")
             .args(["build", "--features", "api"])
-            .current_dir(workspace_root().join("crates/converge-web"))
+            .current_dir(workspace_root().join("crates/staw-web"))
             .status()
             .context("running `trunk build` (is trunk installed?)")?;
         if !status.success() {
             bail!("`trunk build` failed with {status}");
         }
-        Some(workspace_root().join("crates/converge-web/dist"))
+        Some(workspace_root().join("crates/staw-web/dist"))
     } else {
         None
     };
@@ -94,19 +94,19 @@ async fn dev(web: bool) -> Result<()> {
             "run",
             "-q",
             "-p",
-            "converge-server",
+            "staw-server",
             "--",
             "token",
             "mint",
             "dev",
         ])
-        .env("CONVERGE_DATABASE_URL", &url)
+        .env("STAW_DATABASE_URL", &url)
         .current_dir(workspace_root())
         .output()
         .context("minting the dev token")?;
     if !minted.status.success() {
         bail!(
-            "`converge-server token mint` failed:\n{}",
+            "`staw-server token mint` failed:\n{}",
             String::from_utf8_lossy(&minted.stderr)
         );
     }
@@ -117,7 +117,7 @@ async fn dev(web: bool) -> Result<()> {
     println!(
         "web:   http://127.0.0.1:8080/ ({})",
         match &assets {
-            Some(_) => "serving crates/converge-web/dist",
+            Some(_) => "serving crates/staw-web/dist",
             None => "no assets; use `--web`, or `trunk serve` for live reload",
         }
     );
@@ -134,21 +134,21 @@ async fn dev(web: bool) -> Result<()> {
     });
     let mut server = tokio::process::Command::new("cargo");
     server
-        .args(["run", "-q", "-p", "converge-server"])
-        .env("CONVERGE_DATABASE_URL", &url)
-        .env("CONVERGE_AUTH__SESSION_SECRET", "converge-dev")
+        .args(["run", "-q", "-p", "staw-server"])
+        .env("STAW_DATABASE_URL", &url)
+        .env("STAW_AUTH__SESSION_SECRET", "staw-dev")
         .current_dir(workspace_root());
     if let Some(dist) = &assets {
-        server.env("CONVERGE_WEB__ASSETS", dist);
+        server.env("STAW_WEB__ASSETS", dist);
     }
     let status = server
         .spawn()
-        .context("starting converge-server")?
+        .context("starting staw-server")?
         .wait()
         .await?;
     drop(node); // remove the container
     if !status.success() {
-        bail!("converge-server exited with {status}");
+        bail!("staw-server exited with {status}");
     }
     Ok(())
 }
@@ -195,7 +195,7 @@ async fn start_pg() -> Result<(ContainerAsync<Postgres>, String)> {
     let pool = PgPool::connect(&url)
         .await
         .context("connecting to the dev Postgres")?;
-    sqlx::migrate!("../converge-storage-postgres/migrations")
+    sqlx::migrate!("../staw-storage-postgres/migrations")
         .run(&pool)
         .await
         .context("applying migrations")?;

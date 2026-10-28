@@ -1,5 +1,5 @@
 #!/bin/sh
-# Smoke of `converge hook poll` against a running server: a session
+# Smoke of `staw hook poll` against a running server: a session
 # hears the signals that touch the project its working tree is bound
 # to, and nothing else. A claim consumes, so a signal handed to the
 # wrong session is one the right session never hears — this is the
@@ -10,8 +10,8 @@
 set -eu
 BASE=${1:?server url}; TOKEN=${2:?bearer token}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cargo build -q -p converge-cli --manifest-path "$ROOT/Cargo.toml"
-CONVERGE="$ROOT/target/debug/converge"
+cargo build -q -p staw-cli --manifest-path "$ROOT/Cargo.toml"
+STAW="$ROOT/target/debug/staw"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
 RUN="$(date +%s)-$$"   # sessions are keyed by external id, globally
 
@@ -30,19 +30,19 @@ D_THERE=$(decision "$THERE" "theirs")
 D_OTHER=$(decision "$THERE" "also theirs")
 
 # A working tree bound to `here`, and its own state directory.
-mkdir -p "$S/home/.config/converge" "$S/state" "$S/here"
-printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/converge/cli.toml"
-printf 'project_id = "%s"\n' "$HERE" > "$S/here/.converge"
+mkdir -p "$S/home/.config/staw" "$S/state" "$S/here"
+printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/staw/cli.toml"
+printf 'project_id = "%s"\n' "$HERE" > "$S/here/.staw"
 export HOME="$S/home" XDG_CONFIG_HOME="$S/home/.config" XDG_STATE_HOME="$S/state"
 
 SID="poll-$RUN"
 want() { if [ "$2" = "$3" ]; then echo "  ok: $1 = $3"; else echo "  FAIL: $1 — wanted [$2], got [$3]"; exit 1; fi; }
-poll() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"UserPromptSubmit"}' "$S/here" "$SID" | "$CONVERGE" hook poll --harness claude; }
+poll() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"UserPromptSubmit"}' "$S/here" "$SID" | "$STAW" hook poll --harness claude; }
 # The poll runs at most once every 20 s; the smoke moves its clock back.
 # It must fail loudly: a silent miss would rate-limit every later poll
 # and the run would pass with nothing delivered.
 lift() { python3 -c "
-import json; p='$XDG_STATE_HOME/converge/poll.json'
+import json; p='$XDG_STATE_HOME/staw/poll.json'
 d=json.load(open(p)); d['$SID']['at']=0; json.dump(d,open(p,'w'))"; }
 # Just the titles, so the step can say what it expected.
 show() { python3 -c "

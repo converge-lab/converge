@@ -37,10 +37,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        run: cargo test --workspace --all-features --exclude converge-e2e
+        run: cargo test --workspace --all-features --exclude staw-e2e
 
   e2e:
-    # Real Converge and agent CLIs run only inside disposable containers.
+    # Real Staw and agent CLIs run only inside disposable containers.
     # Every suite builds its own images — a release build of the server and
     # sqlx-cli from source among them — so the budget is generous.
     needs: check
@@ -53,7 +53,7 @@ jobs:
       - name: End-to-end suites
         # One test at a time: each stands up its own container set, and a
         # runner cannot carry several of them at once.
-        run: cargo test -p converge-e2e --all-features -- --test-threads=1
+        run: cargo test -p staw-e2e --all-features -- --test-threads=1
 
   sqlx:
     # A stale query cache compiles fine offline but lies about the schema —
@@ -84,15 +84,15 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Check wasm crates
-        run: cargo check -p converge-client -p converge-ui -p converge-web --all-features --target wasm32-unknown-unknown
+        run: cargo check -p staw-client -p staw-ui -p staw-web --all-features --target wasm32-unknown-unknown
       - name: Clippy wasm crates
-        run: cargo clippy -p converge-ui -p converge-web --all-features --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy -p staw-ui -p staw-web --all-features --target wasm32-unknown-unknown -- -D warnings
       - name: Install Trunk
         uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
       - name: Build browser bundle (including wasm-bindgen)
-        working-directory: crates/converge-web
+        working-directory: crates/staw-web
         run: trunk build --features api --locked
       - uses: actions/setup-node@v4
         with:

@@ -1,0 +1,30 @@
+[package]
+name = "staw-web"
+description = "The Staw web UI (Leptos, client-side WebAssembly)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+leptos.workspace = true
+reactive_stores.workspace = true
+staw-ui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+staw-client = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
+
+[features]
+# Load the dataset from the live API (same-origin; `trunk serve` proxies it
+# to the local staw-server) instead of the embedded fixture seed.
+api = ["dep:staw-client", "dep:futures", "dep:time"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `when()` reads the current time from the JS clock.
+js-sys = "0.3"
+# Drawer focus trap: walking focusable elements and moving focus by hand isn't
+# exposed through leptos's own API, so this reaches the DOM directly.
+web-sys = { version = "0.3", features = ["Element", "HtmlElement", "Node", "NodeList", "UrlSearchParams", "Navigator", "Clipboard", "Document", "HtmlDocument", "HtmlTextAreaElement"] }
+wasm-bindgen = "0.2"

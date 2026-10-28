@@ -1,0 +1,30 @@
+[package]
+name = "staw-cli"
+description = "The Staw client-side integration for coding agents: project binding, session-start context, transcript sync."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# The user-facing binary is `staw` (`staw init`, `staw inject`,
+# `staw sync`); the crate keeps the -cli suffix.
+[[bin]]
+name = "staw"
+path = "src/main.rs"
+
+[dependencies]
+staw-client.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+# Self-update: download (rustls reqwest), verify the signed manifest
+# (minisign-verify is pure Rust and dependency-free — the point), hash.
+reqwest.workspace = true
+sha2.workspace = true
+minisign-verify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+time.workspace = true
+tokio.workspace = true
+dialoguer.workspace = true

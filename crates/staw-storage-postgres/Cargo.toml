@@ -1,0 +1,21 @@
+[package]
+name = "staw-storage-postgres"
+description = "PostgreSQL implementation of the Staw storage trait."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+staw-storage.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+ulid.workspace = true
+uuid.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+testcontainers-modules.workspace = true
+tracing-subscriber.workspace = true

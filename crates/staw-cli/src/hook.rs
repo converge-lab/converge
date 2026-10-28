@@ -1,0 +1,1007 @@
+//! The hook entrypoints — the harness invokes these, directly (a hook
+//! command) or through a shim (opencode's plugin); they never prompt and
+//! they never fail the session (best-effort output, always exit 0 from
+//! `run`).
+//!
+//! Everything tool-specific — which fields arrive, what the answer must
+//! look like, where the transcript lives — belongs to [`crate::harness`].
+//! What is left here is the part that is the same everywhere.
+//!
+//! Ported from the validated POC (`poc-mapping`): the inject rules
+//! wording is contract-like — agents act on it — so it changes carefully.
+//!
+//! - `inject` (session start): read the three-state marker, emit the
+//!   context block — bound (binding + decision index), disabled
+//!   (stay-quiet rules), unbound (the mapping rules), or unreadable.
+//! - `ctx` (pre-tool, matched on staw tools): merge `cwd` + git
+//!   remote into the tool input, so the server ranks candidates without
+//!   the LLM gathering anything. Before a `decision_add` it goes further:
+//!   the conversation goes up as evidence and the citations the model
+//!   made — message turns and bare `path:lines` code — are completed
+//!   here, where the working tree and its repository can be read.
+//! - `mark` (post-tool, matched on the binding tools): perform the
+//!   **local effect** — parse the tool response and write the marker at
+//!   the git root. The LLM only ever chose; the write is deterministic.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::Result;
+use serde_json::{Value, json};
+use staw_client::{Claimed, Context, DecisionId, ProjectId, SignalId};
+
+use crate::config::Config;
+use crate::harness::{Effect, Harness, Kind, Payload, Response};
+use crate::marker::{self, State};
+use crate::transcript::Turn;
+
+/// Whatever the harness put on stdin, before it means anything.
+fn raw() -> Value {
+    let mut text = String::new();
+    if std::io::stdin().read_to_string(&mut text).is_err() {
+        return Value::Null;
+    }
+    serde_json::from_str(&text).unwrap_or(Value::Null)
+}
+
+/// Answer in the harness's own dialect — or stay quiet, which is not
+/// the same as answering `null`.
+fn respond(harness: &dyn Harness, response: Response) {
+    if let Some(value) = harness.emit(response) {
+        println!("{value}");
+    }
+}
+
+// ─── session start ───────────────────────────────────────────────────────────
+
+pub async fn inject(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+
+    // Only a bound project's index is worth carrying in every request;
+    // the other states are instructions, said once.
+    let mut sticky = false;
+    let mut degraded = false;
+    let mut state = "unbound";
+    let (context, system) = match marker::find(&payload.cwd) {
+        // The visible line comes from bound() too: it must reflect what
+        // the fetch actually found, not just that a marker exists.
+        Ok(State::Bound { project, .. }) => {
+            let (context, system, fallback) =
+                bound(project, payload.session.as_deref(), kind.flag()).await;
+            sticky = true;
+            degraded = fallback;
+            state = "bound";
+            (context, system)
+        }
+        Ok(State::Disabled { .. }) => {
+            // A standing rule, and short: worth carrying in every request.
+            sticky = true;
+            state = "disabled";
+            (
+                "## Staw — disabled for this repo\n\
+             Staw is off here (`.staw` has `disable = true`). Do NOT \
+             suggest mapping. To re-enable, remove that line from `.staw` \
+             (or delete the file)."
+                    .to_string(),
+                "Staw: disabled for this repo".to_string(),
+            )
+        }
+        Ok(State::Unbound) => (
+            unbound(harness.ask_tool()),
+            // The deterministic path leads: the human can always bind via
+            // the TTY picker even when the model skips the injected flow.
+            "Staw: repo unmapped — run `staw project init` to bind \
+             (or let the agent suggest candidates)"
+                .to_string(),
+        ),
+        Err(_) => {
+            state = "unreadable";
+            (
+                "## Staw — marker unreadable\n\
+             `.staw` exists but has neither `project_id` nor `disable`. \
+             Re-link: call `project_match`, then `project_bind` — or tell \
+             the user to run `staw project init --rebind`."
+                    .to_string(),
+                "Staw: marker unreadable — re-link".to_string(),
+            )
+        }
+    };
+
+    let system = match version_notice() {
+        Some(notice) => format!("{system} · {notice}"),
+        None => system,
+    };
+    // An install that predates a hook lacks it silently. This hook is
+    // the one every install has, so this is where to say so.
+    let missing = std::env::current_exe()
+        .ok()
+        .map(|exe| harness.missing(&exe.to_string_lossy()))
+        .unwrap_or_default();
+    let system = if missing.is_empty() {
+        system
+    } else {
+        format!(
+            "{system} · run `staw init --harness {}` to add the {} hook",
+            kind.flag(),
+            missing.join(" and ")
+        )
+    };
+    respond(
+        harness,
+        Response::Inject {
+            context,
+            system,
+            sticky,
+            degraded,
+            state,
+        },
+    );
+    Ok(())
+}
+
+/// The unbound rules — the POC's tested wording, tool names updated to
+/// the `resource_operation` palette. Step 3 names the harness's own
+/// ask-the-user tool; the Claude Code text is the validated original,
+/// the others say the same thing without a tool name they cannot call.
+fn unbound(ask: Option<&str>) -> String {
+    let (present, manual) = match ask {
+        Some("AskUserQuestion") => (
+            "present them via `AskUserQuestion`".to_string(),
+            "tell the user the built-in 'Type something' is MANUAL MAPPING \
+             — an existing id links, a new name creates"
+                .to_string(),
+        ),
+        Some(tool) => (
+            format!(
+                "present them to the user as a numbered choice and wait for the \
+                 answer (use your `{tool}` tool if you have it)"
+            ),
+            "also offer MANUAL MAPPING — an existing id links, a new name \
+             creates"
+                .to_string(),
+        ),
+        None => (
+            "present them to the user as a numbered choice and wait for the \
+             answer (use your ask-the-user tool if you have one)"
+                .to_string(),
+            "also offer MANUAL MAPPING — an existing id links, a new name \
+             creates"
+                .to_string(),
+        ),
+    };
+    format!(
+        "## Staw — this repo is UNMAPPED\n\
+There is no `.staw` marker, so project memory is unavailable until \
+this working tree is linked to a staw project.\n\n\
+**Do this now, proactively, without being asked:**\n\
+1. Call `project_match` (no arguments — a hook fills in the context).\n\
+2. If the response carries an outcome (`project_id` or `disable: \
+true`), the server already asked the user and a hook writes the marker \
+— you are done; do NOT render your own menu.\n\
+3. If it carries `candidates`: {present}. \
+Label every candidate `name (group)` — the same project name can \
+exist in several groups, and the group is what decides who sees the \
+memory. One option per candidate + a 'Disable Staw for this repo' \
+option; {manual}. Then `project_bind` with \
+the pick, or `project_dismiss` scope='repo' to disable.\n\
+4. When the user chooses to CREATE a project, you must also settle \
+WHERE: ask which group from the response's `groups` (label `name \
+(kind)`) — or offer a new group via `group_add` (ask shared vs \
+personal). Placing a project decides who can see it; never assume a \
+group, even when only one exists.\n\n\
+Do NOT write `.staw` yourself — the hooks do it. Start with step 1 \
+right away."
+    )
+}
+
+/// Index-fetch budget. Past it, degrade to the cached index (marked
+/// stale) or the unavailable line — a session start must never hang on
+/// a wedged server.
+const BUDGET: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Hook-triggered self-update: spawn `staw update` fully detached
+/// and return immediately — a hook must never wait on a download. At
+/// most one attempt per day (stamp file), only when the skew check says
+/// the server is ahead, and `[update] auto = false` opts out. The swap
+/// is safe under running sessions (old inode keeps serving them); the
+/// next session notices the version change and says so.
+fn maybe_self_update(auto: bool) {
+    if !auto {
+        return;
+    }
+    // One attempt per day, claimed atomically: hooks run concurrently
+    // (subagents, opencode's parallel requests), and two `staw
+    // update`s racing on the same staging path is how a machine ends up
+    // with no binary. `create_new` on a dated file lets exactly one
+    // process through; yesterday's file is swept on the way.
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / (24 * 3600))
+        .unwrap_or(0);
+    let Some(stamp) = cache_file(&format!("update-attempt-{day}")) else {
+        return;
+    };
+    let _ = stamp.parent().map(std::fs::create_dir_all);
+    let claimed = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stamp)
+        .is_ok();
+    if !claimed {
+        return;
+    }
+    if let Some(old) = cache_file(&format!("update-attempt-{}", day.saturating_sub(1))) {
+        let _ = std::fs::remove_file(old);
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    use std::process::Stdio;
+    let mut update = Command::new(exe);
+    update
+        .arg("update")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group: the update outlives the hook and the session.
+        update.process_group(0);
+    }
+    let _ = update.spawn();
+}
+
+/// One-time notice after a version change (auto or manual update): the
+/// previous inject's binary version is stamped; a mismatch means the
+/// binary changed underneath the user since last session start. The
+/// update's report of what it refreshed rides the same line, once — an
+/// automatic update has no other way to say what it did.
+fn version_notice() -> Option<String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let stamp = cache_file("last-version")?;
+    let previous = std::fs::read_to_string(&stamp).unwrap_or_default();
+    let _ = stamp.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(&stamp, current);
+    let changed = (!previous.is_empty() && previous != current)
+        .then(|| format!("self-updated v{previous} → v{current}"));
+    let refreshed = crate::setup::Report::take().and_then(|r| r.line());
+    match (changed, refreshed) {
+        (Some(changed), Some(refreshed)) => Some(format!("{changed}; {refreshed}")),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (None, None) => None,
+    }
+}
+
+fn cache_file(name: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".staw/cache").join(name))
+}
+
+/// Last-good index cache: the successful block, one file per project.
+/// Served only on fetch failure, and always labelled with its age —
+/// a stale index must read as stale, never as fresh.
+fn cache_path(project: ProjectId) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".staw/cache")
+            .join(format!("index-{project}.md")),
+    )
+}
+
+/// Returns `(context block, visible summary line)` — the summary states
+/// what was actually injected (or why nothing was), never a bare ✓.
+/// Bound for the skew check: it runs after the index budget is spent,
+/// and a wedged server must not turn a session start into a hang.
+const SKEW_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Also answers whether the block is a fallback (the third element): a
+/// cached or unavailable index, or a project the server disowns.
+/// Receipts budget: after the block is settled, one small request that
+/// says what this session was shown — and, first time, that it began.
+const RECEIPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+async fn bound(project: ProjectId, session: Option<&str>, harness: &str) -> (String, String, bool) {
+    // Loaded once: `Config::load` may run a `token_cmd` (a password
+    // manager call), and it used to run twice per session start.
+    let loaded = Config::load();
+    let auto_update = loaded.as_ref().map(|c| c.auto_update).unwrap_or(true);
+    let client = loaded.and_then(|config| config.client());
+    // The server renders the block for this user: what is new to them
+    // falls out of their receipts, so it is the same on every machine.
+    // An invisible project answers exactly like a missing one.
+    let fetch = async {
+        let client = match &client {
+            Ok(client) => client.clone(),
+            Err(e) => return Err(anyhow::anyhow!("{e}")),
+        };
+        Ok(client.project_context(project).await?)
+    };
+    // Budget timeout counts as a fetch failure — same degradation path.
+    let fetched: Result<Option<Context>> = match tokio::time::timeout(BUDGET, fetch).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!("index fetch exceeded {BUDGET:?}")),
+    };
+
+    // The daily-cached skew nudge rides the bound path (the one that
+    // already talks to the server); its failure is silence, not noise.
+    // Skipped when the index fetch failed — a wedged server would hang
+    // this call too, and the budget already spent its patience.
+    let fetch_ok = fetched.is_ok();
+    let mut listed: Vec<SignalId> = Vec::new();
+    let mut listed_decisions: Vec<DecisionId> = Vec::new();
+    let (block, system, degraded) = match fetched {
+        Ok(None) => {
+            // The server disowned the project; a lingering cached index
+            // would resurrect it on the next outage.
+            if let Some(path) = cache_path(project) {
+                let _ = std::fs::remove_file(path);
+            }
+            (
+                format!(
+                    "## Staw memory — project {project}\n\
+                 This working tree is bound to staw project `{project}`, \
+                 but the server doesn't know it for this account — the project \
+                 was deleted, or this token's user isn't a member of its \
+                 group. Ask a group owner to add you, or re-bind with \
+                 `project_match`."
+                ),
+                format!(
+                    "Staw: bound to {project}, but the server doesn't \
+                     know it — re-bind (`staw project init --rebind`)"
+                ),
+                // Authoritative, not a fallback: retrying will not change it.
+                false,
+            )
+        }
+        Ok(Some(Context {
+            context: block,
+            line: system,
+            decisions,
+            signals,
+        })) => {
+            listed = signals;
+            listed_decisions = decisions;
+            // Last-good cache: written on success, served on failure.
+            // A ghost binding (Ok(None)) clears it instead — the server
+            // authoritatively disowned the project.
+            if let Some(path) = cache_path(project) {
+                let _ = path.parent().map(std::fs::create_dir_all);
+                let _ = std::fs::write(&path, &block);
+            }
+            (block, system, false)
+        }
+        Err(_) => match cache_path(project).filter(|p| p.exists()) {
+            Some(path) => {
+                let age = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| format!("{}h", d.as_secs() / 3600))
+                    .unwrap_or_else(|| "unknown".into());
+                let cached = std::fs::read_to_string(&path).unwrap_or_default();
+                // The age stays out of the block: a harness that carries the
+                // block in every request would bust its prompt cache on a
+                // clock tick. It is in the visible line instead.
+                (
+                    format!(
+                        "{cached}\n\n**Stale index**: the server was unreachable \
+                         at session start; the index above is a local cache. \
+                         It may miss recent records — treat it as a map, and \
+                         `decision_list` to confirm when it matters."
+                    ),
+                    format!("Staw: server unreachable — cached index ({age} old)"),
+                    true,
+                )
+            }
+            None => (
+                format!(
+                    "## Staw memory — project {project}\n\
+                     This working tree is bound to staw project `{project}`, \
+                     but the server was unreachable when this session started — \
+                     the decision index is unavailable. Tools may still work; \
+                     `decision_list` fetches the index on demand."
+                ),
+                format!("Staw: bound to {project} (server unreachable — index unavailable)"),
+                true,
+            ),
+        },
+    };
+    // The skew check runs after the index and its cache are settled: a
+    // harness that kills a slow hook must not lose a fetched index to
+    // the version nudge that follows it.
+    let skew = match &client {
+        Ok(client) if fetch_ok => {
+            tokio::time::timeout(SKEW_BUDGET, crate::skew::check_cached(client))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+    // Skew present = the server is ahead of this binary: the one moment
+    // auto-update has something to do. Fire-and-forget, at most daily.
+    if skew.is_some() {
+        maybe_self_update(auto_update);
+    }
+    // What this session was shown, receipted — and the session's row
+    // created if this is its first sight, which is the line the poll
+    // draws: nothing recorded before it is handed out later. Only on a
+    // fresh index (a cached one says nothing about receipts), only with
+    // a session to key it, and its failure is silence.
+    if let (Ok(client), Some(session), true) = (&client, session, fetch_ok) {
+        let _ = tokio::time::timeout(
+            RECEIPT_BUDGET,
+            client.receive(session, Some(harness), &listed, &listed_decisions),
+        )
+        .await;
+    }
+    // The nudge is for the operator, not the model: it says to run
+    // commands, and it goes in the visible line only.
+    let system = match skew {
+        Some(warning) => format!("{system} · {warning}"),
+        None => system,
+    };
+    (block, system, degraded)
+}
+
+// ─── per prompt: signals raised since the last one ───────────────────────────
+
+/// The poll's network budget. It runs on every prompt the gates let
+/// through, so it is tighter than session start's: a slow server costs a
+/// prompt two seconds, then the backoff.
+const POLL_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+/// How many signals one prompt is handed; the rest wait for the next.
+const POLL_CLAIM: u32 = 3;
+
+/// The per-prompt seam: claim what this session has not been shown and
+/// put it in front of the model with the prompt. Every gate runs before
+/// the config is loaded — its token command may be a password manager —
+/// and every miss is silence, never an error: a hook here fails the
+/// user's prompt, not ours.
+pub async fn poll(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    // Only a bound project has signals to hear about — and only this
+    // project's: a claim consumes, so a signal handed to a session
+    // working somewhere else is one this session never hears.
+    let Ok(State::Bound { project, .. }) = marker::find(&payload.cwd) else {
+        return Ok(());
+    };
+    // The ledger is keyed by session: a harness that sends none cannot
+    // be polled for without repeating itself.
+    let Some(session) = payload.session.clone().filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    let now = crate::poll::now();
+    let mut stamps = crate::poll::Stamps::load();
+    let stamp = stamps.get(&session).cloned();
+    if !crate::poll::due(stamp.as_ref(), now) {
+        return Ok(());
+    }
+    let floor = crate::poll::floor(stamp.as_ref());
+
+    let client = Config::load().and_then(|config| config.client());
+    let claimed: Result<Claimed> = match client {
+        Ok(client) => {
+            match tokio::time::timeout(
+                POLL_BUDGET,
+                client.signal_claim(
+                    &session,
+                    Some(kind.flag()),
+                    Some(ProjectId::from(project.ulid())),
+                    POLL_CLAIM,
+                    floor,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|e| anyhow::anyhow!("{e}")),
+                Err(_) => Err(anyhow::anyhow!("poll exceeded {POLL_BUDGET:?}")),
+            }
+        }
+        Err(e) => Err(e),
+    };
+    // What the ledger handed out is consumed whether or not it is shown:
+    // a signal below the floor stays in the session-start listing and in
+    // `signal_list`, and is not offered to this session again.
+    let (shown, frame, failed) = match claimed {
+        Ok(claimed) => (
+            claimed.signals.len(),
+            claimed.context.zip(claimed.line),
+            false,
+        ),
+        Err(_) => (0, None, true),
+    };
+    stamps.record(&session, now, failed, shown);
+    let _ = stamps.save();
+    let Some((context, system)) = frame else {
+        return Ok(());
+    };
+    respond(
+        harness,
+        Response::Signals {
+            context,
+            system,
+            event: payload
+                .event
+                .unwrap_or_else(|| "UserPromptSubmit".to_string()),
+        },
+    );
+    Ok(())
+}
+
+// ─── session end: transcript → evidence ──────────────────────────────────────
+
+pub async fn sync(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    // Best effort throughout: a sync problem must never surface as a
+    // session failure. The quiet paths just return.
+    if let Err(e) = try_sync(kind).await {
+        respond(
+            harness,
+            Response::Notice {
+                system: format!("Staw: sync skipped — {e}"),
+            },
+        );
+    }
+    Ok(())
+}
+
+async fn try_sync(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    // Only bound repos sync; unbound and disabled stay quiet.
+    let State::Bound { .. } = marker::find(&payload.cwd)? else {
+        return Ok(());
+    };
+    let Some(at) = payload.transcript.as_ref() else {
+        return Ok(());
+    };
+    // The whole conversation, once, at the end: nothing during the
+    // session waits on it, and a project that keeps no archive answers
+    // for itself.
+    let crate::archive::Sent { sent: added, left } =
+        crate::archive::pass(kind, &payload.cwd, at, ARCHIVE_CAP).await?;
+    if added > 0 {
+        respond(
+            harness,
+            Response::Notice {
+                system: match left {
+                    0 => format!("Staw: recorded {added} message(s) ✓"),
+                    // One pass per session end, so what is over the cap
+                    // is not "yet to come" — say so rather than promise.
+                    n => format!(
+                        "Staw: recorded {added} message(s) ✓ \
+                         ({n} beyond this pass, not recorded)"
+                    ),
+                },
+            },
+        );
+    }
+    Ok(())
+}
+
+/// The exchange a decision cites, taken straight from the transcript
+/// and carried in the call itself.
+///
+/// Nothing is sent from here: the turns ride along with `decision_add`
+/// and the server records them, and because each one names its position
+/// the drain can send the same turns later without making a second
+/// copy. So the pre-tool hook touches no network, cannot time out, and
+/// cannot leave a decision with nothing to cite.
+struct Exchange {
+    /// The harness's own id for the conversation.
+    external: String,
+    title: String,
+    /// Each turn at its position in the conversation.
+    turns: Vec<(usize, Turn)>,
+}
+
+fn exchange(kind: Kind, payload: &Payload) -> Option<Exchange> {
+    let at = payload.transcript.as_ref()?;
+    let parsed = kind.harness().transcript(at).ok()?;
+    let external = parsed.session_id.clone()?;
+    let title = crate::transcript::title(
+        &parsed.turns,
+        &format!("{} session", kind.harness().label()),
+    );
+    let from = parsed.turns.len().saturating_sub(CITED_TURNS);
+    let turns: Vec<(usize, Turn)> = parsed
+        .turns
+        .into_iter()
+        .enumerate()
+        .skip(from)
+        .filter(|(_, t)| !t.body.trim().is_empty())
+        .collect();
+    (!turns.is_empty()).then_some(Exchange {
+        external,
+        title,
+        turns,
+    })
+}
+
+// ─── pre-tool: context collector ──────────────────────────────────────────
+
+/// How many of the turns since the last push a decision cites.
+const CITED_TURNS: usize = 10;
+/// Turns one session end will record. A conversation longer than this
+/// keeps the rest for the next end — the archive is nobody's critical
+/// path.
+const ARCHIVE_CAP: usize = 5_000;
+
+pub async fn ctx(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    // Someone else's tool call: say nothing rather than graft `cwd` onto
+    // arguments that never asked for it.
+    if !crate::harness::ours(payload.tool_name.as_deref()) {
+        respond(harness, Response::Silent);
+        return Ok(());
+    }
+
+    let mut merged = payload.tool_input.clone();
+    if !merged.is_object() {
+        merged = json!({});
+    }
+    merged["cwd"] = json!(payload.cwd.to_string_lossy());
+    if let Some(remote) = remote(&payload.cwd) {
+        merged["remote"] = json!(remote);
+    }
+
+    // A decision's evidence is filled in here, not narrated back by the
+    // model: the conversation so far goes up as messages and the turns
+    // since the last push are cited. A failure is said on the visible
+    // line and the call goes through unchanged — the server then asks
+    // for what is missing.
+    let mut notes: Vec<String> = Vec::new();
+    let tool = payload.tool_name.as_deref().unwrap_or_default();
+    // Recording cites the exchange; editing does not — an edit is made
+    // later, about a decision already grounded, and its reason goes in
+    // the amendment. Both cite code the same way.
+    let recording = tool.ends_with("decision_add");
+    let editing = tool.ends_with("decision_edit");
+    if recording || editing {
+        if recording && let Ok(State::Bound { .. }) = marker::find(&payload.cwd) {
+            match exchange(kind, &payload) {
+                Some(exchange) => cite(&mut merged, &exchange),
+                None => notes
+                    .push("no conversation to cite — this harness records none here".to_string()),
+            }
+        }
+        // Code citations are filled in here too: a bare `path:lines` is
+        // completed from the repository under the working tree — commit,
+        // excerpt, digest — and what the repository cannot vouch for is
+        // refused, and said, rather than dropped in silence.
+        let refusals = crate::evidence::complete(&mut merged, &payload.cwd);
+        let dropped = drop_incomplete_code(&mut merged);
+        notes.extend(refusals);
+        if dropped > 0 {
+            notes.push(format!(
+                "{dropped} code citation(s) dropped — cite committed anchors in full"
+            ));
+        }
+    }
+    let system = (!notes.is_empty()).then(|| format!("Staw: {}", notes.join("; ")));
+
+    respond(
+        harness,
+        Response::Ctx {
+            tool_input: merged,
+            system,
+        },
+    );
+    Ok(())
+}
+
+/// Put the exchange on the call: the conversation it belongs to and
+/// the turns themselves, each with its position, so the server records
+/// them once and anchors the decision to them. What the model cited
+/// itself stays exactly as it wrote it, beside these.
+fn cite(merged: &mut Value, exchange: &Exchange) {
+    merged["conversation"] = json!({ "external": exchange.external, "title": exchange.title });
+    merged["evidence_turns"] = Value::Array(
+        exchange
+            .turns
+            .iter()
+            .map(|(at, turn)| {
+                json!({
+                    "speaker": turn.speaker,
+                    "body": turn.body,
+                    "ordinal": i32::try_from(*at).unwrap_or(i32::MAX),
+                })
+            })
+            .collect(),
+    );
+}
+
+/// Keep only code anchors that carry every field; return how many went.
+/// [`crate::evidence`] completes a bare `path:lines` from HEAD; this is
+/// the last line behind it. An item that names no path or no lines — or
+/// names a commit and nothing else — is a half anchor the server would
+/// reject whole, so it goes, and the visible line says so.
+fn drop_incomplete_code(merged: &mut Value) -> usize {
+    // `get_mut`, not `merged[..]`: indexing a `Value` *inserts* a null,
+    // and an absent `code_evidence` must stay absent.
+    let Some(items) = merged
+        .get_mut("code_evidence")
+        .and_then(Value::as_array_mut)
+    else {
+        return 0;
+    };
+    let before = items.len();
+    items.retain(|a| {
+        ["commit", "path", "lines", "excerpt", "digest"]
+            .iter()
+            .all(|k| !a[k].is_null())
+    });
+    let dropped = before - items.len();
+    if items.is_empty() {
+        merged.as_object_mut().map(|o| o.remove("code_evidence"));
+    }
+    dropped
+}
+
+pub(crate) fn remote(cwd: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
+// ─── post-tool: the local effect ──────────────────────────────────────────
+
+pub fn mark(kind: Kind) -> Result<()> {
+    let harness = kind.harness();
+    let payload = harness.parse(&raw());
+    if !crate::harness::ours(payload.tool_name.as_deref()) {
+        respond(harness, Response::Silent);
+        return Ok(());
+    }
+    let root = marker::root(&payload.cwd);
+
+    let response = tool_json(&payload.tool_response);
+    let (effect, system) = match effect(&response, &root) {
+        Outcome::Bound(name) => (
+            Effect::Bound,
+            Some(format!(
+                "Staw: linked this repo to \"{name}\" (wrote .staw) ✓"
+            )),
+        ),
+        Outcome::Disabled => (
+            Effect::Disabled,
+            Some("Staw: disabled for this repo (wrote .staw)".to_string()),
+        ),
+        // Nothing on disk, but a harness with state of its own must know.
+        Outcome::DismissedSession => (Effect::DismissedSession, None),
+        // A skip or an unrecognized payload: no local effect, no noise.
+        Outcome::Nothing => (Effect::Nothing, None),
+        Outcome::Failed(err) => (
+            Effect::Failed,
+            Some(format!("Staw: could not write .staw — {err}")),
+        ),
+    };
+    respond(harness, Response::Marked { effect, system });
+    Ok(())
+}
+
+enum Outcome {
+    Bound(String),
+    Disabled,
+    DismissedSession,
+    Nothing,
+    Failed(String),
+}
+
+/// Interpret a binding tool's response: `{project_id, name}` → bound,
+/// `{disable: true}` → disabled, `{dismissed: "session"}` → nothing on
+/// disk but a real answer, anything else → no local effect.
+fn effect(response: &Value, root: &Path) -> Outcome {
+    if response["disable"].as_bool() == Some(true) {
+        return match marker::write_disabled(root) {
+            Ok(_) => Outcome::Disabled,
+            Err(e) => Outcome::Failed(e.to_string()),
+        };
+    }
+    if let Some(id) = response["project_id"].as_str() {
+        let Ok(project) = id.parse() else {
+            return Outcome::Failed(format!("`{id}` is not a project id"));
+        };
+        let name = response["name"].as_str().unwrap_or(id).to_string();
+        return match marker::write_bound(root, project, &name) {
+            Ok(_) => Outcome::Bound(name),
+            Err(e) => Outcome::Failed(e.to_string()),
+        };
+    }
+    if response["dismissed"].as_str() == Some("session") {
+        return Outcome::DismissedSession;
+    }
+    Outcome::Nothing
+}
+
+/// MCP tool responses arrive as a content array (`[{type: "text", text:
+/// "<json>"}]`), that array wrapped in a result envelope (`{content:
+/// [...], isError}` — what Claude Code hands PostToolUse today), a plain
+/// object, or a string — accept all four (the POC's leniency, extended).
+fn tool_json(response: &Value) -> Value {
+    let text = match response {
+        Value::Array(items) => items.first().and_then(|i| i["text"].as_str()),
+        Value::Object(_) if response["content"].is_array() => {
+            response["content"][0]["text"].as_str()
+        }
+        Value::Object(_) => {
+            if response["text"].is_string() {
+                response["text"].as_str()
+            } else {
+                return response.clone();
+            }
+        }
+        Value::String(s) => Some(s.as_str()),
+        _ => None,
+    };
+    text.and_then(|t| serde_json::from_str(t).ok())
+        .unwrap_or(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cvg-hook-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_exchange_rides_on_the_call_and_incomplete_code_is_dropped() {
+        let turns: Vec<(usize, Turn)> = (3..6)
+            .map(|at| {
+                (
+                    at,
+                    Turn {
+                        speaker: "user".into(),
+                        body: format!("turn {at}"),
+                        sent_at: None,
+                    },
+                )
+            })
+            .collect();
+        let mut call = json!({ "title": "t", "evidence": ["01J00000000000000000000009"] });
+        cite(
+            &mut call,
+            &Exchange {
+                external: "sess-1".into(),
+                title: "A session".into(),
+                turns,
+            },
+        );
+        // The conversation the turns belong to is named once…
+        assert_eq!(call["conversation"]["external"], "sess-1");
+        assert_eq!(call["conversation"]["title"], "A session");
+        // …and each turn carries its position, so the drain can send the
+        // same turn later without making a second copy of it.
+        let sent = call["evidence_turns"].as_array().unwrap();
+        assert_eq!(sent.len(), 3);
+        assert_eq!(sent[0]["ordinal"], 3);
+        assert_eq!(sent[0]["speaker"], "user");
+        assert_eq!(sent[2]["body"], "turn 5");
+        // What the model cited itself stays exactly as it wrote it.
+        assert_eq!(call["evidence"], json!(["01J00000000000000000000009"]));
+
+        let mut call = json!({ "code_evidence": [
+            { "path": "a.rs", "lines": [1, 2] },
+            { "commit": "c", "path": "b.rs", "lines": [1, 1], "excerpt": "x", "digest": "d" },
+        ]});
+        assert_eq!(drop_incomplete_code(&mut call), 1);
+        assert_eq!(call["code_evidence"].as_array().unwrap().len(), 1);
+        let mut call = json!({ "code_evidence": [{ "path": "a.rs" }] });
+        assert_eq!(drop_incomplete_code(&mut call), 1);
+        assert!(call.get("code_evidence").is_none());
+        // And an absent list stays absent — not a null in its place.
+        let mut call = json!({ "title": "t" });
+        assert_eq!(drop_incomplete_code(&mut call), 0);
+        assert!(call.get("code_evidence").is_none(), "{call}");
+    }
+
+    #[test]
+    fn a_bare_citation_and_a_full_anchor_arrive_as_two_anchors() {
+        use staw_client::CodeAnchor;
+        let repo = crate::evidence::test_repo(&[("src/lib.rs", "one\ntwo\n")]);
+        let whole = json!({
+            "commit": "0".repeat(40), "path": "other.rs", "lines": [3, 4],
+            "excerpt": "x\ny\n", "digest": CodeAnchor::digest_of("x\ny\n"),
+        });
+        let mut call = json!({ "code_evidence": [
+            { "path": "src/lib.rs", "lines": [1, 2] },
+            whole,
+        ]});
+        // The bare citation is filled from HEAD; the complete one is left
+        // alone. Nothing is refused, so nothing is said on the line.
+        assert!(crate::evidence::complete(&mut call, &repo).is_empty());
+        assert_eq!(drop_incomplete_code(&mut call), 0);
+        let kept = call["code_evidence"].as_array().unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0]["path"], "src/lib.rs");
+        assert_eq!(kept[0]["lines"], json!([1, 2]));
+        assert_eq!(kept[0]["excerpt"], "one\ntwo\n");
+        assert_eq!(kept[0]["digest"], CodeAnchor::digest_of("one\ntwo\n"));
+        assert_eq!(kept[0]["commit"].as_str().unwrap().len(), 40);
+        assert_eq!(kept[1]["path"], "other.rs");
+        assert_eq!(kept[1]["commit"], "0".repeat(40));
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn effects_from_tool_payload_shapes() {
+        let root = temp();
+        let id = ProjectId::new();
+
+        // MCP content-array shape → bound.
+        let response = tool_json(&json!([
+            { "type": "text", "text": format!("{{\"project_id\":\"{id}\",\"name\":\"gw\"}}") }
+        ]));
+        assert!(matches!(effect(&response, &root), Outcome::Bound(n) if n == "gw"));
+        assert!(matches!(
+            marker::find(&root).unwrap(),
+            State::Bound { project, .. } if project == id
+        ));
+
+        // The result envelope Claude Code hands PostToolUse → same.
+        let response = tool_json(&json!({
+            "content": [
+                { "type": "text", "text": format!("{{\"project_id\":\"{id}\",\"name\":\"gw\"}}") }
+            ],
+            "isError": false,
+        }));
+        assert!(matches!(effect(&response, &root), Outcome::Bound(n) if n == "gw"));
+
+        // Dismiss repo → disabled (overwrites).
+        let response = tool_json(&json!({ "dismissed": "repo", "disable": true }));
+        assert!(matches!(effect(&response, &root), Outcome::Disabled));
+        assert!(matches!(
+            marker::find(&root).unwrap(),
+            State::Disabled { .. }
+        ));
+
+        // A session-scope dismiss is reported as such; skips are nothing.
+        assert!(matches!(
+            effect(&json!({ "dismissed": "session", "disable": false }), &root),
+            Outcome::DismissedSession
+        ));
+        for benign in [
+            json!({ "skipped": true }),
+            json!({ "elicitation": false }),
+            Value::Null,
+        ] {
+            assert!(matches!(effect(&benign, &root), Outcome::Nothing));
+        }
+
+        // Garbage id fails loudly, writes nothing over the disabled state.
+        let response = json!({ "project_id": "nonsense" });
+        assert!(matches!(effect(&response, &root), Outcome::Failed(_)));
+        assert!(matches!(
+            marker::find(&root).unwrap(),
+            State::Disabled { .. }
+        ));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}

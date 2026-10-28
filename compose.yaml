@@ -1,6 +1,6 @@
 # Quickstart:
 #   docker compose up --build
-#   docker compose exec converge converge-server token mint   # your bearer token
+#   docker compose exec staw staw-server token mint   # your bearer token
 # then open http://127.0.0.1:8080 and/or connect an MCP client to
 # http://127.0.0.1:8080/mcp with `Authorization: Bearer <token>`.
 #
@@ -11,24 +11,24 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: converge
-      POSTGRES_PASSWORD: converge
-      POSTGRES_DB: converge
+      POSTGRES_USER: staw
+      POSTGRES_PASSWORD: staw
+      POSTGRES_DB: staw
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U converge"]
+      test: ["CMD-SHELL", "pg_isready -U staw"]
       interval: 2s
       timeout: 2s
       retries: 15
 
-  converge:
+  staw:
     build: .
     environment:
-      CONVERGE_DATABASE_URL: postgres://converge:converge@postgres/converge
+      STAW_DATABASE_URL: postgres://staw:staw@postgres/staw
       # The identity /users/me resolves to (and MCP authorship records):
-      CONVERGE_USER__HANDLE: admin
-      CONVERGE_USER__NAME: Admin
+      STAW_USER__HANDLE: admin
+      STAW_USER__NAME: Admin
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

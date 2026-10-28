@@ -9,9 +9,9 @@ git tag v0.1.0
 git push --tags
 ```
 
-The `Release` workflow builds the `converge` CLI for every supported
+The `Release` workflow builds the `staw` CLI for every supported
 target, writes a `SHA256SUMS` manifest, signs it with minisign, and
-publishes a GitHub Release. `install.sh` and `converge update` consume
+publishes a GitHub Release. `install.sh` and `staw update` consume
 that layout.
 
 ## One-time: the signing key
@@ -35,8 +35,8 @@ rsign generate --unencrypted -p minisign.pub -s minisign.key
 - Commit `minisign.pub`, then bake its **key line** (the second line of
   the file) into two places, replacing `__MINISIGN_PUBKEY__`:
   - `install.sh` — bootstrap verification, and
-  - `crates/converge-cli/src/update.rs` — the embedded key `converge
-    update` verifies against. Until that constant is real, `converge
+  - `crates/staw-cli/src/update.rs` — the embedded key `staw
+    update` verifies against. Until that constant is real, `staw
     update` **refuses to run** rather than update unverified.
 
 Rotation: generate the new pair, ship one release signed by the **old**

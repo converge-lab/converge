@@ -55,21 +55,34 @@ pub fn merge(path: &Path, wanted: &[Wanted]) -> Result<Vec<String>> {
         let list = entries.as_array_mut().expect("just ensured");
 
         // Present already? Update the command in place (binary may have
-        // moved); otherwise append a fresh entry.
+        // moved) and its group's matcher (the tool names may have, as
+        // `mcp__converge__` became `mcp__staw__`); otherwise append a
+        // fresh entry.
         let mut found = false;
         for group in list.iter_mut() {
             let Some(hooks) = group["hooks"].as_array_mut() else {
                 continue;
             };
+            let mut ours = false;
             for hook in hooks.iter_mut() {
                 let is_ours = hook["command"].as_str().is_some_and(|c| c.ends_with(tail));
                 if is_ours {
-                    found = true;
+                    ours = true;
                     if hook["command"].as_str() != Some(want.command.as_str()) {
                         hook["command"] = json!(want.command);
                         changed.push(format!("{} (path updated)", want.event));
                     }
                 }
+            }
+            if !ours {
+                continue;
+            }
+            found = true;
+            if let Some(matcher) = want.matcher
+                && group["matcher"].as_str() != Some(matcher)
+            {
+                group["matcher"] = json!(matcher);
+                changed.push(format!("{} (matcher updated)", want.event));
             }
         }
         if !found {
@@ -231,6 +244,41 @@ mod tests {
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 3);
         assert!(
             merge(&file, &wanted("/opt/staw", " --harness codex"))
+                .unwrap()
+                .is_empty()
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn merge_moves_a_renamed_matcher() {
+        let dir = std::env::temp_dir().join(format!("cvg-hooks-renamed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+
+        // A converge install: other binary, tools under the old name.
+        merge(&file, &wanted("/old/converge", "")).unwrap();
+        let old = std::fs::read_to_string(&file)
+            .unwrap()
+            .replace("mcp__staw__", "mcp__converge__");
+        std::fs::write(&file, old).unwrap();
+
+        let changed = merge(&file, &wanted("/usr/bin/staw", "")).unwrap();
+        assert_eq!(changed.len(), 7, "{changed:?}");
+        let root = root_of(&file);
+        assert_eq!(root["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(root["hooks"]["PreToolUse"][0]["matcher"], "mcp__staw__");
+        assert_eq!(
+            root["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "/usr/bin/staw hook ctx"
+        );
+        assert_eq!(
+            root["hooks"]["PostToolUse"][0]["matcher"],
+            "mcp__staw__(project_bind|project_dismiss)"
+        );
+        assert!(
+            merge(&file, &wanted("/usr/bin/staw", ""))
                 .unwrap()
                 .is_empty()
         );

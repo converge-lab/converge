@@ -56,7 +56,8 @@ your terminal (never to logs, where collectors would keep it). Then:
 
   (The binary lands in `~/.staw/bin` with a `~/.local/bin` symlink;
   releases are checksum-manifested and minisign-signed. Building from
-  source works too: `cargo install --path crates/staw-cli`.)
+  source works too: `cargo install --path crates/staw-cli`. Coming from
+  converge? See [upgrading from converge](docs/upgrading-from-converge.md).)
 
   After that, opening any repository in Claude Code suggests a project
   binding in-session (the human answers in conversation; hooks write the

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Smoke of `converge hook ctx` before a `decision_add`, against a running
+# Smoke of `staw hook ctx` before a `decision_add`, against a running
 # server: the recent turns ride on the call itself, each at its position
 # in the conversation, so the decision is anchored in one round trip and
 # the drain that comes later records those turns once. A bare
@@ -15,8 +15,8 @@
 set -eu
 BASE=${1:?server url}; TOKEN=${2:?bearer token}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cargo build -q -p converge-cli --manifest-path "$ROOT/Cargo.toml"
-CONVERGE="$ROOT/target/debug/converge"
+cargo build -q -p staw-cli --manifest-path "$ROOT/Cargo.toml"
+STAW="$ROOT/target/debug/staw"
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
 RUN="$(date +%s)-$$"   # sessions are keyed by external id, globally
 
@@ -26,15 +26,15 @@ api() { m=$1; p=$2; b=${3:-}; if [ -n "$b" ]; then curl -s -X "$m" -H "Authoriza
 GID=$(api POST /groups '{"name":"ctx-smoke","kind":"shared"}' | id)
 PID=$(api POST /projects "{\"group_id\":\"$GID\",\"name\":\"ctx-p\"}" | id)
 
-mkdir -p "$S/home/.config/converge" "$S/state" "$S/repo/src"
-printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/converge/cli.toml"
-printf 'project_id = "%s"\n' "$PID" > "$S/repo/.converge"
+mkdir -p "$S/home/.config/staw" "$S/state" "$S/repo/src"
+printf 'server = "%s"\ntoken = "%s"\n' "$BASE" "$TOKEN" > "$S/home/.config/staw/cli.toml"
+printf 'project_id = "%s"\n' "$PID" > "$S/repo/.staw"
 # A real repository with a committed file: the resolver completes a bare
 # citation from HEAD, so a citation needs a HEAD to come from.
 printf 'pub fn sessions() -> usize {\n    1\n}\n' > "$S/repo/src/lib.rs"
 git -C "$S/repo" init -q
 git -C "$S/repo" add src/lib.rs
-git -C "$S/repo" -c user.email=smoke@converge -c user.name=Smoke -c commit.gpgsign=false commit -qm 'ctx smoke fixture'
+git -C "$S/repo" -c user.email=smoke@staw -c user.name=Smoke -c commit.gpgsign=false commit -qm 'ctx smoke fixture'
 T="$S/repo/transcript.jsonl"
 SID="ctx-$RUN"
 cat > "$T" <<EOF
@@ -44,7 +44,7 @@ cat > "$T" <<EOF
 EOF
 export HOME="$S/home" XDG_CONFIG_HOME="$S/home/.config" XDG_STATE_HOME="$S/state"
 
-ctx() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"PreToolUse","tool_name":"mcp__converge__decision_add","transcript_path":"%s","tool_input":%s}' "$S/repo" "$SID" "$T" "$1" | "$CONVERGE" hook ctx --harness claude; }
+ctx() { printf '{"cwd":"%s","session_id":"%s","hook_event_name":"PreToolUse","tool_name":"mcp__staw__decision_add","transcript_path":"%s","tool_input":%s}' "$S/repo" "$SID" "$T" "$1" | "$STAW" hook ctx --harness claude; }
 # What the hook put on the call, as one comparable line, and the call
 # itself saved for the step that sends it.
 show() { python3 -c "
@@ -88,7 +88,7 @@ d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
 print('%d anchored, %d on record' % (len(items[0]['anchors']), len(items[0]['messages'])))")
 want "the decision's sources" "3 anchored, 3 on record" "$anchored"
 echo "== 4. the sync sends the whole transcript: no second copy of those turns"
-printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$CONVERGE" hook sync --harness claude > /dev/null
+printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID" "$T" | "$STAW" hook sync --harness claude > /dev/null
 sessions=$(api GET "/sessions?project=$PID" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d
@@ -113,11 +113,11 @@ i=0; while [ "$i" -lt 30 ]; do
 EOF
   i=$((i + 1))
 done
-printf '{"cwd":"%s","session_id":"%s","hook_event_name":"PreToolUse","tool_name":"mcp__converge__decision_add","transcript_path":"%s","tool_input":%s}' \
+printf '{"cwd":"%s","session_id":"%s","hook_event_name":"PreToolUse","tool_name":"mcp__staw__decision_add","transcript_path":"%s","tool_input":%s}' \
   "$S/repo" "$SID2" "$T2" "{\"project_id\":\"$PID\",\"title\":\"decided early\",\"summary\":\"s\"}" \
-  | "$CONVERGE" hook ctx --harness claude | show > /dev/null
+  | "$STAW" hook ctx --harness claude | show > /dev/null
 record
-printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID2" "$T2" | "$CONVERGE" hook sync --harness claude > /dev/null
+printf '{"cwd":"%s","session_id":"%s","hook_event_name":"SessionEnd","transcript_path":"%s"}' "$S/repo" "$SID2" "$T2" | "$STAW" hook sync --harness claude > /dev/null
 long=$(api GET "/sessions?project=$PID" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); items=d['items'] if isinstance(d,dict) else d

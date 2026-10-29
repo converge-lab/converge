@@ -1,0 +1,687 @@
+//! The reactive application store.
+//!
+//! Everything the app renders lives in one `Store<AppState>` (from
+//! `reactive_stores`), handed to every component through Leptos context. The
+//! store gives *fine-grained* reactivity: updating `group` never notifies the
+//! readers of `dataset`, and vice-versa — so a group switch doesn't invalidate
+//! the whole tree.
+//!
+//! Data enters the store through a [`DataSource`]: [`EmbeddedSource`] parses
+//! and assembles the embedded fixture seed (`crate::seed`); the HTTP
+//! `ApiSource` on `staw-client` returns in the next slice. Both funnel
+//! through `data::build_dataset`, so the two paths cannot drift.
+
+use crate::data::{Dataset, build_dataset};
+use crate::seed::{EMBEDDED, Seed, assemble};
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use reactive_stores::Store;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
+
+/// The whole reactive state of the app.
+#[derive(Clone, Default, Store)]
+pub struct AppState {
+    /// The loaded dataset. `None` while the source is still resolving. The UI
+    /// gates on this: nothing that queries the dataset renders until it's
+    /// `Some`, so query functions can assume a loaded dataset.
+    pub dataset: Option<Rc<Dataset>>,
+    /// Set if loading failed. When present, the app shows an error screen
+    /// (or the login screen, when the failure is a missing credential).
+    pub error: Option<LoadError>,
+    /// Index of the active group within `dataset.groups`.
+    pub group: usize,
+    /// Outcomes survive navigation and independent operations. Only an
+    /// explicit dismissal removes a failure; successes expire individually.
+    pub notices: Vec<NoticeEntry>,
+    pub next_notice_id: u64,
+}
+
+/// What a finished write has to say. Failures wait to be dismissed; successes
+/// are a receipt and time out on their own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Notice {
+    Ok(String),
+    Failed(String),
+}
+
+/// Repeats belong to one form/action or one explicitly identified resource.
+/// Equal wording alone cannot identify an operation on a different object.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NoticeOrigin {
+    Action(RwSignal<bool>),
+    #[cfg(any(feature = "api", test))]
+    Resource(&'static str, String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NoticeEntry {
+    pub id: u64,
+    pub notice: Notice,
+    pub occurrences: usize,
+    origin: Option<NoticeOrigin>,
+}
+
+impl Notice {
+    pub fn text(&self) -> &str {
+        match self {
+            Notice::Ok(m) | Notice::Failed(m) => m,
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Notice::Ok(_))
+    }
+}
+
+/// `Rc` inside the state makes it `!Send`, so the store is pinned to the single
+/// WASM thread via `LocalStorage` — exactly right for a client-side app, and it
+/// spares us needless `Send + Sync` bounds.
+pub type AppStore = Store<AppState, LocalStorage>;
+
+pub fn push_notice(store: AppStore, notice: Notice) {
+    insert_notice(store, notice, None);
+}
+
+pub fn push_failure(store: AppStore, origin: NoticeOrigin, message: String) {
+    insert_notice(store, Notice::Failed(message), Some(origin));
+}
+
+fn insert_notice(store: AppStore, notice: Notice, origin: Option<NoticeOrigin>) {
+    let repeated = origin.as_ref().and_then(|origin| {
+        store.notices().with_untracked(|notices| {
+            notices
+                .iter()
+                .position(|entry| entry.origin.as_ref() == Some(origin) && entry.notice == notice)
+        })
+    });
+    if let Some(index) = repeated {
+        store.notices().update(|notices| {
+            let mut existing = notices.remove(index);
+            existing.occurrences = existing.occurrences.saturating_add(1);
+            // A repeated failure must become visible even if its previous
+            // occurrence had moved into the folded notification history.
+            notices.push(existing);
+        });
+        return;
+    }
+    let id = store.next_notice_id().get_untracked();
+    store.next_notice_id().set(id + 1);
+    let ok = notice.is_ok();
+    store.notices().update(|notices| {
+        notices.push(NoticeEntry {
+            id,
+            notice,
+            occurrences: 1,
+            origin,
+        })
+    });
+    if ok {
+        clear_notice_later(store, id);
+    }
+}
+
+// Expiration belongs to the receipt, including while it is folded out of view.
+// Expanding history must neither start nor reset a success timer.
+#[cfg(target_arch = "wasm32")]
+fn clear_notice_later(store: AppStore, id: u64) {
+    set_timeout(
+        move || dismiss_notice(store, id),
+        std::time::Duration::from_millis(2500),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_notice_later(_store: AppStore, _id: u64) {}
+
+pub fn dismiss_notice(store: AppStore, id: u64) {
+    store
+        .notices()
+        .update(|notices| notices.retain(|entry| entry.id != id));
+}
+
+/// Why a load failed. The embedded source never fails; an HTTP `ApiSource`
+/// distinguishes "you need to log in" from everything else.
+#[derive(Debug, Clone)]
+pub enum LoadError {
+    /// The API wants a credential the browser doesn't hold — show login.
+    Unauthorized,
+    /// Anything else, human-readable.
+    Failed(String),
+}
+
+/// A pending dataset load. The future is intentionally *not* `Send`: it runs on
+/// the single WASM thread (via `spawn_local`) and an HTTP source's `fetch`
+/// future is `!Send` anyway.
+pub type Loading = Pin<Box<dyn Future<Output = Result<Rc<Dataset>, LoadError>>>>;
+
+/// Where the dataset comes from. Async so an HTTP `ApiSource` slots in behind
+/// the same trait without touching the store or any component.
+pub trait DataSource {
+    fn load(&self) -> Loading;
+}
+
+/// The embedded fixture seed, assembled in-process. Resolves immediately;
+/// stays useful as the offline / test fixture even after a real API exists.
+/// Unused (but still compiled) when the `api` feature is on.
+#[cfg_attr(feature = "api", allow(dead_code))]
+pub struct EmbeddedSource;
+
+impl DataSource for EmbeddedSource {
+    fn load(&self) -> Loading {
+        Box::pin(async {
+            let seed = Seed::parse(EMBEDDED).expect("embedded seed is malformed");
+            // A broken seed is a build-time mistake; validation is a cheap
+            // safety net in dev builds and dead weight in release.
+            #[cfg(debug_assertions)]
+            if let Err(errs) = crate::seed::validate(&seed) {
+                panic!("embedded seed invalid:\n{}", errs.join("\n"));
+            }
+            Ok(Rc::new(build_dataset(assemble(&seed))))
+        })
+    }
+}
+
+/// Build an empty store, publish it to context, and kick off the async load
+/// from `source`. Returns the (copyable) handle for the caller to keep. When
+/// the load resolves it writes into the store, flipping the UI from its loading
+/// state to the app (or to an error screen on failure).
+pub fn provide_store<S: DataSource + 'static>(source: S) -> AppStore {
+    let store = AppStore::new_local(AppState::default());
+    provide_context(store);
+    spawn_local(async move {
+        match source.load().await {
+            Ok(dataset) => store.dataset().set(Some(dataset)),
+            Err(err) => store.error().set(Some(err)),
+        }
+    });
+    store
+}
+
+/// Provide the store from the default source for this build: the HTTP
+/// [`api::ApiSource`] when compiled with the `api` feature, otherwise the
+/// [`EmbeddedSource`]. This is the one line to flip between them.
+pub fn provide_default_store() -> AppStore {
+    #[cfg(feature = "api")]
+    {
+        provide_store(api::ApiSource::same_origin())
+    }
+    #[cfg(not(feature = "api"))]
+    {
+        provide_store(EmbeddedSource)
+    }
+}
+
+/// The HTTP data source, on the typed `staw-client`. Real resources come
+/// from the API; the not-yet-real remainder (signals, unread, extras, expert
+/// context — M4 territory) still comes from the embedded seed, so mocked
+/// features are visibly seed-scoped in exactly one place.
+#[cfg(feature = "api")]
+pub use api::client;
+#[cfg(feature = "api")]
+pub use api::hydrate_decision;
+
+#[cfg(feature = "api")]
+mod api {
+    use super::{DataSource, LoadError, Loading, build_dataset};
+    use crate::seed::{self, wire};
+    use leptos::prelude::window;
+    use staw_client::{Client, DecisionFilter, ProjectFilter, SignalFilter, StoreError};
+    use staw_ui::domain::initials;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    use time::format_description::well_known::Rfc3339;
+
+    pub struct ApiSource {
+        client: Client,
+    }
+
+    impl ApiSource {
+        /// The API lives at the app's own origin: `trunk serve` proxies
+        /// `/api` to the local server in dev, and in production the server
+        /// binary serves these assets itself. No baked-in URLs.
+        pub fn same_origin() -> Self {
+            Self { client: client() }
+        }
+    }
+
+    /// Lazily hydrate one decision's projections (graph edges + cited
+    /// sources) and patch them into the store. Called by the detail
+    /// screen on open — so boot never pays per-decision round trips, and
+    /// the detail view is as fresh as its last open, not as stale as
+    /// boot. A fetch error leaves the dataset untouched and explains the
+    /// missing detail beside the sources, with a shell fallback after navigation.
+    /// `data::hydrate_local` returns `None` on no-change, which breaks
+    /// the write→screen-recreate→hydrate cycle.
+    pub fn hydrate_decision(
+        store: super::AppStore,
+        id: String,
+        action: crate::feedback::ActionState,
+    ) {
+        use leptos::prelude::{GetUntracked, Set};
+        use staw_client::DecisionId;
+
+        use super::AppStateStoreFields;
+        if !action.begin() {
+            return;
+        }
+        let Ok(did) = id.parse::<DecisionId>() else {
+            action.fail(
+                "Couldn't load decision details",
+                &StoreError::Backend("invalid decision id".into()),
+            );
+            return;
+        };
+        leptos::task::spawn_local(async move {
+            let client = client();
+            // Opening a decision is reading it: the receipt says so, and
+            // the badge stops counting it here and on every other device.
+            // `session = ""` is this person rather than an agent session.
+            let read = [did];
+            let (edges, cited, receipted) = futures::join!(
+                client.decision_edges(did),
+                client.decision_sources(did),
+                client.receive("", None, &[], &read)
+            );
+            // Only once the server holds the receipt: a badge that drops
+            // on a refused write comes back on the next load, and the
+            // count is the server's answer everywhere else.
+            if receipted.is_ok() {
+                crate::data::mark_read_local(store, &id);
+            }
+            let edges = match edges {
+                Ok(Some(edges)) => edges,
+                result => {
+                    let error = result.err().unwrap_or(StoreError::NotFound);
+                    action.fail("Couldn't load decision details", &error);
+                    return;
+                }
+            };
+            let cited = match cited {
+                Ok(Some(cited)) => cited,
+                result => {
+                    let error = result.err().unwrap_or(StoreError::NotFound);
+                    action.fail("Couldn't load decision sources", &error);
+                    return;
+                }
+            };
+            action.finish();
+            let related = |r: &staw_client::Related| crate::data::Related {
+                id: r.id.to_string(),
+                why: r.why.clone(),
+            };
+            let Some(dataset) = store.dataset().get_untracked() else {
+                return;
+            };
+            let patched = crate::data::hydrate_local(
+                &dataset,
+                &id,
+                edges.supersedes.iter().map(|i| i.to_string()).collect(),
+                edges.superseded_by.iter().map(|i| i.to_string()).collect(),
+                edges.related_to.iter().map(related).collect(),
+                edges.related_by.iter().map(related).collect(),
+                cited.iter().map(source).collect(),
+            );
+            if let Some(next) = patched {
+                store.dataset().set(Some(std::rc::Rc::new(next)));
+            }
+        });
+    }
+
+    /// A same-origin client. Session-cookie auth rides the browser's fetch
+    /// ambiently — no token is ever held in the app.
+    pub fn client() -> Client {
+        let origin = window().location().origin().expect("window has an origin");
+        let base = origin.parse().expect("origin is a valid URL");
+        Client::new(base)
+    }
+
+    fn oops(what: &'static str) -> impl Fn(StoreError) -> LoadError {
+        move |e| match e {
+            StoreError::Unauthorized => LoadError::Unauthorized,
+            e => LoadError::Failed(crate::feedback::message(what, &e)),
+        }
+    }
+
+    impl DataSource for ApiSource {
+        fn load(&self) -> Loading {
+            let client = self.client.clone();
+            Box::pin(async move {
+                // Unpaginated boot loads: without `limit` the server returns
+                // everything — fine at v1 scale, cursor-walking later. All
+                // seven fetched concurrently: boot is one burst, not a
+                // seven-round-trip waterfall.
+                // Pagination is typed per resource id, so each call gets its
+                // own default binding (join!'s temporaries can't borrow).
+                let (g_page, p_page, u_page, a_page, d_page, s_page) = Default::default();
+                let no_projects = ProjectFilter::default();
+                let no_decisions = DecisionFilter::default();
+                // The unread badge is the server's answer, not a fixture:
+                // decisions this user holds no receipt for, in any session.
+                let unseen_decisions = DecisionFilter {
+                    unseen: true,
+                    ..Default::default()
+                };
+                let (n_page,) = Default::default();
+                let no_signals = SignalFilter::default();
+                let (me, groups, projects, users, agents, decisions, unseen, signals) = futures::join!(
+                    client.me(),
+                    client.group_list(&g_page),
+                    client.project_list(&no_projects, &p_page),
+                    client.user_list(&u_page),
+                    client.agent_list(&a_page),
+                    client.decision_list(&no_decisions, &d_page),
+                    client.decision_list(&unseen_decisions, &n_page),
+                    client.signal_list(&no_signals, &s_page),
+                );
+                let me = me.map_err(oops("Couldn't load identity"))?;
+                let groups = groups.map_err(oops("Couldn't load groups"))?;
+                let projects = projects.map_err(oops("Couldn't load projects"))?;
+                let users = users.map_err(oops("Couldn't load users"))?;
+                let agents = agents.map_err(oops("Couldn't load agents"))?;
+                let decisions = decisions.map_err(oops("Couldn't load decisions"))?;
+                let unseen = unseen.map_err(oops("Couldn't load unread decisions"))?;
+                let signals = signals.map_err(oops("Couldn't load signals"))?;
+
+                // Remaining residue from the fixture seed (unread, extras,
+                // expert context — the acks slice's territory). Its ids
+                // don't intersect real data, so these features read as
+                // empty until their endpoints exist — honest, and
+                // contained here.
+                let seed = seed::Seed::parse(seed::EMBEDDED).expect("embedded seed is malformed");
+                let mock = seed::assemble(&seed);
+
+                // Edges and cited sources are per-decision projections the
+                // API serves separately — fetching them here made boot cost
+                // 2×decisions round trips (the corpus outgrew the "fine at
+                // v1 scale" assumption). They hydrate lazily instead: the
+                // detail screen fetches both on open (`hydrate_decision`),
+                // which also means detail views are fresh, not boot-stale.
+                let wired: Vec<_> = decisions
+                    .items
+                    .iter()
+                    .map(|d| decision(d, &Default::default()))
+                    .collect();
+                let extras = mock.decision_extras;
+
+                let assembled = seed::Assembled {
+                    groups: groups
+                        .items
+                        .iter()
+                        .map(|g| group(g, &projects.items))
+                        .collect(),
+                    projects: projects.items.iter().map(project).collect(),
+                    users: users.items.iter().map(user).collect(),
+                    agents: agents.items.iter().map(agent).collect(),
+                    decisions: wired,
+                    me: wire::mock::Me {
+                        user_id: me.id.to_string(),
+                        initial: initials(&me.name),
+                        name: me.name,
+                        role: format!("@{}", me.handle),
+                        color: "var(--cv-primary)".into(),
+                        email: String::new(),
+                    },
+                    user_colors: mock.user_colors,
+                    signals: signals
+                        .items
+                        .iter()
+                        .map(|s| signal(s, &decisions.items))
+                        .collect(),
+                    decision_extras: extras,
+                    unread: unseen.items.iter().map(|d| d.id.to_string()).collect(),
+                    agent_context: mock.agent_context,
+                };
+                Ok(Rc::new(build_dataset(assembled)))
+            })
+        }
+    }
+
+    /// A signal → the read-model shape. `from` is the source decision's
+    /// project id (group filtering keys on it); `to` is the affected
+    /// side: one project id when the targets agree, a count otherwise.
+    /// `sources` carries every involved decision id, so the detail
+    /// screen deep-links both ends and `signals_for` matches either.
+    fn signal(s: &staw_client::Signal, decisions: &[staw_client::Decision]) -> wire::mock::Signal {
+        let project_of: HashMap<String, String> = decisions
+            .iter()
+            .map(|d| (d.id.to_string(), d.project_id.to_string()))
+            .collect();
+        let from = project_of
+            .get(&s.source.to_string())
+            .cloned()
+            .unwrap_or_default();
+        let mut affected: Vec<String> = s
+            .targets
+            .iter()
+            .filter_map(|t| project_of.get(&t.to_string()).cloned())
+            .collect();
+        affected.sort();
+        affected.dedup();
+        let to = match affected.len() {
+            0 => String::new(),
+            1 => affected.remove(0),
+            n => format!("{n} projects"),
+        };
+        let mut sources = vec![s.source.to_string()];
+        sources.extend(s.targets.iter().map(|t| t.to_string()));
+        wire::mock::Signal {
+            id: s.id.to_string(),
+            from,
+            to,
+            dec_id: s.source.to_string(),
+            title: s.title.clone(),
+            text: s.text.clone(),
+            consequence: s.consequence.clone().unwrap_or_default(),
+            recommended: s.recommendation.clone().unwrap_or_default(),
+            risk: match s.tier {
+                staw_client::Tier::Conflict => seed::Risk::Conflict,
+                staw_client::Tier::Coordinate => seed::Risk::Coordinate,
+                staw_client::Tier::Watch => seed::Risk::Watch,
+            },
+            status: match s.status {
+                staw_client::SignalStatus::Proposed => seed::SignalStatus::Proposed,
+                staw_client::SignalStatus::Confirmed => seed::SignalStatus::Confirmed,
+                staw_client::SignalStatus::Dismissed => seed::SignalStatus::Dismissed,
+            },
+            sources,
+        }
+    }
+
+    /// A cited excerpt → the fixture source shape (the read model's input):
+    /// session title as the label, capture time relativized, anchors → `hl`.
+    fn source(s: &staw_client::Source) -> wire::mock::Source {
+        wire::mock::Source {
+            kind: match s.session.kind {
+                staw_client::SessionKind::Transcript => seed::SourceKind::Transcript,
+                staw_client::SessionKind::Slack => seed::SourceKind::Slack,
+                staw_client::SessionKind::Pr => seed::SourceKind::Pr,
+                staw_client::SessionKind::Incident => seed::SourceKind::Incident,
+            },
+            label: s.session.title.clone(),
+            when: s
+                .session
+                .captured_at
+                .format(&Rfc3339)
+                .map(|iso| crate::when::when(&iso))
+                .unwrap_or_default(),
+            lines: s
+                .messages
+                .iter()
+                .map(|m| wire::mock::SourceLine {
+                    speaker: m.speaker.clone(),
+                    text: m.body.clone(),
+                    hl: s.anchors.contains(&m.id),
+                })
+                .collect(),
+        }
+    }
+
+    // Typed client responses → the app's read-model shapes. This is the one
+    // place the real wire meets the fixture format, converted in code the
+    // compiler checks against `staw-client`.
+
+    fn rfc3339(t: time::OffsetDateTime) -> String {
+        t.format(&Rfc3339).expect("timestamps format as RFC3339")
+    }
+
+    fn group(g: &staw_client::Group, projects: &[staw_client::Project]) -> wire::Group {
+        wire::Group {
+            id: g.id.to_string(),
+            name: g.name.clone(),
+            description: g.description.clone(),
+            kind: match g.kind {
+                staw_client::GroupKind::Shared => seed::GroupKind::Shared,
+                staw_client::GroupKind::Personal => seed::GroupKind::Personal,
+            },
+            created_at: rfc3339(g.created_at),
+            // The D3 membership read-model, derived client-side.
+            project_ids: projects
+                .iter()
+                .filter(|p| p.group_id == g.id)
+                .map(|p| p.id.to_string())
+                .collect(),
+        }
+    }
+
+    fn project(p: &staw_client::Project) -> wire::Project {
+        wire::Project {
+            id: p.id.to_string(),
+            group_id: p.group_id.to_string(),
+            name: p.name.clone(),
+            description: p.description.clone(),
+            repository: p.repository.as_ref().map(|r| r.canonical()),
+            archive_transcripts: p.archive_transcripts,
+            created_at: rfc3339(p.created_at),
+        }
+    }
+
+    fn user(u: &staw_client::User) -> wire::User {
+        wire::User {
+            id: u.id.to_string(),
+            handle: u.handle.clone(),
+            name: u.name.clone(),
+        }
+    }
+
+    fn agent(a: &staw_client::Agent) -> wire::Agent {
+        wire::Agent {
+            id: a.id.to_string(),
+            kind: match a.kind {
+                staw_client::AgentKind::Model => seed::enums::AgentKind::Model,
+                staw_client::AgentKind::Tool => seed::enums::AgentKind::Tool,
+            },
+            name: a.name.clone(),
+        }
+    }
+
+    fn author(a: &staw_client::Author) -> wire::AuthorRef {
+        use staw_client::Author as A;
+        match a {
+            A::User(u) => wire::AuthorRef {
+                user_id: Some(u.to_string()),
+                agent_id: None,
+            },
+            A::Agent(g) => wire::AuthorRef {
+                user_id: None,
+                agent_id: Some(g.to_string()),
+            },
+            A::UserViaAgent { user, agent } => wire::AuthorRef {
+                user_id: Some(user.to_string()),
+                agent_id: Some(agent.to_string()),
+            },
+        }
+    }
+
+    fn status(s: staw_client::DecisionStatus) -> seed::Status {
+        use staw_client::DecisionStatus as W;
+        match s {
+            W::Accepted => seed::Status::Accepted,
+            W::Draft => seed::Status::Draft,
+            W::Proposed => seed::Status::Proposed,
+            W::Superseded => seed::Status::Superseded,
+            W::Rejected => seed::Status::Rejected,
+        }
+    }
+
+    fn related(r: &staw_client::Related) -> wire::RelatedRef {
+        wire::RelatedRef {
+            id: r.id.to_string(),
+            why: r.why.clone(),
+        }
+    }
+
+    fn decision(d: &staw_client::Decision, e: &staw_client::Edges) -> wire::Decision {
+        wire::Decision {
+            id: d.id.to_string(),
+            project_id: d.project_id.to_string(),
+            status: status(d.status),
+            title: d.title.clone(),
+            summary: d.summary.clone(),
+            context: d.context.clone(),
+            consequences: d.consequences.clone(),
+            alternatives: d
+                .alternatives
+                .iter()
+                .map(|a| wire::Alternative {
+                    option: a.option.clone(),
+                    why_rejected: a.why_rejected.clone(),
+                })
+                .collect(),
+            authors: d.authors.iter().map(author).collect(),
+            supersedes: e.supersedes.iter().map(|i| i.to_string()).collect(),
+            superseded_by: e.superseded_by.iter().map(|i| i.to_string()).collect(),
+            related_to: e.related_to.iter().map(related).collect(),
+            related_by: e.related_by.iter().map(related).collect(),
+            code_evidence: d
+                .code_evidence
+                .iter()
+                .map(|c| wire::CodeAnchorRef {
+                    commit: c.commit.clone(),
+                    path: c.path.clone(),
+                    lines: c.lines,
+                    excerpt: c.excerpt.clone(),
+                    verified_at: c.verified_at.map(rfc3339),
+                    mismatch: c.mismatch.clone(),
+                })
+                .collect(),
+            amendments: d
+                .amendments
+                .iter()
+                .map(|a| wire::AmendmentRef {
+                    body: a.body.clone(),
+                    author: author(&a.author),
+                    captured_at: rfc3339(a.captured_at),
+                })
+                .collect(),
+            captured_at: rfc3339(d.captured_at),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The author pair mapping preserves all three enum states.
+        #[test]
+        fn author_states_map() {
+            use staw_client::{AgentId, Author as A, UserId};
+            let (u, g) = (UserId::new(), AgentId::new());
+            assert_eq!(author(&A::User(u)).user_id, Some(u.to_string()));
+            assert_eq!(author(&A::User(u)).agent_id, None);
+            assert_eq!(author(&A::Agent(g)).agent_id, Some(g.to_string()));
+            let via = author(&A::UserViaAgent { user: u, agent: g });
+            assert_eq!(via.user_id, Some(u.to_string()));
+            assert_eq!(via.agent_id, Some(g.to_string()));
+        }
+    }
+}
+
+/// The store for the current reactive owner.
+///
+/// Panics if [`provide_store`] wasn't called at the root — a programming error,
+/// not a runtime condition.
+pub fn use_store() -> AppStore {
+    expect_context::<AppStore>()
+}

@@ -20,7 +20,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'python3 -m http.server 8086 --bind 127.0.0.1 --directory crates/converge-web/dist',
+    command: 'python3 -m http.server 8086 --bind 127.0.0.1 --directory crates/staw-web/dist',
     url: 'http://127.0.0.1:8086',
     reuseExistingServer: false,
     stderr: 'ignore',

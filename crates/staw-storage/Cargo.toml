@@ -1,0 +1,14 @@
+[package]
+name = "staw-storage"
+description = "Domain storage trait (the Repository seam) for Staw."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sha2.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+time.workspace = true

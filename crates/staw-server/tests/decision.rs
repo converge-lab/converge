@@ -1,0 +1,559 @@
+//! Decisions over HTTP: CRUD, edit batches, filters, and the graph
+//! projection (testcontainers — needs Docker).
+
+mod common;
+
+use axum::Router;
+use axum::http::StatusCode;
+use common::{send, server};
+use serde_json::{Value, json};
+use staw_storage::{AgentKind, Agents, Identity, NewAgent, Users};
+
+/// Group + project over the API; returns their ids.
+async fn seed(app: &Router) -> (String, String) {
+    let (_, group) = send(
+        app,
+        "POST",
+        "/api/v1/groups",
+        Some(json!({ "name": "g", "description": null, "kind": "shared" })),
+    )
+    .await;
+    let group = group["id"].as_str().unwrap().to_owned();
+    let (_, project) = send(
+        app,
+        "POST",
+        "/api/v1/projects",
+        Some(json!({ "group_id": group, "name": "p", "description": null })),
+    )
+    .await;
+    (group, project["id"].as_str().unwrap().to_owned())
+}
+
+/// POST a decision built from `body`; returns its id.
+async fn add(app: &Router, body: Value) -> String {
+    let (status, body) = send(app, "POST", "/api/v1/decisions", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn decision_crud() {
+    let (_pg, store, app) = server().await;
+    let (group, project) = seed(&app).await;
+
+    // Minimal create — the collections default to empty on the wire.
+    let id = add(
+        &app,
+        json!({ "project_id": project, "status": "proposed", "title": "ADR-1", "summary": "s" }),
+    )
+    .await;
+    let (status, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    // …except authorship: a body naming nobody was written by the caller.
+    let (_, me) = send(&app, "GET", "/api/v1/users/me", None).await;
+    assert_eq!(
+        decision["authors"],
+        json!([{ "user": me["id"] }]),
+        "{decision}"
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(decision["title"], "ADR-1");
+    assert_eq!(decision["status"], "proposed");
+    assert_eq!(decision["alternatives"], json!([]));
+    assert!(decision["captured_at"].as_str().unwrap().contains('T'));
+
+    // Authors and alternatives pass through. Users/agents have no REST
+    // surface yet (that's the auth slice) — seed them via the store.
+    let user = store
+        .user_login(Identity {
+            provider: "github".into(),
+            subject: "42".into(),
+            handle: "singulared".into(),
+            name: "Maksim".into(),
+        })
+        .await
+        .unwrap();
+    let agent = store
+        .agent_ensure(NewAgent {
+            kind: AgentKind::Model,
+            name: "claude".into(),
+        })
+        .await
+        .unwrap();
+    let authored = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted", "title": "ADR-2", "summary": "s",
+            "authors": [{ "user": user }, { "user_via_agent": { "user": user, "agent": agent } }],
+            "alternatives": [{ "option": "other", "why_rejected": "slower" }],
+        }),
+    )
+    .await;
+    let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{authored}"), None).await;
+    assert_eq!(decision["authors"].as_array().unwrap().len(), 2);
+    assert_eq!(decision["alternatives"][0]["why_rejected"], "slower");
+
+    // Fields change through a merge patch on the item.
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/decisions/{id}"),
+        Some(json!({ "status": "accepted", "context": "ctx" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, edited) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(edited["status"], "accepted");
+    assert_eq!(edited["context"], "ctx");
+
+    // Filters compose; status matches the derived status.
+    let (_, by_project) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions?project={project}"),
+        None,
+    )
+    .await;
+    assert_eq!(by_project["items"].as_array().unwrap().len(), 2);
+    let (_, by_group) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions?group={group}&status=accepted&limit=1"),
+        None,
+    )
+    .await;
+    assert_eq!(by_group["items"].as_array().unwrap().len(), 1);
+
+    // `superseded` is derived — storing it is the caller's error.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/decisions",
+        Some(json!({ "project_id": project, "status": "superseded", "title": "x", "summary": "" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("derived")
+    );
+
+    // Unknown ids → 404 on every read/write path.
+    let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    for (method, uri, body) in [
+        ("GET", format!("/api/v1/decisions/{missing}"), None),
+        (
+            "PATCH",
+            format!("/api/v1/decisions/{missing}"),
+            Some(json!({ "title": "x" })),
+        ),
+    ] {
+        let (status, _) = send(&app, method, &uri, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
+async fn relation_projections() {
+    let (_pg, _store, app) = server().await;
+    let (group, project) = seed(&app).await;
+    let id = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "A", "summary": "" }),
+    )
+    .await;
+
+    // The nested reads mirror the canonical flat filters…
+    let (status, projects) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/projects"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(projects["items"].as_array().unwrap().len(), 1);
+    assert_eq!(projects["items"][0]["id"].as_str().unwrap(), project);
+    let (status, decisions) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{project}/decisions?status=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(decisions["items"][0]["id"].as_str().unwrap(), id);
+
+    // …but the bound parent must exist: 404, not an empty list.
+    let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{missing}/projects"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{missing}/decisions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Re-binding the path-bound parent via query is rejected, not ignored.
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/projects?group={group}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bound by the path")
+    );
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/projects/{project}/decisions?project={project}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The group feed spans the group's projects; `?project=` narrows within
+    // it (child axis — allowed), `?group=` re-binds (rejected).
+    let (status, feed) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(feed["items"][0]["id"].as_str().unwrap(), id);
+    let (status, narrowed) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions?project={project}&status=accepted"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(narrowed["items"].as_array().unwrap().len(), 1);
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{group}/decisions?group={group}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/groups/{missing}/decisions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn decision_graph() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+
+    let a = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "A", "summary": "" }),
+    )
+    .await;
+    let b = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted", "title": "B", "summary": "",
+            "supersedes": [a],
+        }),
+    )
+    .await;
+
+    // A reads as superseded — derived from the inbound edge, not stored.
+    let (_, got) = send(&app, "GET", &format!("/api/v1/decisions/{a}"), None).await;
+    assert_eq!(got["status"], "superseded");
+    let (_, listed) = send(&app, "GET", "/api/v1/decisions?status=superseded", None).await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["id"].as_str().unwrap(), a);
+
+    // The projection carries both directions.
+    let (status, edges) = send(&app, "GET", &format!("/api/v1/decisions/{b}/edges"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(edges["supersedes"], json!([a]));
+    let (_, edges) = send(&app, "GET", &format!("/api/v1/decisions/{a}/edges"), None).await;
+    assert_eq!(edges["superseded_by"], json!([b]));
+
+    // Removing the last inbound edge restores the stored status.
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/decisions/{b}/supersedes/{a}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, restored) = send(&app, "GET", &format!("/api/v1/decisions/{a}"), None).await;
+    assert_eq!(restored["status"], "accepted");
+
+    // Cross-refs round-trip with `why`, visible from both ends.
+    send(
+        &app,
+        "PUT",
+        &format!("/api/v1/decisions/{b}/related/{a}"),
+        Some(json!({ "why": "shared context" })),
+    )
+    .await;
+    let (_, edges) = send(&app, "GET", &format!("/api/v1/decisions/{b}/edges"), None).await;
+    assert_eq!(
+        edges["related_to"],
+        json!([{ "id": a, "why": "shared context" }])
+    );
+    let (_, edges) = send(&app, "GET", &format!("/api/v1/decisions/{a}/edges"), None).await;
+    assert_eq!(
+        edges["related_by"],
+        json!([{ "id": b, "why": "shared context" }])
+    );
+
+    // Self-loops are the caller's error.
+    let (status, _) = send(
+        &app,
+        "PUT",
+        &format!("/api/v1/decisions/{b}/supersedes/{b}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Unknown decision → 404 on the projection too.
+    let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions/{missing}/edges"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn search_rides_the_list() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let hit = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted",
+            "title": "Cache invalidation strategy", "summary": "",
+            "context": null, "consequences": null,
+        }),
+    )
+    .await;
+    add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted",
+            "title": "Unrelated", "summary": "nothing",
+            "context": null, "consequences": null,
+        }),
+    )
+    .await;
+
+    // `?q=` ranks (stemmed match), unpaged: next_cursor is null.
+    let (status, page) = send(&app, "GET", "/api/v1/decisions?q=caching", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["id"], json!(hit));
+    assert_eq!(page["next_cursor"], serde_json::Value::Null);
+
+    // A cursor with `?q=` is the caller's error.
+    let (status, _) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/decisions?q=caching&cursor={hit}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A term-free query is an error, not an empty result.
+    let (status, _) = send(&app, "GET", "/api/v1/decisions?q=-", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn code_evidence_over_rest() {
+    use staw_storage::CodeAnchor;
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let excerpt = "fn main() {}\n";
+    let anchor = json!({
+        "commit": "b".repeat(40), "path": "src/main.rs", "lines": [1, 1],
+        "excerpt": excerpt, "digest": CodeAnchor::digest_of(excerpt),
+    });
+
+    // A bad digest is refused with the reason.
+    let mut forged = anchor.clone();
+    forged["digest"] = json!("0".repeat(64));
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/decisions",
+        Some(json!({
+            "project_id": project, "status": "accepted", "title": "t", "summary": "s",
+            "code_evidence": [forged],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Stored, read back with the decision, dropped by key.
+    let id = add(
+        &app,
+        json!({
+            "project_id": project, "status": "accepted", "title": "t", "summary": "s",
+            "code_evidence": [anchor],
+        }),
+    )
+    .await;
+    let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(
+        decision["code_evidence"][0]["path"], "src/main.rs",
+        "{decision}"
+    );
+    assert_eq!(decision["code_evidence"][0]["lines"], json!([1, 1]));
+    assert_eq!(decision["code_evidence"][0]["excerpt"], excerpt);
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!(
+            "/api/v1/decisions/{id}/code-evidence?commit={}&path=src/main.rs&lines=1-1",
+            "b".repeat(40)
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, decision) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(decision["code_evidence"], json!([]));
+}
+
+#[tokio::test]
+async fn receipts_over_rest_cover_both_kinds() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let (_, me) = send(&app, "GET", "/api/v1/users/me", None).await;
+    let a = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "a", "summary": "s" }),
+    )
+    .await;
+    let b = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "b", "summary": "s" }),
+    )
+    .await;
+    let unseen = |app: Router| async move {
+        let (_, page) = send(&app, "GET", "/api/v1/decisions?unseen=true", None).await;
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["title"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(unseen(app.clone()).await, ["b", "a"]);
+
+    // One call carries both kinds; a signal rides along to prove it.
+    let (_, signal) = send(
+        &app,
+        "POST",
+        "/api/v1/signals",
+        Some(json!({
+            "source": a, "targets": [b], "kind": "dependency", "tier": "watch",
+            "title": "a bears on b", "text": "…",
+            "consequence": null, "recommendation": null,
+            "produced_by": { "user": me["id"] },
+        })),
+    )
+    .await;
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/receipts",
+        Some(json!({
+            "session": "sess-1", "harness": "codex",
+            "decision_ids": [a], "signal_ids": [signal["id"]],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(unseen(app.clone()).await, ["b"]);
+    let (_, page) = send(&app, "GET", "/api/v1/signals?unseen=true", None).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 0, "{page}");
+
+    // The unfiltered listing still holds everything: receipts narrow a
+    // question, they never hide a record.
+    let (_, page) = send(&app, "GET", "/api/v1/decisions", None).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn amendments_over_rest_are_append_only() {
+    let (_pg, _store, app) = server().await;
+    let (_, project) = seed(&app).await;
+    let id = add(
+        &app,
+        json!({ "project_id": project, "status": "accepted", "title": "t", "summary": "s" }),
+    )
+    .await;
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        Some(json!({ "text": "the gate was dropped on purpose" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, got) = send(&app, "GET", &format!("/api/v1/decisions/{id}"), None).await;
+    assert_eq!(
+        got["amendments"][0]["body"], "the gate was dropped on purpose",
+        "{got}"
+    );
+    assert!(got["amendments"][0]["author"]["user"].is_string(), "{got}");
+
+    // Blank says nothing; there is no item to rewrite or remove.
+    let (status, _) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        Some(json!({ "text": "  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/decisions/{id}/amendments"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}

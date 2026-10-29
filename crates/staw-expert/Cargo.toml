@@ -1,0 +1,20 @@
+[package]
+name = "staw-expert"
+description = "The expert-model layer: named model endpoints, per-job routing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+staw-storage.workspace = true
+genai.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+time.workspace = true

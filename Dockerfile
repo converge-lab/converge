@@ -1,4 +1,4 @@
-# Converge — single-image build: the server binary plus the web bundle it
+# Staw — single-image build: the server binary plus the web bundle it
 # serves same-origin. Queries compile against the committed .sqlx cache, so
 # no database is needed at build time.
 
@@ -10,8 +10,8 @@ RUN rustup target add wasm32-unknown-unknown \
 WORKDIR /src
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p converge-server
-RUN cd crates/converge-web && trunk build --release --features api
+RUN cargo build --release -p staw-server
+RUN cd crates/staw-web && trunk build --release --features api
 
 FROM debian:bookworm-slim
 # ca-certificates: the expert layer makes outbound TLS (model APIs);
@@ -20,13 +20,13 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system converge
-COPY --from=builder /src/target/release/converge-server /usr/local/bin/converge-server
-COPY --from=builder /src/crates/converge-web/dist /srv/converge/web
-USER converge
+    && useradd --system staw
+COPY --from=builder /src/target/release/staw-server /usr/local/bin/staw-server
+COPY --from=builder /src/crates/staw-web/dist /srv/staw/web
+USER staw
 # In-container bind must be reachable from outside the container; publish
 # it loopback-only on the host until auth lands (see compose.yaml).
-ENV CONVERGE_LISTEN=0.0.0.0:8080 \
-    CONVERGE_WEB__ASSETS=/srv/converge/web
+ENV STAW_LISTEN=0.0.0.0:8080 \
+    STAW_WEB__ASSETS=/srv/staw/web
 EXPOSE 8080
-ENTRYPOINT ["converge-server"]
+ENTRYPOINT ["staw-server"]

@@ -1,0 +1,46 @@
+[package]
+name = "staw-server"
+description = "The Staw server: HTTP API and MCP endpoint over the storage seam."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+staw-expert.workspace = true
+futures.workspace = true
+staw-storage.workspace = true
+staw-storage-postgres.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+rand.workspace = true
+sha2.workspace = true
+base64.workspace = true
+jsonwebtoken.workspace = true
+axum-extra.workspace = true
+# OIDC: discovery, code exchange, userinfo — the same rustls reqwest the
+# client crate uses.
+reqwest.workspace = true
+url.workspace = true
+rmcp.workspace = true
+minijinja.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+ulid.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+[dev-dependencies]
+testcontainers-modules.workspace = true
+base64.workspace = true
+sha2.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util.workspace = true

@@ -54,7 +54,7 @@ export default async function checkUiErrors(page) {
   const internal = envelope(500,'internal','internal error');
   const pageOf = items => ({items,next_cursor:null});
   const invite = () => page.getByRole('button',{name:/Invite$/});
-  const input = () => page.getByRole('textbox',{name:'Converge handle'});
+  const input = () => page.getByRole('textbox',{name:'Staw handle'});
   const add = () => page.getByRole('button',{name:'Add',exact:true});
   const open = async (handle) => { await invite().click(); await input().fill(handle); };
   const group = async () => { await page.goto(origin+'/#/group/settings'); await invite().waitFor({timeout:5000}); };
@@ -390,7 +390,7 @@ export default async function checkUiErrors(page) {
     await button('Approve').waitFor();
     let finishPair=delayed('POST','/devices/ABCD-EFGH',internal);
     await button('Approve').click();
-    await page.getByRole('status').filter({hasText:'Contacting Converge…'}).waitFor();
+    await page.getByRole('status').filter({hasText:'Contacting Staw…'}).waitFor();
     assert(await button('Approve').isDisabled() && await button('Deny').isDisabled(),'Pair decision permits duplicates');
     finishPair();
     await hasAlert("Couldn't complete device pairing");
@@ -398,7 +398,7 @@ export default async function checkUiErrors(page) {
     checks.push('pairing distinguishes missing code, lookup failure and approval failure, and allows retry');
     finishPair=delayed('POST','/devices/ABCD-EFGH',internal);
     await button('Deny').click();
-    await page.getByRole('status').filter({hasText:'Contacting Converge…'}).waitFor();
+    await page.getByRole('status').filter({hasText:'Contacting Staw…'}).waitFor();
     await go('#/search');
     await page.getByPlaceholder('Search decisions, rationale, tags…').waitFor();
     finishPair();

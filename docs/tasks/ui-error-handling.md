@@ -16,7 +16,7 @@ expire automatically.
 Error handling considers two audiences separately: users receive understandable
 domain explanations, while diagnostics must preserve useful technical
 causes without confidential information. Internal failures receive a general
-user-facing message. This policy is recorded in Converge as
+user-facing message. This policy is recorded in Staw as
 `01M2Z18KZDMRZSEDX4KGPM3KXP`.
 
 **Browser diagnostic logging is deferred.** There is no approved collection
@@ -97,15 +97,15 @@ native clients retain reqwest 0.12.
 
 ## Verification
 
-- `cargo test -p converge-web --all-features --lib`: 21 passing tests cover safe error text,
+- `cargo test -p staw-web --all-features --lib`: 21 passing tests cover safe error text,
   case-preserving handles, independent notification lifetimes, and failures
   after the form's reactive owner is disposed. A separate regression covers
   group deletion after an API response, without component context, preserving
   another selected group, and notification deduplication by resource identity.
-- `cargo test -p converge-storage-postgres --lib error::tests`: two passing
+- `cargo test -p staw-storage-postgres --lib error::tests`: two passing
   tests verify sanitized diagnostics, including real PostgreSQL foreign-key
   and unique-constraint violations carrying synthetic confidential text.
-- `cargo test -p converge-server --lib http::error::tests`: a passing test
+- `cargo test -p staw-server --lib http::error::tests`: a passing test
   checks that raw internal causes reach neither HTTP responses nor logs.
 - Check both API and embedded builds; run Clippy and formatting checks.
 - `env -u NO_COLOR trunk build --features api --locked` builds the actual WASM bundle.
@@ -125,7 +125,7 @@ native clients retain reqwest 0.12.
   console calls and browser exceptions. Real screen-reader announcement
   behavior has not been tested.
 
-To repeat the browser checks, build the API bundle from `crates/converge-web`,
+To repeat the browser checks, build the API bundle from `crates/staw-web`,
 then install and run the browser runner from the repository root:
 
 ```sh

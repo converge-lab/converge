@@ -1,19 +1,19 @@
 # Task: complete a cited `path:lines` into a code anchor in `hook ctx`
 
-Status: done. `crates/converge-cli/src/evidence.rs` resolves a citation
+Status: done. `crates/staw-cli/src/evidence.rs` resolves a citation
 against the repository under `cwd`, `hook ctx` calls it before a
 `decision_add`, and step 3 of `scripts/smoke-ctx.sh` reports the anchor
 kept with no note. What follows is the spec it was built to.
 
 ## What exists
 
-- `converge_storage::CodeAnchor { commit, path, lines, excerpt, digest }` with
+- `staw_storage::CodeAnchor { commit, path, lines, excerpt, digest }` with
   `CodeAnchor::validate()` (full 40-hex sha, repository-relative path, 1-based
   inclusive range of at most `EXCERPT_LINES` = 120 lines, non-empty excerpt
   whose sha256 equals `digest`) and `CodeAnchor::digest_of(excerpt)`.
 - The server stores anchors on `decision_add` (REST and MCP) and refuses an
   invalid one. The MCP door requires at least one anchor of either kind.
-- `crates/converge-cli/src/hook.rs`, `ctx()`: before a `decision_add` the hook
+- `crates/staw-cli/src/hook.rs`, `ctx()`: before a `decision_add` the hook
   already records the transcript and cites the new turns. For code it calls
   `drop_incomplete_code(&mut merged)`, which removes every `code_evidence`
   item lacking any of `commit`, `path`, `lines`, `excerpt`, `digest` and
@@ -22,7 +22,7 @@ kept with no note. What follows is the spec it was built to.
 
 ## What to build
 
-A resolver in the CLI, suggested as `crates/converge-cli/src/evidence.rs`:
+A resolver in the CLI, suggested as `crates/staw-cli/src/evidence.rs`:
 
     pub struct Cited { pub path: String, pub lines: (u32, u32) }
     pub enum Resolved { Anchor(CodeAnchor), Refused(String) }
@@ -90,7 +90,7 @@ full anchor produces an input with two anchors and no note.
 
 ## Done when
 
-`converge hook ctx --harness claude` with a `decision_add` input citing
+`staw hook ctx --harness claude` with a `decision_add` input citing
 `{"path": "...", "lines": [a, b]}` for committed lines yields
 `updatedInput.code_evidence[0]` that the server accepts, and step 3 of
 `scripts/smoke-ctx.sh` (run against `cargo xtask dev`) reports one code anchor

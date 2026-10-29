@@ -1,4 +1,4 @@
-# Converge Test Cases
+# Staw Test Cases
 
 ## Already covered
 
@@ -133,7 +133,7 @@
 - [x] `/healthz` works without auth; auth gate rejects missing/wrong tokens and unknown paths alike (401 before 404) (`healthz`, server/health.rs)
 - [x] SPA fallback serves `index.html` for unmatched paths while API routes still resolve as API (`healthz`, server/health.rs)
 
-### Client SDK (`converge-client`)
+### Client SDK (`staw-client`)
 - [x] Version check, stable identity, full token mint/auth/list/revoke/re-revoke lifecycle (`round_trip`, client.rs)
 - [x] Group/project/decision CRUD, supersede-at-creation, evidence, sources, session/message streaming, cursor walk with no overlap/loss (`round_trip`, client.rs)
 - [x] Errors map to domain types: `NotFound`, `Invalid` (with server message), `Unauthorized` on a revoked token, `Unavailable` on dead server (`errors_map_back_to_the_domain`, client.rs)
@@ -142,7 +142,7 @@
 - [x] Golden fixture deserializes and names the right players (`the_fixture_parses_and_names_the_players`, expert/signals.rs)
 - [x] A bogus target id in the model's reply is dropped, real target kept; `kind` normalized to snake_case; request pins `temperature: 0.0` + schema-constrained JSON (`the_job_constrains_the_wire_and_validates_the_reply`, expert/signals.rs)
 - [x] An empty `signals: []` reply is a success, not an error (`an_empty_judgment_is_a_success`, expert/signals.rs)
-- [x] The model actually flags a known conflict end-to-end (`live_model_finds_the_sse_conflict`, expert/signals.rs) — `#[ignore]`d, needs a live model endpoint (`CONVERGE_EXPERT_URL`/`CONVERGE_EXPERT_MODEL`), not part of normal CI
+- [x] The model actually flags a known conflict end-to-end (`live_model_finds_the_sse_conflict`, expert/signals.rs) — `#[ignore]`d, needs a live model endpoint (`STAW_EXPERT_URL`/`STAW_EXPERT_MODEL`), not part of normal CI
 
 ### Expert — model wire client
 - [x] OpenAI-compatible reply extraction and trimming (`openai_compat_round_trip`, expert/wire.rs)
@@ -202,7 +202,7 @@
 ### Wire / serialization
 - [ ] Malformed JSON body (truncated, wrong field type, unknown enum tag) on a REST POST/PATCH
 - [ ] Full enum coverage over the wire for `DecisionStatus` (`Draft`, `Rejected` — only `proposed`/`accepted`/`superseded` ever cross REST/MCP in any test, incl. the `"draft"`/`"rejected"` string-parse arms in `mcp/mod.rs`), `SessionKind` (`Pr`, `Incident`)
-- [ ] `converge-client` error mapping for `Conflict` (e.g., duplicate signal pair) and `Backend` variants — currently the only `Conflict` producer in the whole codebase is the signal duplicate-pair path, and it's never asserted through the typed client, only over raw REST (`signal_round_trip`, server/signal.rs)
+- [ ] `staw-client` error mapping for `Conflict` (e.g., duplicate signal pair) and `Backend` variants — currently the only `Conflict` producer in the whole codebase is the signal duplicate-pair path, and it's never asserted through the typed client, only over raw REST (`signal_round_trip`, server/signal.rs)
 
 ### Expert
 - [ ] A schema-invalid or non-JSON model reply (only "valid with one bad target" and "empty" are covered)

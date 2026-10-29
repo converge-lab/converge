@@ -86,7 +86,7 @@ const test = base.extend({
     };
     const invite = async () => {
       await page.getByRole('button', { name: /Invite$/ }).click();
-      await page.getByRole('textbox', { name: 'Converge handle' }).fill('charlie');
+      await page.getByRole('textbox', { name: 'Staw handle' }).fill('charlie');
       await button(page, 'Add').click();
       await expect(page.locator('.cv-modal')).toHaveCount(0);
       await expect(button(page, 'Remove Charlie')).toBeVisible();
@@ -144,7 +144,7 @@ test('pending removal stays guarded through roster changes', async ({ page, app 
 test('disabled input has a visible state and recovers after failure', async ({ page, app }) => {
   await app.open();
   await page.getByRole('button', { name: /Invite$/ }).click();
-  const field = page.getByRole('textbox', { name: 'Converge handle' });
+  const field = page.getByRole('textbox', { name: 'Staw handle' });
   await field.fill('charlie');
   await field.blur();
   const appearance = () => field.evaluate(element => ({

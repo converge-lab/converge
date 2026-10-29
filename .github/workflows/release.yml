@@ -2,11 +2,11 @@ name: Release
 
 # Tag-driven CLI releases: `git tag v0.1.0 && git push --tags`.
 #
-# Builds the `converge` binary for every supported target (musl on Linux —
+# Builds the `staw` binary for every supported target (musl on Linux —
 # static, no glibc coupling), collects a SHA256SUMS manifest, signs it with
 # minisign (see RELEASING.md for the one-time key setup), and publishes a
-# GitHub Release. `install.sh` and `converge update` (D3) consume exactly
-# this layout: <tag>/converge-<target>.tar.gz + SHA256SUMS + SHA256SUMS.minisig.
+# GitHub Release. `install.sh` and `staw update` (D3) consume exactly
+# this layout: <tag>/staw-<target>.tar.gz + SHA256SUMS + SHA256SUMS.minisig.
 
 on:
   push:
@@ -44,20 +44,20 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
-        run: cargo build --release -p converge-cli --target ${{ matrix.target }}
+        run: cargo build --release -p staw-cli --target ${{ matrix.target }}
       - name: Package
         run: |
-          tar -czf converge-${{ matrix.target }}.tar.gz \
-            -C target/${{ matrix.target }}/release converge
+          tar -czf staw-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release staw
       - uses: actions/upload-artifact@v4
         with:
-          name: converge-${{ matrix.target }}
-          path: converge-${{ matrix.target }}.tar.gz
+          name: staw-${{ matrix.target }}
+          path: staw-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   # The server ships as a container image beside the CLI tarballs — same
   # tag, same version, lockstep by design (the version number is the
-  # compatibility statement; skew detection and `converge update` both
+  # compatibility statement; skew detection and `staw update` both
   # lean on it).
   image:
     runs-on: ubuntu-latest
@@ -100,10 +100,10 @@ jobs:
         with:
           # Only the CLI tarball artifacts — never whatever else a job
           # in this run may have uploaded.
-          pattern: converge-*-*
+          pattern: staw-*-*
           merge-multiple: true
       - name: Manifest
-        run: sha256sum converge-*.tar.gz > SHA256SUMS
+        run: sha256sum staw-*.tar.gz > SHA256SUMS
       - name: Sign manifest
         # The unencrypted minisign secret key lives in the `release`
         # environment's secret (CI-custody tradeoff, see RELEASING.md);
@@ -117,7 +117,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y minisign
           printf '%s\n' "$MINISIGN_SECRET_KEY" > minisign.key
           minisign -S -s minisign.key -m SHA256SUMS \
-            -t "converge ${{ github.ref_name }}"
+            -t "staw ${{ github.ref_name }}"
           rm minisign.key
       - name: Release
         env:
@@ -125,6 +125,6 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
-            --title "converge ${{ github.ref_name }}" \
+            --title "staw ${{ github.ref_name }}" \
             --generate-notes \
-            converge-*.tar.gz SHA256SUMS SHA256SUMS.minisig
+            staw-*.tar.gz SHA256SUMS SHA256SUMS.minisig

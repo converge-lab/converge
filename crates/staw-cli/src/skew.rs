@@ -7,6 +7,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use staw_client::Client;
+use std::cmp::Ordering;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,14 +16,27 @@ pub const CLI: &str = env!("CARGO_PKG_VERSION");
 
 const DAY: u64 = 24 * 60 * 60;
 
-/// The nudge for a known server version — `None` when in sync.
+/// `major.minor`: pre-1.0, the part of a version that moves the wire
+/// contract. A patch on either side (a CLI-only fix, say) leaves it.
+fn contract(version: &str) -> Option<(u64, u64)> {
+    let mut parts = version.split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// The nudge for a known server version — `None` when the contracts
+/// match, or when the server's version does not parse.
 pub fn nudge(server: &str) -> Option<String> {
-    (server != CLI).then(|| {
-        format!(
-            "staw CLI {CLI} ≠ server {server} — update the CLI \
+    match contract(CLI)?.cmp(&contract(server)?) {
+        Ordering::Equal => None,
+        Ordering::Less => Some(format!(
+            "staw CLI {CLI} is behind server {server} — update the CLI \
              (re-run its install, then `staw init` to repair hooks)"
-        )
-    })
+        )),
+        Ordering::Greater => Some(format!(
+            "staw CLI {CLI} is ahead of server {server} — update the server, \
+             or match it with `staw update --version v{server}`"
+        )),
+    }
 }
 
 /// Fresh check against the server (init's loud path).
@@ -79,7 +93,13 @@ mod tests {
     #[test]
     fn nudges_only_on_skew() {
         assert!(nudge(CLI).is_none());
-        let msg = nudge("9.9.9").unwrap();
-        assert!(msg.contains(CLI) && msg.contains("9.9.9"));
+        let (major, minor) = contract(CLI).unwrap();
+        assert!(nudge(&format!("{major}.{minor}.999")).is_none());
+        assert!(nudge("dev").is_none());
+
+        let behind = nudge("9.9.9").unwrap();
+        assert!(behind.contains(CLI) && behind.contains("behind server 9.9.9"));
+        let ahead = nudge("0.0.1").unwrap();
+        assert!(ahead.contains("ahead of server 0.0.1") && ahead.contains("--version v0.0.1"));
     }
 }
